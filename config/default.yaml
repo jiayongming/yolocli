@@ -1,0 +1,46 @@
+# YOLO CLI 默认配置文件
+
+# 模型配置
+model:
+  default_version: yolo11  # yolo11 或 yolov8
+  weights_dir: models/weights
+  pretrained:
+    - yolo11n.pt
+    - yolo11s.pt
+    - yolo11m.pt
+    - yolo11l.pt
+    - yolo11x.pt
+
+# 训练配置
+training:
+  epochs: 200
+  batch: 16
+  imgsz: 640
+  patience: 50
+  save_period: 10
+  device: auto  # auto/mps/cuda/cpu
+
+# 数据增强配置
+augmentation:
+  default_preset: balanced  # balanced/conservative/aggressive/default
+
+# 路径配置
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  results: results
+  models: models
+
+# 检测配置
+detection:
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  save_txt: true
+  save_json: true
+
+# 数据集划分比例
+dataset:
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+  random_seed: 42

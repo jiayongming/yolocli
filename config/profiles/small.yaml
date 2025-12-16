@@ -1,0 +1,61 @@
+# YOLO CLI 小数据集配置 (<500张图片)
+
+# 模型配置
+model:
+  default_version: yolo11
+  # 小数据集推荐使用较小的模型，防止过拟合
+  recommended_size: n
+
+# 训练配置
+training:
+  epochs: 150  # 较少的训练轮数
+  batch: 8     # 较小的批次大小
+  imgsz: 640
+  patience: 30  # 较短的早停耐心值
+  save_period: 10
+  device: auto
+  
+  # 学习率配置
+  lr0: 0.001    # 较低的初始学习率
+  lrf: 0.01
+
+# 数据增强配置 - 保守策略
+augmentation:
+  default_preset: conservative
+  
+  # 保守的增强参数
+  hsv_h: 0.01
+  hsv_s: 0.5
+  hsv_v: 0.3
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.3
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 0.5  # 降低Mosaic概率
+  mixup: 0.0
+  auto_augment: null
+  erasing: 0.1
+
+# 路径配置
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  results: results/small
+  models: models
+
+# 数据集划分
+dataset:
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+  random_seed: 42
+
+# 检测配置
+detection:
+  conf_threshold: 0.3  # 稍高的置信度阈值
+  iou_threshold: 0.45
+  save_txt: true
+  save_json: true

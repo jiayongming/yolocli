@@ -1,0 +1,61 @@
+# YOLO CLI 中等数据集配置 (500-2000张图片)
+
+# 模型配置
+model:
+  default_version: yolo11
+  # 中等数据集推荐使用中等模型
+  recommended_size: s
+
+# 训练配置
+training:
+  epochs: 200  # 标准训练轮数
+  batch: 16    # 标准批次大小
+  imgsz: 640
+  patience: 50
+  save_period: 10
+  device: auto
+  
+  # 学习率配置
+  lr0: 0.01
+  lrf: 0.01
+
+# 数据增强配置 - 平衡策略
+augmentation:
+  default_preset: balanced
+  
+  # 平衡的增强参数
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.1
+  auto_augment: randaugment
+  erasing: 0.2
+
+# 路径配置
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  results: results/medium
+  models: models
+
+# 数据集划分
+dataset:
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+  random_seed: 42
+
+# 检测配置
+detection:
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  save_txt: true
+  save_json: true

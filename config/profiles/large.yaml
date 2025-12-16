@@ -1,0 +1,73 @@
+# YOLO CLI 大数据集配置 (>2000张图片)
+
+# 模型配置
+model:
+  default_version: yolo11
+  # 大数据集可以使用更大的模型
+  recommended_size: m
+
+# 训练配置
+training:
+  epochs: 300  # 更多的训练轮数
+  batch: 32    # 更大的批次大小（需要足够的显存）
+  imgsz: 640
+  patience: 100  # 更长的早停耐心值
+  save_period: 20
+  device: auto
+  
+  # 学习率配置
+  lr0: 0.01
+  lrf: 0.01
+  
+  # 优化器配置
+  optimizer: AdamW
+  momentum: 0.937
+  weight_decay: 0.0005
+
+# 数据增强配置 - 激进策略
+augmentation:
+  default_preset: aggressive
+  
+  # 激进的增强参数
+  hsv_h: 0.02
+  hsv_s: 0.8
+  hsv_v: 0.5
+  degrees: 0.0
+  translate: 0.15
+  scale: 0.6
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.15
+  auto_augment: randaugment
+  erasing: 0.4
+
+# 路径配置
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  results: results/large
+  models: models
+
+# 数据集划分
+dataset:
+  train_ratio: 0.8  # 大数据集可以分配更多给训练集
+  val_ratio: 0.15
+  test_ratio: 0.05
+  random_seed: 42
+
+# 检测配置
+detection:
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  save_txt: true
+  save_json: true
+
+# 高级配置
+advanced:
+  # 使用混合精度训练
+  amp: true
+  # 多尺度训练
+  multi_scale: true

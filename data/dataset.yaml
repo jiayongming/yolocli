@@ -1,0 +1,13 @@
+# 数据集配置文件（目标检测任务）
+path: data/processed  # 数据集根目录
+train: images/train   # 训练集图像目录（相对于path）
+val: images/val       # 验证集图像目录（相对于path）
+test: images/test     # 测试集图像目录（可选）
+
+# 目标检测类别定义
+names:
+  0: waterpoll      # 渗水痕迹/水渍
+  1: active_leak      # 正在渗水
+
+# 类别数量
+nc: 2

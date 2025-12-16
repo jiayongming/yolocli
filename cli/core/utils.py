@@ -1,0 +1,268 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Utility functions"""
+
+import os
+import torch
+from pathlib import Path
+from typing import Union, Optional, List, Tuple
+
+
+def detect_device() -> str:
+    """
+    自动检测最佳设备
+    
+    支持通过环境变量 CUDA_VISIBLE_DEVICES 指定GPU
+    
+    Returns:
+        str: 设备名称 ('mps', '0', 'cpu')
+    
+    Examples:
+        export CUDA_VISIBLE_DEVICES=4 python yolo_cli.py ...
+        export CUDA_VISIBLE_DEVICES=0,1 python yolo_cli.py ...
+    """
+    # 检查CUDA_VISIBLE_DEVICES环境变量
+    cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+    
+    if cuda_visible_devices is not None:
+        # 如果设置了CUDA_VISIBLE_DEVICES，优先使用
+        # CUDA会重新映射设备ID，所以这里总是使用'0'
+        if cuda_visible_devices and cuda_visible_devices.strip():
+            # 非空，说明设置了GPU
+            if torch.cuda.is_available():
+                # 如果是多个GPU（如"0,1"），返回"0"表示使用第一个可见的GPU
+                # YOLO会根据CUDA_VISIBLE_DEVICES自动使用指定的GPU
+                return '0'
+            else:
+                # 设置了CUDA_VISIBLE_DEVICES但CUDA不可用，回退到其他设备
+                pass
+    
+    # 常规设备检测
+    if torch.backends.mps.is_available():
+        return 'mps'
+    elif torch.cuda.is_available():
+        return '0'
+    else:
+        return 'cpu'
+
+
+def get_device_name(device: Union[str, int]) -> str:
+    """
+    获取设备的友好名称
+    
+    Args:
+        device: 设备标识
+    
+    Returns:
+        str: 友好的设备名称
+    """
+    if device == 'mps':
+        return "Apple Silicon (MPS)"
+    elif device == 'cpu' or device == -1:
+        return "CPU"
+    elif isinstance(device, int) and device >= 0:
+        if torch.cuda.is_available():
+            return f"NVIDIA GPU - {torch.cuda.get_device_name(device)}"
+        return f"GPU {device}"
+    elif isinstance(device, str) and device.isdigit():
+        gpu_id = int(device)
+        if torch.cuda.is_available():
+            return f"NVIDIA GPU - {torch.cuda.get_device_name(gpu_id)}"
+        return f"GPU {gpu_id}"
+    return str(device)
+
+
+def validate_paths(*paths: Union[str, Path]) -> bool:
+    """
+    验证路径是否存在
+    
+    Args:
+        *paths: 要验证的路径
+    
+    Returns:
+        bool: 所有路径是否都存在
+    """
+    for path in paths:
+        if not Path(path).exists():
+            return False
+    return True
+
+
+def ensure_dir(path: Union[str, Path]) -> Path:
+    """
+    确保目录存在，不存在则创建
+    
+    Args:
+        path: 目录路径
+    
+    Returns:
+        Path: Path对象
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def format_size(size_bytes: int) -> str:
+    """
+    格式化文件大小
+    
+    Args:
+        size_bytes: 字节大小
+    
+    Returns:
+        str: 格式化后的大小字符串
+    """
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
+
+
+def get_file_size(file_path: Union[str, Path]) -> int:
+    """
+    获取文件大小
+    
+    Args:
+        file_path: 文件路径
+    
+    Returns:
+        int: 文件大小（字节）
+    """
+    return Path(file_path).stat().st_size
+
+
+def get_dataset_info(data_path: Union[str, Path]) -> dict:
+    """
+    提取数据集信息
+    
+    Args:
+        data_path: 数据集路径
+    
+    Returns:
+        dict: 数据集信息
+    """
+    data_path = Path(data_path)
+    info = {
+        'train_images': 0,
+        'val_images': 0,
+        'test_images': 0,
+        'train_labels': 0,
+        'val_labels': 0,
+        'test_labels': 0,
+    }
+    
+    # 统计各个split的图像和标签数量
+    for split in ['train', 'val', 'test']:
+        img_dir = data_path / 'images' / split
+        label_dir = data_path / 'labels' / split
+        
+        if img_dir.exists():
+            info[f'{split}_images'] = len(list(img_dir.glob('*.jpg'))) + \
+                                      len(list(img_dir.glob('*.png'))) + \
+                                      len(list(img_dir.glob('*.jpeg')))
+        
+        if label_dir.exists():
+            info[f'{split}_labels'] = len(list(label_dir.glob('*.txt')))
+    
+    return info
+
+
+def find_files(directory: Union[str, Path], 
+               extensions: Optional[List[str]] = None,
+               recursive: bool = True) -> List[Path]:
+    """
+    查找指定扩展名的文件
+    
+    Args:
+        directory: 搜索目录
+        extensions: 文件扩展名列表（如 ['.jpg', '.png']）
+        recursive: 是否递归搜索
+    
+    Returns:
+        List[Path]: 找到的文件列表
+    """
+    directory = Path(directory)
+    files = []
+    
+    if extensions is None:
+        extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']
+    
+    for ext in extensions:
+        if recursive:
+            files.extend(directory.rglob(f'*{ext}'))
+        else:
+            files.extend(directory.glob(f'*{ext}'))
+    
+    return sorted(files)
+
+
+def safe_import(module_name: str, package_name: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    """
+    安全导入模块
+    
+    Args:
+        module_name: 模块名称
+        package_name: 包名称（用于错误提示）
+    
+    Returns:
+        Tuple[bool, Optional[str]]: (是否成功, 错误信息)
+    """
+    try:
+        __import__(module_name)
+        return True, None
+    except ImportError as e:
+        pkg = package_name or module_name
+        error_msg = f"缺少依赖: {pkg}。请运行: pip install {pkg}"
+        return False, error_msg
+
+
+def parse_ratio_string(ratio_str: str, expected_parts: int = 3) -> List[float]:
+    """
+    解析比例字符串（如 "0.7:0.2:0.1"）
+    
+    Args:
+        ratio_str: 比例字符串
+        expected_parts: 期望的部分数量
+    
+    Returns:
+        List[float]: 比例列表
+    
+    Raises:
+        ValueError: 如果格式不正确
+    """
+    parts = ratio_str.split(':')
+    if len(parts) != expected_parts:
+        raise ValueError(f"比例格式错误，期望 {expected_parts} 个部分，得到 {len(parts)} 个")
+    
+    try:
+        ratios = [float(p) for p in parts]
+    except ValueError:
+        raise ValueError(f"比例值必须是数字: {ratio_str}")
+    
+    total = sum(ratios)
+    if abs(total - 1.0) > 0.01:
+        # 自动归一化
+        ratios = [r / total for r in ratios]
+    
+    return ratios
+
+
+def get_project_root() -> Path:
+    """
+    获取项目根目录
+    
+    Returns:
+        Path: 项目根目录
+    """
+    # 从当前文件向上查找，直到找到包含 'workspace' 的目录
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if parent.name == 'workspace':
+            return parent
+        # 或者查找包含特定标志文件的目录
+        if (parent / 'yolo_cli.py').exists():
+            return parent
+    # 如果找不到，返回当前工作目录
+    return Path.cwd()
