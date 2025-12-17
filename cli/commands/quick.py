@@ -111,6 +111,18 @@ def quick_train(
                     classes_file = str(cls_file)
                     break
             
+            # 对于分类任务，如果没有找到 classes.txt，尝试从目录结构提取
+            if classes_file is None and task_type == TaskType.CLASSIFY:
+                if images_path.exists():
+                    subdirs = [d.name for d in images_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                    if subdirs:
+                        # 自动创建 classes.txt
+                        classes_file = str(images_path.parent / "classes.txt")
+                        with open(classes_file, 'w') as f:
+                            for class_name in sorted(subdirs):
+                                f.write(f"{class_name}\n")
+                        print_info(f"从目录结构自动生成类别文件: {classes_file}")
+            
             if classes_file is None:
                 print_error("未找到 classes.txt 文件")
                 print_info("请使用 --classes 参数指定类别文件，或将其放在 data/raw/classes.txt")
@@ -121,37 +133,91 @@ def quick_train(
         # 配置路径
         config = ConfigManager()
         
-        # 根据任务类型选择不同的处理流程
-        if task_type == TaskType.CLASSIFY:
-            output_dir = config.get_path('data_processed', absolute=True) / 'classify'
-        else:
-            output_dir = config.get_path('data_processed', absolute=True)
+        # 统一使用 data/processed 作为输出目录（所有任务类型）
+        default_output_dir = config.get_path('data_processed', absolute=True)
+        output_dir = default_output_dir
         
-        # ========== 步骤1: 数据集划分 ==========
+        # ========== 步骤1: 数据集划分/检查 ==========
         current_step += 1
-        print_step(current_step, total_steps, "数据集划分/准备")
+        print_step(current_step, total_steps, "数据集划分/检查")
         console.print()
         
+        # 检查数据集是否已经划分
+        data_already_split = False
         if task_type == TaskType.CLASSIFY:
-            # 分类任务：组织为目录结构
-            prepare_classify(
-                images_dir=images_dir,
-                labels_dir=labels_dir,
-                classes_file=classes_file,
-                output_dir=str(output_dir),
-                ratios=ratios,
-                seed=42
-            )
+            # 检查分类数据集是否已经划分（检查 images/train, images/val 等目录）
+            train_dir = images_path / 'images' / 'train'
+            val_dir = images_path / 'images' / 'val'
+            if train_dir.exists() and val_dir.exists():
+                # 检查是否有类别子目录
+                train_classes = [d for d in train_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                if train_classes:
+                    data_already_split = True
+                    output_dir = images_path  # 使用现有目录
+                    print_info(f"检测到已划分的分类数据集，跳过划分步骤")
+                    print_info(f"训练集类别数: {len(train_classes)}")
         else:
-            # 检测/分割任务：划分数据集
-            split_dataset(
-                images_dir=images_dir,
-                labels_dir=labels_dir,
-                output_dir=str(output_dir),
-                ratios=ratios,
-                seed=42,
-                task=task
-            )
+            # 检查检测/分割数据集是否已经划分
+            train_images = images_path / 'images' / 'train'
+            train_labels = images_path / 'labels' / 'train'
+            val_images = images_path / 'images' / 'val'
+            val_labels = images_path / 'labels' / 'val'
+            if (train_images.exists() and train_labels.exists() and 
+                val_images.exists() and val_labels.exists()):
+                data_already_split = True
+                output_dir = images_path  # 使用现有目录
+                print_info(f"检测到已划分的数据集，跳过划分步骤")
+        
+        # 如果数据未划分，则执行划分
+        if not data_already_split:
+            print_info("数据集未划分，开始划分...")
+            if task_type == TaskType.CLASSIFY:
+                # 检查分类数据是否已经按类别组织
+                classify_organized = False
+                if images_path.exists():
+                    subdirs = [d for d in images_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                    if subdirs:
+                        # 检查子目录中是否有图片（判断是否为类别目录）
+                        for subdir in subdirs[:3]:  # 检查前3个目录
+                            images = list(subdir.glob('*.jpg')) + list(subdir.glob('*.png')) + list(subdir.glob('*.jpeg'))
+                            if images:
+                                classify_organized = True
+                                break
+                
+                if classify_organized:
+                    # 数据已按类别组织，使用 split_dataset
+                    print_info(f"检测到按类别组织的分类数据: {[d.name for d in subdirs]}")
+                    split_dataset(
+                        images_dir=None,
+                        labels_dir=None,
+                        source_dir=images_dir,
+                        output_dir=str(output_dir),
+                        ratios=ratios,
+                        seed=42,
+                        task='classify'
+                    )
+                else:
+                    # 需要从 images + labels 组织为分类结构
+                    print_info("检测到 images + labels 结构，转换为分类数据集...")
+                    prepare_classify(
+                        images_dir=images_dir,
+                        labels_dir=labels_dir,
+                        classes_file=classes_file,
+                        output_dir=str(output_dir),
+                        ratios=ratios,
+                        seed=42
+                    )
+            else:
+                # 检测/分割任务：划分数据集
+                split_dataset(
+                    images_dir=images_dir,
+                    labels_dir=labels_dir,
+                    source_dir=None,
+                    output_dir=str(output_dir),
+                    ratios=ratios,
+                    seed=42,
+                    task=task
+                )
         
         print_success("✓ 数据集准备完成")
         console.print()
@@ -161,21 +227,29 @@ def quick_train(
         print_step(current_step, total_steps, "生成dataset.yaml配置")
         console.print()
         
+        # 对于分类任务，使用划分后生成的 classes.txt
+        if task_type == TaskType.CLASSIFY and not data_already_split:
+            generated_classes = output_dir / 'classes.txt'
+            if generated_classes.exists():
+                classes_file = str(generated_classes)
+                print_info(f"使用划分后生成的类别文件: {classes_file}")
+        
         dataset_yaml = "data/dataset.yaml"
         generate_yaml(
             data_path=str(output_dir),
             classes_file=classes_file,
             output=dataset_yaml,
-            train_dir='images/train',
-            val_dir='images/val',
-            test_dir='images/test'
+            train_dir=None,
+            val_dir=None,
+            test_dir=None,
+            task=task
         )
         
         print_success(f"✓ 配置文件生成: {dataset_yaml}")
         console.print()
         
         # ========== 步骤3: 验证数据集 ==========
-        if not skip_verify and task != 'classify':
+        if not skip_verify:
             current_step += 1
             print_step(current_step, total_steps, "验证数据集")
             console.print()
@@ -185,27 +259,21 @@ def quick_train(
             print_success("✓ 数据集验证完成")
             console.print()
         else:
-            if task == 'classify':
-                print_info("⊘ 分类任务跳过标签验证")
-            else:
-                print_warning("⊘ 跳过数据验证")
+            print_warning("⊘ 跳过数据验证")
             console.print()
         
         # ========== 步骤4: 数据统计 ==========
-        if not skip_stats and task != 'classify':
+        if not skip_stats:
             current_step += 1
             print_step(current_step, total_steps, "数据统计分析")
             console.print()
             
-            dataset_stats(data_path=str(output_dir), detailed=True)
+            dataset_stats(data_path=str(output_dir), detailed=True, task=task)
             
             print_success("✓ 数据统计完成")
             console.print()
         else:
-            if task == 'classify':
-                print_info("⊘ 分类任务使用目录统计")
-            else:
-                print_warning("⊘ 跳过数据统计")
+            print_warning("⊘ 跳过数据统计")
             console.print()
         
         # ========== 步骤5: 检查/下载模型 ==========
@@ -238,7 +306,13 @@ def quick_train(
                 output_dir=str(models_dir)
             )
             
-            print_success(f"✓ 模型下载完成: {model_name}")
+            # 验证下载是否成功
+            if model_path.exists():
+                print_success(f"✓ 模型下载完成: {model_name}")
+                print_info(f"  路径: {model_path}")
+            else:
+                print_error(f"✗ 模型下载失败: {model_name}")
+                raise typer.Exit(1)
         
         console.print()
         
@@ -270,8 +344,11 @@ def quick_train(
         print_info("按 Ctrl+C 可以中断训练")
         console.print()
         
+        # 使用完整模型路径避免重复下载
+        full_model_path = str(model_path) if model_path.exists() else model_name
+        
         start_training(
-            model=model_name,
+            model=full_model_path,
             data=dataset_yaml,
             task=task,
             epochs=epochs,
@@ -285,6 +362,10 @@ def quick_train(
             save_period=10,
             resume=False,
             pretrained=True,
+            # 任务特定参数 - 显式传递 None
+            overlap_mask=None,
+            mask_ratio=None,
+            dropout=None,
         )
         
         # 训练完成

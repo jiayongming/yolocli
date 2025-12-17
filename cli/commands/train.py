@@ -23,6 +23,32 @@ from ..ui.display import (
 
 app = typer.Typer(help="训练命令")
 
+
+def _is_valid_param(value, expected_type=None):
+    """
+    检查参数是否为有效值（不是 typer.OptionInfo 对象）
+    
+    Args:
+        value: 参数值
+        expected_type: 期望的类型（可选），可以是单个类型或类型元组
+    
+    Returns:
+        bool: 是否为有效参数
+    """
+    # 检查是否为 None
+    if value is None:
+        return False
+    
+    # 检查是否为 typer.OptionInfo 对象
+    if hasattr(value, '__class__') and 'OptionInfo' in value.__class__.__name__:
+        return False
+    
+    # 如果指定了期望类型，检查类型
+    if expected_type is not None:
+        return isinstance(value, expected_type)
+    
+    return True
+
 # 数据增强预设配置
 AUGMENTATION_PRESETS = {
     'balanced': {
@@ -123,11 +149,43 @@ def start_training(
     task_type = TaskType.from_string(task)
     print_info(f"任务类型: {task}")
     
-    # 验证数据集配置文件
+    # 处理数据集路径
+    # 分类任务需要目录路径，检测/分割任务需要 yaml 文件
     data_path = Path(data)
-    if not data_path.exists():
-        print_error(f"数据集配置文件不存在: {data}")
-        raise typer.Exit(1)
+    
+    if task_type == TaskType.CLASSIFY:
+        # 分类任务：如果传入的是 yaml 文件，需要提取数据集目录
+        if data_path.is_file() and data_path.suffix in ['.yaml', '.yml']:
+            # 读取 yaml 文件获取数据集路径
+            with open(data_path, 'r', encoding='utf-8') as f:
+                yaml_content = yaml.safe_load(f)
+            
+            if 'path' not in yaml_content:
+                print_error("dataset.yaml 中缺少 'path' 字段")
+                raise typer.Exit(1)
+            
+            # 使用 yaml 中的 path 作为数据集根目录
+            dataset_root = Path(yaml_content['path'])
+            
+            # 检查是否使用 images/ 子目录结构
+            images_dir = dataset_root / 'images'
+            if images_dir.exists() and (images_dir / 'train').exists():
+                data = str(images_dir)
+                print_info(f"分类任务使用数据集目录: {data}")
+            else:
+                data = str(dataset_root)
+                print_info(f"分类任务使用数据集目录: {data}")
+        elif data_path.is_dir():
+            # 如果直接传入目录，直接使用
+            data = str(data_path)
+        else:
+            print_error(f"分类任务需要数据集目录或 dataset.yaml 文件: {data}")
+            raise typer.Exit(1)
+    else:
+        # 检测/分割任务：验证 yaml 文件
+        if not data_path.exists():
+            print_error(f"数据集配置文件不存在: {data}")
+            raise typer.Exit(1)
     
     # 自动检测设备
     if device == 'auto':
@@ -137,11 +195,12 @@ def start_training(
     print_info(f"使用设备: {device_name}")
     
     # 创建项目名称
-    if project is None:
+    # 使用辅助函数检查参数是否为有效值
+    if not _is_valid_param(project, str):
         config = ConfigManager()
         project = str(config.get_path('results', absolute=True) / 'training')
     
-    if name is None:
+    if not _is_valid_param(name, str):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_name = Path(model).stem
         name = f"{model_name}_{timestamp}"
@@ -164,19 +223,19 @@ def start_training(
     task_specific_config = {}
     if task_type == TaskType.SEGMENT:
         # 分割任务特定参数
-        if overlap_mask is not None:
+        if _is_valid_param(overlap_mask, bool):
             task_specific_config['overlap_mask'] = overlap_mask
         else:
             task_specific_config['overlap_mask'] = True
         
-        if mask_ratio is not None:
+        if _is_valid_param(mask_ratio, int):
             task_specific_config['mask_ratio'] = mask_ratio
         else:
             task_specific_config['mask_ratio'] = 4
     
     elif task_type == TaskType.CLASSIFY:
         # 分类任务特定参数
-        if dropout is not None:
+        if _is_valid_param(dropout, (int, float)):
             task_specific_config['dropout'] = dropout
         
         # 分类任务通常使用较小的图像尺寸
@@ -230,7 +289,7 @@ def start_training(
         
         # 合并所有配置
         training_kwargs = {
-            'data': str(data_path),
+            'data': data,  # 使用处理后的 data 路径（分类任务为目录，其他为 yaml）
             'epochs': epochs,
             'imgsz': imgsz,
             'batch': batch,

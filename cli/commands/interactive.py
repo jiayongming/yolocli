@@ -86,39 +86,98 @@ def run_data_operations():
             break
         
         try:
-            if operation == 'split':
+            if operation == 'convert-labelstudio':
+                # 转换Label Studio数据
+                print_section_header("转换Label Studio数据")
+                
+                input_file = input_path("Label Studio导出文件 (JSON/CSV):", default="labelstudioexport/project.json", must_exist=False)
+                url = input_text("Label Studio URL:", default="http://localhost:8080")
+                token = input_text("访问令牌 (支持Refresh Token):")
+                task_type = select_task_type()
+                max_workers = input_number("并发下载线程数:", default=4, min_value=1, max_value=16)
+                
+                if confirm_action(f"确认转换 {task_type} 数据?"):
+                    from ..commands.data import convert_labelstudio
+                    convert_labelstudio(
+                        input_file=input_file,
+                        url=url,
+                        token=token,
+                        output_dir=None,
+                        task=task_type,
+                        format_type='auto',
+                        skip_existing=True,
+                        max_workers=max_workers
+                    )
+            
+            elif operation == 'split':
                 # 划分数据集
                 print_section_header("划分数据集")
                 
-                images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
-                labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
+                task_type = select_task_type()
                 
-                ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
-                
-                if confirm_action("确认划分数据集?"):
-                    from ..commands.data import split_dataset
-                    split_dataset(images_dir=images_dir, labels_dir=labels_dir, output_dir=None, ratios=ratios, seed=42)
+                if task_type == 'classify':
+                    # 分类任务
+                    source_dir = input_path("源目录 (已按类别组织):", default="data/raw/images", must_exist=False)
+                    ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
+                    
+                    if confirm_action("确认划分分类数据集?"):
+                        from ..commands.data import split_dataset
+                        split_dataset(
+                            images_dir=None,
+                            labels_dir=None,
+                            source_dir=source_dir,
+                            output_dir=None,
+                            ratios=ratios,
+                            seed=42,
+                            task=task_type
+                        )
+                else:
+                    # 检测/分割任务
+                    images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
+                    labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
+                    ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
+                    
+                    if confirm_action("确认划分数据集?"):
+                        from ..commands.data import split_dataset
+                        split_dataset(
+                            images_dir=images_dir,
+                            labels_dir=labels_dir,
+                            source_dir=None,
+                            output_dir=None,
+                            ratios=ratios,
+                            seed=42,
+                            task=task_type
+                        )
             
             elif operation == 'generate-yaml':
                 # 生成dataset.yaml
                 print_section_header("生成 dataset.yaml")
                 
+                task_type = select_task_type()
                 data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
                 output = input_text("输出文件:", default="data/dataset.yaml")
                 
                 if confirm_action("确认生成配置文件?"):
                     from ..commands.data import generate_yaml
-                    generate_yaml(data_path=data_path, classes_file=None, output=output, 
-                                 train_dir='images/train', val_dir='images/val', test_dir='images/test')
+                    generate_yaml(
+                        data_path=data_path,
+                        classes_file=None,
+                        output=output,
+                        train_dir=None,
+                        val_dir=None,
+                        test_dir=None,
+                        task=task_type
+                    )
             
             elif operation == 'verify':
                 # 验证数据集
                 print_section_header("验证数据集")
                 
+                task_type = select_task_type()
                 data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
                 
                 from ..commands.data import verify_dataset
-                verify_dataset(data_path=data_path)
+                verify_dataset(data_path=data_path, task=task_type)
             
             elif operation == 'stats':
                 # 数据统计
@@ -235,8 +294,9 @@ def run_quick_train():
         task_type = select_task_type()
         
         # 根据任务类型获取不同的数据路径
+        # 一键训练从原始数据开始，自动完成划分
         if task_type == 'classify':
-            images_dir = input_path("图像目录 (按类别组织):", default="data/raw/classify", must_exist=False)
+            images_dir = input_path("图像目录 (按类别组织):", default="data/raw/images", must_exist=False)
             labels_dir = images_dir  # 分类任务图像和标签目录相同
         else:
             images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)

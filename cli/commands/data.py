@@ -98,20 +98,53 @@ def _validate_detect_label(label_file: Path) -> bool:
 
 @app.command("split")
 def split_dataset(
-    images_dir: str = typer.Option(..., "--images", "-i", help="图像目录"),
-    labels_dir: str = typer.Option(..., "--labels", "-l", help="标签目录"),
+    images_dir: Optional[str] = typer.Option(None, "--images", "-i", help="图像目录 (检测/分割任务)"),
+    labels_dir: Optional[str] = typer.Option(None, "--labels", "-l", help="标签目录 (检测/分割任务)"),
+    source_dir: Optional[str] = typer.Option(None, "--source", "-s", help="源目录 (分类任务，已按类别组织)"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
     ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
-    seed: int = typer.Option(42, "--seed", "-s", help="随机种子"),
+    seed: int = typer.Option(42, "--seed", help="随机种子"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
-    """划分数据集为训练集、验证集、测试集"""
+    """划分数据集为训练集、验证集、测试集
+    
+    支持两种使用方式:
+    1. 检测/分割任务: --images 和 --labels
+    2. 分类任务: --source
+    """
     
     print_section_header("数据集划分")
     
     # 验证任务类型
     task = validate_task_type(task)
     print_info(f"任务类型: {task}")
+    
+    # 根据任务类型验证参数
+    if task == 'classify':
+        if not source_dir:
+            print_error("分类任务需要指定 --source 参数")
+            raise typer.Exit(1)
+        if images_dir or labels_dir:
+            print_warning("分类任务不需要 --images 和 --labels 参数，将被忽略")
+        return _split_classify_dataset(source_dir, output_dir, ratios, seed)
+    else:
+        if not images_dir or not labels_dir:
+            print_error("检测/分割任务需要指定 --images 和 --labels 参数")
+            raise typer.Exit(1)
+        if source_dir:
+            print_warning("检测/分割任务不需要 --source 参数，将被忽略")
+        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, ratios, seed, task)
+
+
+def _split_detect_segment_dataset(
+    images_dir: str,
+    labels_dir: str,
+    output_dir: Optional[str],
+    ratios: str,
+    seed: int,
+    task: str,
+):
+    """检测/分割任务的数据集划分"""
     
     images_path = Path(images_dir)
     labels_path = Path(labels_dir)
@@ -194,7 +227,7 @@ def split_dataset(
     print_info("开始复制文件...")
     
     with create_progress_bar() as progress:
-        task = progress.add_task("复制文件", total=total)
+        task_id = progress.add_task("复制文件", total=total)
         
         stats = {}
         for split_name, split_pairs in splits.items():
@@ -209,7 +242,7 @@ def split_dataset(
                 shutil.copy2(label_file, dst_label)
                 
                 count += 1
-                progress.advance(task)
+                progress.advance(task_id)
             
             stats[split_name] = count
     
@@ -238,14 +271,130 @@ def split_dataset(
     print_success(f"数据集划分完成！输出目录: {output_path}")
 
 
+def _split_classify_dataset(
+    source_dir: str,
+    output_dir: Optional[str],
+    ratios: str,
+    seed: int,
+):
+    """分类任务的数据集划分"""
+    
+    source_path = Path(source_dir)
+    
+    # 验证源目录
+    if not source_path.exists():
+        print_error(f"源目录不存在: {source_dir}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True)
+    else:
+        output_path = Path(output_dir)
+    
+    print_info(f"源目录: {source_path}")
+    print_info(f"输出目录: {output_path}")
+    
+    # 获取所有类别
+    classes = [d.name for d in source_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    classes.sort()
+    
+    if not classes:
+        print_error("源目录中没有找到类别子目录")
+        raise typer.Exit(1)
+    
+    print_info(f"类别数量: {len(classes)}")
+    print_info(f"类别: {', '.join(classes)}")
+    
+    # 解析比例
+    try:
+        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
+        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
+    except ValueError as e:
+        print_error(f"比例格式错误: {e}")
+        raise typer.Exit(1)
+    
+    # 设置随机种子
+    random.seed(seed)
+    
+    # 创建输出目录结构 - 统一使用 images/ 目录
+    for split in ['train', 'val', 'test']:
+        for class_name in classes:
+            ensure_dir(output_path / 'images' / split / class_name)
+    
+    # 统计
+    stats = defaultdict(lambda: {'train': 0, 'val': 0, 'test': 0})
+    total_stats = {'train': 0, 'val': 0, 'test': 0}
+    
+    print_info("开始划分数据...")
+    
+    # 处理每个类别
+    for class_name in classes:
+        class_dir = source_path / class_name
+        images = list(class_dir.glob('*'))
+        images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+        
+        # 打乱顺序
+        random.shuffle(images)
+        
+        # 计算划分点
+        total = len(images)
+        train_end = int(total * train_ratio)
+        val_end = train_end + int(total * val_ratio)
+        
+        # 划分数据
+        splits_data = {
+            'train': images[:train_end],
+            'val': images[train_end:val_end],
+            'test': images[val_end:]
+        }
+        
+        # 复制文件
+        for split_name, split_images in splits_data.items():
+            for img_path in split_images:
+                dst_path = output_path / 'images' / split_name / class_name / img_path.name
+                shutil.copy2(img_path, dst_path)
+                stats[class_name][split_name] += 1
+                total_stats[split_name] += 1
+    
+    # 打印统计信息
+    console.print()
+    columns = ["数据集", "样本数", "比例"]
+    total_samples = sum(total_stats.values())
+    rows = [
+        ["训练集", total_stats['train'], f"{total_stats['train']/total_samples*100:.1f}%"],
+        ["验证集", total_stats['val'], f"{total_stats['val']/total_samples*100:.1f}%"],
+        ["测试集", total_stats['test'], f"{total_stats['test']/total_samples*100:.1f}%"],
+        ["总计", total_samples, "100.0%"],
+    ]
+    print_table("数据集划分结果", columns, rows, show_lines=True)
+    
+    # 显示每个类别的统计
+    console.print()
+    print_info("各类别分布:")
+    for class_name in classes:
+        total_class = sum(stats[class_name].values())
+        print_info(f"  {class_name}: train={stats[class_name]['train']}, val={stats[class_name]['val']}, test={stats[class_name]['test']} (总计{total_class})")
+    
+    # 保存类别文件
+    classes_file = output_path / 'classes.txt'
+    with open(classes_file, 'w', encoding='utf-8') as f:
+        for class_name in classes:
+            f.write(f"{class_name}\n")
+    
+    print_success(f"✓ 类别列表已保存: {classes_file}")
+    print_success(f"✓ 分类数据集划分完成！输出目录: {output_path}")
+
+
 @app.command("generate-yaml")
 def generate_yaml(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
     classes_file: Optional[str] = typer.Option(None, "--classes", "-c", help="类别文件路径"),
     output: str = typer.Option("data/dataset.yaml", "--output", "-o", help="输出文件路径"),
-    train_dir: str = typer.Option("images/train", "--train", help="训练集目录"),
-    val_dir: str = typer.Option("images/val", "--val", help="验证集目录"),
-    test_dir: str = typer.Option("images/test", "--test", help="测试集目录"),
+    train_dir: Optional[str] = typer.Option(None, "--train", help="训练集目录 (默认根据任务类型自动设置)"),
+    val_dir: Optional[str] = typer.Option(None, "--val", help="验证集目录 (默认根据任务类型自动设置)"),
+    test_dir: Optional[str] = typer.Option(None, "--test", help="测试集目录 (默认根据任务类型自动设置)"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
     """生成dataset.yaml配置文件"""
@@ -255,6 +404,15 @@ def generate_yaml(
     # 验证任务类型
     task = validate_task_type(task)
     print_info(f"任务类型: {task}")
+    
+    # 根据任务类型设置默认目录（统一使用 images/ 目录）
+    # 检查是否为 None 或未传递（typer.Option 对象）
+    if train_dir is None or not isinstance(train_dir, str):
+        train_dir = 'images/train'
+    if val_dir is None or not isinstance(val_dir, str):
+        val_dir = 'images/val'
+    if test_dir is None or not isinstance(test_dir, str):
+        test_dir = 'images/test'
     
     # 确定数据集路径
     if data_path is None:
@@ -374,8 +532,22 @@ def verify_dataset(
     
     print_info(f"数据集路径: {data_path}")
     
-    # 获取数据集信息
-    info = get_dataset_info(data_path)
+    # 获取并打印数据集信息
+    if task == 'classify':
+        # 分类任务：统计按类别组织的图像（统一使用 images/ 目录）
+        info = {}
+        for split in ['train', 'val', 'test']:
+            split_dir = data_path / 'images' / split
+            count = 0
+            if split_dir.exists():
+                for class_dir in split_dir.iterdir():
+                    if class_dir.is_dir() and not class_dir.name.startswith('.'):
+                        count += len(list(find_files(class_dir)))
+            info[f'{split}_images'] = count
+            info[f'{split}_labels'] = count  # 分类任务图像=标签
+    else:
+        # 检测/分割任务：从 images/ 和 labels/ 目录统计
+        info = get_dataset_info(data_path)
     
     # 打印统计信息
     print_dataset_info(info)
@@ -383,32 +555,82 @@ def verify_dataset(
     # 验证图像-标签对应关系
     issues = []
     
-    for split in ['train', 'val', 'test']:
-        img_dir = data_path / 'images' / split
-        label_dir = data_path / 'labels' / split
+    if task == 'classify':
+        # 分类任务验证（统一使用 images/ 目录）
+        all_classes = set()
+        split_classes = {}
         
-        if not img_dir.exists():
-            continue
+        for split in ['train', 'val', 'test']:
+            split_dir = data_path / 'images' / split
+            
+            if not split_dir.exists():
+                issues.append(f"缺少 images/{split} 目录")
+                continue
+            
+            # 获取类别目录
+            classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+            split_classes[split] = set(classes)
+            all_classes.update(classes)
+            
+            if not classes:
+                issues.append(f"images/{split}: 没有找到类别子目录")
+                continue
+            
+            # 验证每个类别是否有图像
+            for class_name in classes:
+                class_dir = split_dir / class_name
+                images = list(find_files(class_dir))
+                if not images:
+                    issues.append(f"images/{split}/{class_name}: 类别目录为空")
         
-        # 检查每个图像是否有对应的标签
-        for img_file in find_files(img_dir):
-            label_file = label_dir / f"{img_file.stem}.txt"
-            if not label_file.exists():
-                issues.append(f"{split}: 缺少标签 - {img_file.name}")
+        # 检查类别一致性
+        if len(split_classes) > 1:
+            reference_classes = split_classes.get('train', set())
+            for split, classes in split_classes.items():
+                if split == 'train':
+                    continue
+                missing = reference_classes - classes
+                extra = classes - reference_classes
+                if missing:
+                    issues.append(f"{split}: 缺少类别 {missing}")
+                if extra:
+                    issues.append(f"{split}: 多余类别 {extra}")
         
-        # 检查标签文件格式
-        if label_dir.exists():
-            for label_file in label_dir.glob('*.txt'):
-                try:
-                    # 根据任务类型验证标签格式
-                    if task == 'segment':
-                        if not _validate_segment_label(label_file):
-                            issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
-                    elif task == 'detect':
-                        if not _validate_detect_label(label_file):
-                            issues.append(f"{split}: 检测标签格式错误 - {label_file.name}")
-                except Exception as e:
-                    issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
+        # 显示类别信息
+        if all_classes:
+            console.print()
+            print_info(f"检测到 {len(all_classes)} 个类别:")
+            for cls in sorted(all_classes):
+                print_info(f"  • {cls}")
+    
+    else:
+        # 检测/分割任务验证
+        for split in ['train', 'val', 'test']:
+            img_dir = data_path / 'images' / split
+            label_dir = data_path / 'labels' / split
+            
+            if not img_dir.exists():
+                continue
+            
+            # 检查每个图像是否有对应的标签
+            for img_file in find_files(img_dir):
+                label_file = label_dir / f"{img_file.stem}.txt"
+                if not label_file.exists():
+                    issues.append(f"{split}: 缺少标签 - {img_file.name}")
+            
+            # 检查标签文件格式
+            if label_dir.exists():
+                for label_file in label_dir.glob('*.txt'):
+                    try:
+                        # 根据任务类型验证标签格式
+                        if task == 'segment':
+                            if not _validate_segment_label(label_file):
+                                issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
+                        elif task == 'detect':
+                            if not _validate_detect_label(label_file):
+                                issues.append(f"{split}: 检测标签格式错误 - {label_file.name}")
+                    except Exception as e:
+                        issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
     
     # 显示验证结果
     console.print()
@@ -421,124 +643,6 @@ def verify_dataset(
     else:
         print_success("数据集验证通过，未发现问题")
 
-
-@app.command("split-classify")
-def split_classify(
-    source_dir: str = typer.Option(..., "--source", "-s", help="源目录（已按类别组织）"),
-    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
-    ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
-    seed: int = typer.Option(42, "--seed", help="随机种子"),
-):
-    """划分已按类别组织的分类数据集"""
-    
-    print_section_header("划分分类数据集")
-    
-    source_path = Path(source_dir)
-    
-    # 验证源目录
-    if not source_path.exists():
-        print_error(f"源目录不存在: {source_dir}")
-        raise typer.Exit(1)
-    
-    # 确定输出目录
-    if output_dir is None:
-        config = ConfigManager()
-        output_path = config.get_path('data_processed', absolute=True) / 'classify'
-    else:
-        output_path = Path(output_dir)
-    
-    print_info(f"源目录: {source_path}")
-    print_info(f"输出目录: {output_path}")
-    
-    # 获取所有类别
-    classes = [d.name for d in source_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
-    classes.sort()
-    
-    if not classes:
-        print_error("源目录中没有找到类别子目录")
-        raise typer.Exit(1)
-    
-    print_info(f"类别数量: {len(classes)}")
-    print_info(f"类别: {', '.join(classes)}")
-    
-    # 解析比例
-    try:
-        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
-        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
-    except ValueError as e:
-        print_error(f"比例格式错误: {e}")
-        raise typer.Exit(1)
-    
-    # 设置随机种子
-    random.seed(seed)
-    
-    # 创建输出目录结构
-    for split in ['train', 'val', 'test']:
-        for class_name in classes:
-            ensure_dir(output_path / split / class_name)
-    
-    # 统计
-    stats = defaultdict(lambda: {'train': 0, 'val': 0, 'test': 0})
-    total_stats = {'train': 0, 'val': 0, 'test': 0}
-    
-    print_info("开始划分数据...")
-    
-    # 处理每个类别
-    for class_name in classes:
-        class_dir = source_path / class_name
-        images = list(class_dir.glob('*'))
-        images = [img for img in images if img.is_file() and not img.name.startswith('.')]
-        
-        # 打乱顺序
-        random.shuffle(images)
-        
-        # 计算划分点
-        total = len(images)
-        train_end = int(total * train_ratio)
-        val_end = train_end + int(total * val_ratio)
-        
-        # 划分数据
-        splits_data = {
-            'train': images[:train_end],
-            'val': images[train_end:val_end],
-            'test': images[val_end:]
-        }
-        
-        # 复制文件
-        for split_name, split_images in splits_data.items():
-            for img_path in split_images:
-                dst_path = output_path / split_name / class_name / img_path.name
-                shutil.copy2(img_path, dst_path)
-                stats[class_name][split_name] += 1
-                total_stats[split_name] += 1
-    
-    # 打印统计信息
-    console.print()
-    columns = ["数据集", "样本数", "比例"]
-    total_samples = sum(total_stats.values())
-    rows = [
-        ["训练集", total_stats['train'], f"{total_stats['train']/total_samples*100:.1f}%"],
-        ["验证集", total_stats['val'], f"{total_stats['val']/total_samples*100:.1f}%"],
-        ["测试集", total_stats['test'], f"{total_stats['test']/total_samples*100:.1f}%"],
-        ["总计", total_samples, "100.0%"],
-    ]
-    print_table("数据集划分结果", columns, rows, show_lines=True)
-    
-    # 显示每个类别的统计
-    console.print()
-    print_info("各类别分布:")
-    for class_name in classes:
-        total_class = sum(stats[class_name].values())
-        print_info(f"  {class_name}: train={stats[class_name]['train']}, val={stats[class_name]['val']}, test={stats[class_name]['test']} (总计{total_class})")
-    
-    # 保存类别文件
-    classes_file = output_path / 'classes.txt'
-    with open(classes_file, 'w', encoding='utf-8') as f:
-        for class_name in classes:
-            f.write(f"{class_name}\n")
-    
-    print_success(f"✓ 类别列表已保存: {classes_file}")
-    print_success(f"✓ 分类数据集划分完成！输出目录: {output_path}")
 
 
 @app.command("prepare-classify")
@@ -697,6 +801,7 @@ def prepare_classify(
 def dataset_stats(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
     detailed: bool = typer.Option(False, "--detailed", "-d", help="显示详细统计"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
     """数据集统计分析"""
     
@@ -714,6 +819,19 @@ def dataset_stats(
         raise typer.Exit(1)
     
     print_info(f"数据集路径: {data_path}")
+    print_info(f"任务类型: {task}")
+    
+    # 检测任务类型（如果是分类，检查是否有分类结构）
+    is_classify = task == 'classify'
+    if not is_classify:
+        # 自动检测：检查是否是分类数据集结构
+        train_dir = data_path / 'images' / 'train'
+        if train_dir.exists():
+            subdirs = [d for d in train_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+            # 如果train目录下有子目录，且没有labels目录，可能是分类任务
+            if subdirs and not (data_path / 'labels' / 'train').exists():
+                is_classify = True
+                print_info("检测到分类数据集结构")
     
     # 获取基本信息
     info = get_dataset_info(data_path)
@@ -723,46 +841,79 @@ def dataset_stats(
         # 统计类别分布
         print_section_header("类别分布统计")
         
-        class_counts = defaultdict(int)
-        bbox_counts = 0
-        
-        for split in ['train', 'val', 'test']:
-            label_dir = data_path / 'labels' / split
-            if not label_dir.exists():
-                continue
-            
-            for label_file in label_dir.glob('*.txt'):
-                try:
-                    with open(label_file, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            parts = line.split()
-                            if len(parts) >= 5:
-                                class_id = int(parts[0])
-                                class_counts[class_id] += 1
-                                bbox_counts += 1
-                except Exception:
-                    pass
-        
-        if class_counts:
-            columns = ["类别ID", "数量", "比例"]
-            rows = []
-            total = sum(class_counts.values())
-            
-            for class_id in sorted(class_counts.keys()):
-                count = class_counts[class_id]
-                rows.append([
-                    class_id,
-                    count,
-                    f"{count/total*100:.1f}%"
-                ])
-            
-            print_table("类别分布", columns, rows, show_lines=True)
-            print_info(f"总边界框数量: {bbox_counts}")
+        if is_classify:
+            # 分类任务：统计每个类别的图片数量
+            for split in ['train', 'val', 'test']:
+                split_dir = data_path / 'images' / split
+                if not split_dir.exists():
+                    continue
+                
+                class_counts = {}
+                classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                
+                for class_name in sorted(classes):
+                    class_dir = split_dir / class_name
+                    images = list(find_files(class_dir))
+                    class_counts[class_name] = len(images)
+                
+                if class_counts:
+                    console.print(f"\n[bold]{split.upper()} 集:[/bold]")
+                    columns = ["类别", "图片数量", "比例"]
+                    rows = []
+                    total = sum(class_counts.values())
+                    
+                    for class_name in sorted(class_counts.keys()):
+                        count = class_counts[class_name]
+                        rows.append([
+                            class_name,
+                            count,
+                            f"{count/total*100:.1f}%"
+                        ])
+                    
+                    print_table(f"{split} 类别分布", columns, rows, show_lines=True)
+                    print_info(f"总图片数: {total}, 类别数: {len(class_counts)}")
         else:
-            print_warning("未找到标注数据")
+            # 检测/分割任务：统计边界框
+            class_counts = defaultdict(int)
+            bbox_counts = 0
+            
+            for split in ['train', 'val', 'test']:
+                label_dir = data_path / 'labels' / split
+                if not label_dir.exists():
+                    continue
+                
+                for label_file in label_dir.glob('*.txt'):
+                    try:
+                        with open(label_file, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                parts = line.split()
+                                if len(parts) >= 5:
+                                    class_id = int(parts[0])
+                                    class_counts[class_id] += 1
+                                    bbox_counts += 1
+                    except Exception:
+                        pass
+            
+            if class_counts:
+                columns = ["类别ID", "数量", "比例"]
+                rows = []
+                total = sum(class_counts.values())
+                
+                for class_id in sorted(class_counts.keys()):
+                    count = class_counts[class_id]
+                    rows.append([
+                        class_id,
+                        count,
+                        f"{count/total*100:.1f}%"
+                    ])
+                
+                print_table("类别分布", columns, rows, show_lines=True)
+                print_info(f"总边界框数量: {bbox_counts}")
+            else:
+                print_warning("未找到标注数据")
 
 
 @app.command("convert-labelstudio")
@@ -847,14 +998,14 @@ def convert_labelstudio(
     print_success(f"✓ 找到 {len(class_mapping)} 个类别: {', '.join(class_mapping.keys())}")
     
     # 创建输出目录结构
+    images_dir = output_path / 'images'
     if task == 'detect':
-        images_dir = output_path / 'images'
         labels_dir = output_path / 'labels'
         ensure_dir(images_dir)
         ensure_dir(labels_dir)
     else:  # classify
-        images_dir = output_path / 'classify'
         labels_dir = None
+        ensure_dir(images_dir)
         # 为每个类别创建目录
         for class_name in class_mapping.keys():
             ensure_dir(images_dir / class_name)
@@ -1054,9 +1205,9 @@ def convert_labelstudio(
         console.print(f"       --task detect")
     else:
         console.print("  [bold cyan]1. 划分分类数据集:[/bold cyan]")
-        console.print(f"     python yolo_cli.py data split-classify \\")
-        console.print(f"       --source {output_path}/classify \\")
-        console.print(f"       --output data/processed \\")
+        console.print(f"     python yolo_cli.py data split \\")
+        console.print(f"       --source {output_path}/images \\")
+        console.print(f"       --task classify \\")
         console.print(f"       --ratios 0.7:0.2:0.1")
     
     console.print()

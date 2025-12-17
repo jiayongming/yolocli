@@ -258,7 +258,7 @@ data/raw/
 **分类任务**:
 ```
 data/raw/
-├── classify/        # 按类别组织的图片
+├── images/          # 按类别组织的图片
 │   ├── class1/
 │   ├── class2/
 │   └── ...
@@ -301,9 +301,9 @@ python yolo_cli.py data convert-labelstudio \
   --task classify
 
 # 2. 划分数据集
-python yolo_cli.py data split-classify \
-  --source data/raw/classify \
-  --output data/processed
+python yolo_cli.py data split \
+  --source data/raw/images \
+  --task classify
 
 # 3. 训练
 python yolo_cli.py train \
@@ -446,21 +446,22 @@ bicycle
 
 #### 分类目录结构
 
-分类任务使用目录结构组织，每个类别一个文件夹：
+分类任务使用目录结构组织，每个类别一个文件夹（统一使用 `images/` 目录）：
 
 ```
-data/classify/
-├── train/
-│   ├── class1/
-│   │   ├── img001.jpg
-│   │   └── img002.jpg
-│   ├── class2/
-│   │   └── img003.jpg
-│   └── class3/
-│       └── img004.jpg
-└── val/
-    ├── class1/
-    └── class2/
+data/processed/
+└── images/
+    ├── train/
+    │   ├── class1/
+    │   │   ├── img001.jpg
+    │   │   └── img002.jpg
+    │   ├── class2/
+    │   │   └── img003.jpg
+    │   └── class3/
+    │       └── img004.jpg
+    └── val/
+        ├── class1/
+        └── class2/
 ```
 
 或者使用标签文件（每个文件包含单个类别ID）：

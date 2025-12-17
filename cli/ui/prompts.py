@@ -366,6 +366,7 @@ def select_data_operation() -> str:
         str: 选中的操作
     """
     choices = [
+        "convert-labelstudio - 转换Label Studio数据",
         "split - 划分数据集",
         "generate-yaml - 生成dataset.yaml",
         "verify - 验证数据集",

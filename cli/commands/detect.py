@@ -87,15 +87,33 @@ def detect_image(
         # 处理结果
         detections = []
         for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                detection = {
-                    'class': int(box.cls[0]),
-                    'class_name': yolo_model.names[int(box.cls[0])],
-                    'confidence': float(box.conf[0]),
-                    'bbox': box.xyxy[0].tolist(),
-                }
-                detections.append(detection)
+            # 检测任务类型：分类任务有 probs 属性，检测/分割任务有 boxes 属性
+            if hasattr(result, 'probs') and result.probs is not None:
+                # 分类任务
+                probs = result.probs
+                top5_indices = probs.top5
+                top5_conf = probs.top5conf.tolist()
+                
+                for idx, conf_val in zip(top5_indices, top5_conf):
+                    detection = {
+                        'class': int(idx),
+                        'class_name': yolo_model.names[int(idx)],
+                        'confidence': float(conf_val),
+                        'type': 'classification'
+                    }
+                    detections.append(detection)
+            elif hasattr(result, 'boxes') and result.boxes is not None:
+                # 检测/分割任务
+                boxes = result.boxes
+                for box in boxes:
+                    detection = {
+                        'class': int(box.cls[0]),
+                        'class_name': yolo_model.names[int(box.cls[0])],
+                        'confidence': float(box.conf[0]),
+                        'bbox': box.xyxy[0].tolist(),
+                        'type': 'detection'
+                    }
+                    detections.append(detection)
         
         # 保存JSON结果
         if save_json:
@@ -109,10 +127,20 @@ def detect_image(
             print_success(f"JSON结果已保存: {json_file}")
         
         # 显示检测结果
-        print_detection_results(detections, image_path.name)
-        
         if detections:
-            print_success(f"检测完成！共检测到 {len(detections)} 个目标")
+            console.print()
+            print_success(f"检测完成！")
+            console.print()
+            
+            if detections[0].get('type') == 'classification':
+                # 分类结果显示
+                print_info("分类结果（Top-5）:")
+                for i, det in enumerate(detections, 1):
+                    console.print(f"  {i}. {det['class_name']}: {det['confidence']:.4f}")
+            else:
+                # 检测结果显示
+                print_detection_results(detections, image_path.name)
+                print_success(f"共检测到 {len(detections)} 个目标")
         else:
             print_warning("未检测到目标")
         
@@ -208,18 +236,38 @@ def detect_batch(
                 img_name = Path(result.path).name if hasattr(result, 'path') else f"image_{i}"
                 
                 detections = []
-                boxes = result.boxes
-                for box in boxes:
-                    detection = {
-                        'class': int(box.cls[0]),
-                        'class_name': yolo_model.names[int(box.cls[0])],
-                        'confidence': float(box.conf[0]),
-                        'bbox': box.xyxy[0].tolist(),
-                    }
-                    detections.append(detection)
+                
+                # 检测任务类型
+                if hasattr(result, 'probs') and result.probs is not None:
+                    # 分类任务
+                    probs = result.probs
+                    top5_indices = probs.top5
+                    top5_conf = probs.top5conf.tolist()
+                    
+                    for idx, conf_val in zip(top5_indices, top5_conf):
+                        detection = {
+                            'class': int(idx),
+                            'class_name': yolo_model.names[int(idx)],
+                            'confidence': float(conf_val),
+                            'type': 'classification'
+                        }
+                        detections.append(detection)
+                    total_objects += 1  # 分类任务计为1个结果
+                elif hasattr(result, 'boxes') and result.boxes is not None:
+                    # 检测/分割任务
+                    boxes = result.boxes
+                    for box in boxes:
+                        detection = {
+                            'class': int(box.cls[0]),
+                            'class_name': yolo_model.names[int(box.cls[0])],
+                            'confidence': float(box.conf[0]),
+                            'bbox': box.xyxy[0].tolist(),
+                            'type': 'detection'
+                        }
+                        detections.append(detection)
+                    total_objects += len(detections)
                 
                 all_detections[img_name] = detections
-                total_objects += len(detections)
                 
                 progress.update(task, advance=1, description=f"已处理 {i+1} 张")
         
