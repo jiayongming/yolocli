@@ -231,6 +231,71 @@ def print_detection_results(results: List[Dict[str, Any]], image_name: str):
     print_table("", columns, rows)
 
 
+def print_segmentation_results(results: List[Dict[str, Any]], image_name: str):
+    """
+    打印分割结果
+    
+    Args:
+        results: 分割结果列表
+        image_name: 图像名称
+    """
+    if not results:
+        print_warning(f"{image_name}: 未分割到目标")
+        return
+    
+    console.print(f"\n[bold cyan]{image_name}[/bold cyan] - 分割到 {len(results)} 个目标:")
+    
+    columns = ["类别", "置信度", "边界框", "掩码面积"]
+    rows = []
+    
+    for result in results:
+        bbox = result.get('bbox', [])
+        bbox_str = f"({bbox[0]:.1f}, {bbox[1]:.1f}, {bbox[2]:.1f}, {bbox[3]:.1f})" if len(bbox) >= 4 else "N/A"
+        mask_area = result.get('mask_area', 0)
+        
+        rows.append([
+            result.get('class_name', 'N/A'),
+            f"{result.get('confidence', 0):.2%}",
+            bbox_str,
+            f"{mask_area:.0f} px" if mask_area > 0 else "N/A",
+        ])
+    
+    print_table("", columns, rows)
+
+
+def print_classification_results(results: List[Dict[str, Any]], image_name: str, top_k: int = 5):
+    """
+    打印分类结果
+    
+    Args:
+        results: 分类结果列表（Top-K）
+        image_name: 图像名称
+        top_k: 显示Top-K结果
+    """
+    if not results:
+        print_warning(f"{image_name}: 无分类结果")
+        return
+    
+    console.print(f"\n[bold cyan]{image_name}[/bold cyan] - Top-{min(top_k, len(results))} 分类结果:")
+    
+    columns = ["排名", "类别", "置信度", "概率条"]
+    rows = []
+    
+    for i, result in enumerate(results[:top_k], 1):
+        confidence = result.get('confidence', 0)
+        bar_length = int(confidence * 20)  # 20个字符的进度条
+        bar = "█" * bar_length + "░" * (20 - bar_length)
+        
+        rows.append([
+            f"#{i}",
+            result.get('class_name', 'N/A'),
+            f"{confidence:.2%}",
+            bar,
+        ])
+    
+    print_table("", columns, rows)
+
+
 def create_tree(root_label: str) -> Tree:
     """
     创建树形结构

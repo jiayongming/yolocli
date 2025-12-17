@@ -13,7 +13,7 @@ import typer
 from typing import Optional
 from rich.console import Console
 
-from cli.commands import model, data, train, detect, interactive, quick
+from cli.commands import model, data, train, detect, interactive, quick, predict
 from cli.ui.display import print_logo, print_info
 from cli import __version__
 
@@ -30,7 +30,9 @@ app.add_typer(quick.app, name="quick", help="一键训练 (自动化完整流程
 app.add_typer(model.app, name="model", help="模型管理 (下载、导出、列表)")
 app.add_typer(data.app, name="data", help="数据处理 (划分、验证、统计)")
 app.add_typer(train.app, name="train", help="模型训练 (启动、恢复、配置)")
-app.add_typer(detect.app, name="detect", help="目标检测 (图片、视频、批量)")
+app.add_typer(predict.app, name="predict", help="模型预测 (检测、分割、分类)")
+# 向后兼容：保留detect作为predict的别名
+app.add_typer(detect.app, name="detect", help="目标检测 (图片、视频、批量) [别名]")
 
 console = Console()
 
@@ -61,15 +63,16 @@ def main(
     YOLO CLI - YOLO推理快捷操作框架
     
     支持 YOLOv8 和 YOLO11，提供完整的模型训练、推理和管理功能。
+    支持三种任务：目标检测(detect)、实例分割(segment)、图像分类(classify)。
     
     使用 --help 查看各个命令的详细帮助信息。
     
     快速开始:
     
       - 交互式模式:  yolo-cli interactive-mode
-      - 下载模型:    yolo-cli model download --version yolo11 --size s
-      - 训练模型:    yolo-cli train start --model yolo11s.pt --data data/dataset.yaml
-      - 检测图片:    yolo-cli detect image <model> <image>
+      - 下载模型:    yolo-cli model download --version yolo11 --size s --task segment
+      - 训练模型:    yolo-cli train start --model yolo11s.pt --data data/dataset.yaml --task detect
+      - 预测图片:    yolo-cli predict image <model> <image>
     """
     if version_flag:
         console.print(f"[bold cyan]YOLO CLI[/bold cyan] version [bold green]{__version__}[/bold green]")
@@ -88,7 +91,8 @@ def main(
         console.print("  [cyan]model[/cyan]              模型管理 (下载、导出、列表)")
         console.print("  [cyan]data[/cyan]               数据处理 (划分、验证、统计)")
         console.print("  [cyan]train[/cyan]              模型训练 (启动、恢复、配置)")
-        console.print("  [cyan]detect[/cyan]             目标检测 (图片、视频、批量)")
+        console.print("  [cyan]predict[/cyan]            模型预测 (检测、分割、分类)")
+        console.print("  [cyan]detect[/cyan]             目标检测 (图片、视频、批量) [别名]")
         console.print("  [cyan]interactive-mode[/cyan]   交互式模式 🎮")
         console.print()
         console.print("[bold]快速开始:[/bold]")

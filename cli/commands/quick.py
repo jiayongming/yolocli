@@ -8,14 +8,17 @@ from typing import Optional
 
 from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
-from ..core.utils import detect_device, get_device_name
+from ..core.utils import (
+    detect_device, get_device_name,
+    TaskType, validate_task_type, get_model_name_with_task
+)
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_section_header, print_step, console
 )
 
 # 导入其他命令的函数
-from .data import split_dataset, generate_yaml, verify_dataset, dataset_stats
+from .data import split_dataset, generate_yaml, verify_dataset, dataset_stats, prepare_classify
 from .model import download, list_models
 from .train import start_training
 
@@ -27,6 +30,7 @@ def quick_train(
     images_dir: str = typer.Option(..., "--images", "-i", help="原始图像目录"),
     labels_dir: str = typer.Option(..., "--labels", "-l", help="原始标签目录"),
     classes_file: Optional[str] = typer.Option(None, "--classes", "-c", help="类别文件路径 (默认: data/raw/classes.txt)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     model_version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
     model_size: str = typer.Option("s", "--size", "-s", help="模型大小 (n/s/m/l/x)"),
     epochs: int = typer.Option(200, "--epochs", "-e", help="训练轮数"),
@@ -43,20 +47,41 @@ def quick_train(
     """
     一键训练：自动完成数据处理、模型下载和训练的完整流程
     
+    支持三种任务类型：检测(detect)、分割(segment)、分类(classify)
+    
     示例:
     
-        python yolo_cli.py quick train \\
-            --images data/raw/images \\
-            --labels data/raw/labels \\
-            --version yolo11 \\
-            --size s \\
-            --epochs 200
+        # 检测任务
+        python yolo_cli.py quick train --task detect --images data/raw/images --labels data/raw/labels
+        
+        # 分割任务
+        python yolo_cli.py quick train --task segment --images data/raw/images --labels data/raw/labels
+        
+        # 分类任务
+        python yolo_cli.py quick train --task classify --images data/raw/images --labels data/raw/labels
     """
     
     console.print()
     print_section_header("🚀 一键训练模式")
     
-    total_steps = 7
+    # 验证任务类型
+    task = validate_task_type(task)
+    task_type = TaskType.from_string(task)
+    print_info(f"任务类型: {task.upper()}")
+    
+    # 根据任务类型调整默认参数
+    if task_type == TaskType.CLASSIFY:
+        if imgsz == 640:
+            imgsz = 224
+            print_info(f"分类任务使用图像尺寸: {imgsz}")
+        if epochs == 200:
+            epochs = 100
+            print_info(f"分类任务使用训练轮数: {epochs}")
+        if batch == 16:
+            batch = 32
+            print_info(f"分类任务使用批次大小: {batch}")
+    
+    total_steps = 8 if task == 'classify' else 7
     current_step = 0
     
     try:
@@ -95,22 +120,40 @@ def quick_train(
         
         # 配置路径
         config = ConfigManager()
-        output_dir = config.get_path('data_processed', absolute=True)
+        
+        # 根据任务类型选择不同的处理流程
+        if task_type == TaskType.CLASSIFY:
+            output_dir = config.get_path('data_processed', absolute=True) / 'classify'
+        else:
+            output_dir = config.get_path('data_processed', absolute=True)
         
         # ========== 步骤1: 数据集划分 ==========
         current_step += 1
-        print_step(current_step, total_steps, "数据集划分")
+        print_step(current_step, total_steps, "数据集划分/准备")
         console.print()
         
-        split_dataset(
-            images_dir=images_dir,
-            labels_dir=labels_dir,
-            output_dir=str(output_dir),
-            ratios=ratios,
-            seed=42
-        )
+        if task_type == TaskType.CLASSIFY:
+            # 分类任务：组织为目录结构
+            prepare_classify(
+                images_dir=images_dir,
+                labels_dir=labels_dir,
+                classes_file=classes_file,
+                output_dir=str(output_dir),
+                ratios=ratios,
+                seed=42
+            )
+        else:
+            # 检测/分割任务：划分数据集
+            split_dataset(
+                images_dir=images_dir,
+                labels_dir=labels_dir,
+                output_dir=str(output_dir),
+                ratios=ratios,
+                seed=42,
+                task=task
+            )
         
-        print_success("✓ 数据集划分完成")
+        print_success("✓ 数据集准备完成")
         console.print()
         
         # ========== 步骤2: 生成dataset.yaml ==========
@@ -132,21 +175,24 @@ def quick_train(
         console.print()
         
         # ========== 步骤3: 验证数据集 ==========
-        if not skip_verify:
+        if not skip_verify and task != 'classify':
             current_step += 1
             print_step(current_step, total_steps, "验证数据集")
             console.print()
             
-            verify_dataset(data_path=str(output_dir))
+            verify_dataset(data_path=str(output_dir), task=task)
             
             print_success("✓ 数据集验证完成")
             console.print()
         else:
-            print_warning("⊘ 跳过数据验证")
+            if task == 'classify':
+                print_info("⊘ 分类任务跳过标签验证")
+            else:
+                print_warning("⊘ 跳过数据验证")
             console.print()
         
         # ========== 步骤4: 数据统计 ==========
-        if not skip_stats:
+        if not skip_stats and task != 'classify':
             current_step += 1
             print_step(current_step, total_steps, "数据统计分析")
             console.print()
@@ -156,7 +202,10 @@ def quick_train(
             print_success("✓ 数据统计完成")
             console.print()
         else:
-            print_warning("⊘ 跳过数据统计")
+            if task == 'classify':
+                print_info("⊘ 分类任务使用目录统计")
+            else:
+                print_warning("⊘ 跳过数据统计")
             console.print()
         
         # ========== 步骤5: 检查/下载模型 ==========
@@ -164,9 +213,10 @@ def quick_train(
         print_step(current_step, total_steps, "检查模型")
         console.print()
         
-        # 标准化版本
+        # 标准化版本并添加任务后缀
         model_version = YOLOVersionManager.normalize_version(model_version)
-        model_name = YOLOVersionManager.get_model_name(model_version, model_size)
+        base_model_name = YOLOVersionManager.get_model_name(model_version, model_size)
+        model_name = get_model_name_with_task(base_model_name, task)
         
         # 检查模型是否存在
         models_dir = config.get_path('models', absolute=True) / 'weights'
@@ -183,6 +233,7 @@ def quick_train(
             download(
                 version=model_version,
                 size=[model_size],
+                task=task,
                 all=False,
                 output_dir=str(models_dir)
             )
@@ -222,6 +273,7 @@ def quick_train(
         start_training(
             model=model_name,
             data=dataset_yaml,
+            task=task,
             epochs=epochs,
             batch=batch,
             imgsz=imgsz,

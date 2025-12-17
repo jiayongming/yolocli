@@ -2,12 +2,19 @@
 
 一个功能完整、易于使用的命令行工具，用于YOLO模型的训练、推理和管理。支持YOLOv8和YOLO11，提供交互式操作界面和丰富的命令行选项。
 
+**✨ 支持三种任务类型：**
+- 🎯 **目标检测 (Detection)**: 检测图像中的目标并标注边界框
+- 🎨 **实例分割 (Segmentation)**: 检测目标并生成精确的像素级掩码
+- 📊 **图像分类 (Classification)**: 对整个图像进行分类
+
 ## ✨ 特性
 
 - ⚡ **一键训练**: 自动完成数据处理、模型下载和训练的完整流程
 - 🎯 **完整工作流**: 涵盖模型下载、数据处理、训练、推理、导出全流程
+- 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传 🆕
 - 🎮 **交互式模式**: 友好的交互式界面，引导式操作，适合新手
 - 🔄 **多版本支持**: 同时支持YOLOv8和YOLO11，自动版本管理
+- 🎯 **多任务支持**: 支持检测、分割、分类三种任务类型
 - 🎨 **美化输出**: 使用Rich库提供彩色输出、进度条、表格等
 - ⚙️ **灵活配置**: YAML配置文件，支持多种预设（小/中/大数据集）
 - 🚀 **智能设备**: 自动检测最佳设备（MPS/CUDA/CPU），支持环境变量控制
@@ -18,7 +25,12 @@
 ## 📋 目录
 
 - [安装](#-安装)
+- [任务类型说明](#-任务类型说明)
 - [快速开始](#-快速开始)
+  - [目标检测快速开始](#目标检测快速开始)
+  - [实例分割快速开始](#实例分割快速开始)
+  - [图像分类快速开始](#图像分类快速开始)
+- [Label Studio 数据转换](#-label-studio-数据转换) 🆕
 - [数据准备](#-数据准备)
 - [完整工作流程](#-完整工作流程)
 - [GPU配置指南](#-gpu配置指南)
@@ -48,14 +60,62 @@ pip install -r requirements.txt
 python yolo_cli.py --version
 ```
 
+## 🎯 任务类型说明
+
+YOLO CLI支持三种计算机视觉任务，每种任务有不同的应用场景和数据格式要求：
+
+### 1. 目标检测 (Detection)
+- **功能**: 检测图像中的目标并用矩形框标注位置
+- **输出**: 边界框坐标 + 类别 + 置信度
+- **应用**: 人脸检测、车辆检测、物体计数等
+- **数据格式**: YOLO格式标签（每行：`class_id x_center y_center width height`）
+- **模型后缀**: `yolo11s.pt` (无后缀)
+
+### 2. 实例分割 (Segmentation)
+- **功能**: 检测目标并生成精确的像素级掩码轮廓
+- **输出**: 边界框 + 多边形掩码 + 类别 + 置信度
+- **应用**: 医学图像分割、图像编辑、自动驾驶等
+- **数据格式**: YOLO分割格式（每行：`class_id x1 y1 x2 y2 ... xn yn`多边形坐标点）
+- **模型后缀**: `yolo11s-seg.pt`
+
+### 3. 图像分类 (Classification)
+- **功能**: 对整张图像进行分类判断
+- **输出**: Top-K类别 + 对应概率
+- **应用**: 图像分类、质量检测、场景识别等
+- **数据格式**: 目录结构组织（每个类别一个文件夹）
+- **模型后缀**: `yolo11s-cls.pt`
+
 ## ⚡ 快速开始
 
-### 一键训练（最快捷）⚡
+### 目标检测快速开始
 
-如果你已经准备好了数据，使用一键训练命令可以自动完成所有步骤：
+如果你已经准备好了检测数据，使用一键训练命令可以自动完成所有步骤：
 
 ```bash
 python yolo_cli.py quick train \
+  --task detect \
+  --images data/raw/images \
+  --labels data/raw/labels
+```
+
+### 实例分割快速开始
+
+分割任务需要多边形标注数据：
+
+```bash
+python yolo_cli.py quick train \
+  --task segment \
+  --images data/raw/images \
+  --labels data/raw/labels
+```
+
+### 图像分类快速开始
+
+分类任务将自动组织数据为目录结构：
+
+```bash
+python yolo_cli.py quick train \
+  --task classify \
   --images data/raw/images \
   --labels data/raw/labels
 ```
@@ -121,38 +181,180 @@ python yolo_cli.py data verify --path data/processed
 #### 3. 训练模型
 
 ```bash
-# 开始训练
+# 检测任务训练
 python yolo_cli.py train start \
   --model yolo11s.pt \
+  --task detect \
   --data data/dataset.yaml \
   --epochs 200 \
   --batch 16
 
+# 分割任务训练
+python yolo_cli.py train start \
+  --model yolo11s-seg.pt \
+  --task segment \
+  --data data/dataset.yaml \
+  --epochs 200 \
+  --batch 16
+
+# 分类任务训练
+python yolo_cli.py train start \
+  --model yolo11s-cls.pt \
+  --task classify \
+  --data data/dataset.yaml \
+  --epochs 100 \
+  --batch 32 \
+  --imgsz 224
+
 # 使用特定的数据增强策略
 python yolo_cli.py train start \
   --model yolo11s.pt \
+  --task detect \
   --data data/dataset.yaml \
   --augmentation aggressive
 ```
 
-#### 4. 推理检测
+## 🔄 Label Studio 数据转换
+
+从 Label Studio 标注平台直接转换数据为 YOLO 训练格式！
+
+### 快速开始
 
 ```bash
-# 单张图片检测
-python yolo_cli.py detect image \
+# 从 Label Studio 导出并转换目标检测数据
+python yolo_cli.py data convert-labelstudio \
+  --input labelstudioexport/project-3.json \
+  --url http://localhost:8080 \
+  --token your_api_token_here \
+  --task detect
+
+# 转换分类数据
+python yolo_cli.py data convert-labelstudio \
+  --input labelstudioexport/project-6.json \
+  --url http://localhost:8080 \
+  --token your_api_token_here \
+  --task classify
+```
+
+### 核心特性
+
+- ✅ **智能 Token 处理**: 支持 Refresh Token，自动转换为 Access Token
+- ✅ **批量下载图片**: 从 Label Studio API 自动下载所有标注图片
+- ✅ **断点续传**: 已下载文件自动跳过，支持中断后继续
+- ✅ **多线程并发**: 可配置并发数（`--max-workers`，默认 4）
+- ✅ **格式自动检测**: 支持 JSON 和 CSV 导出格式
+- ✅ **标准 YOLO 格式**: 输出到 `data/raw/` 目录
+
+### 输出目录结构
+
+**检测任务**:
+```
+data/raw/
+├── images/          # 所有下载的图片
+├── labels/          # YOLO 格式标签
+└── classes.txt      # 类别列表
+```
+
+**分类任务**:
+```
+data/raw/
+├── classify/        # 按类别组织的图片
+│   ├── class1/
+│   ├── class2/
+│   └── ...
+└── classes.txt      # 类别列表
+```
+
+### 完整工作流
+
+**检测任务**:
+```bash
+# 1. 转换数据
+python yolo_cli.py data convert-labelstudio \
+  -i labelstudioexport/project.json \
+  -u http://localhost:8080 \
+  -t YOUR_TOKEN \
+  --task detect
+
+# 2. 划分数据集
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --output data/processed
+
+# 3. 生成配置
+python yolo_cli.py data generate-yaml \
+  --path data/processed \
+  --classes data/raw/classes.txt
+
+# 4. 训练
+python yolo_cli.py train --data data/dataset.yaml
+```
+
+**分类任务**:
+```bash
+# 1. 转换数据
+python yolo_cli.py data convert-labelstudio \
+  -i labelstudioexport/project.json \
+  -u http://localhost:8080 \
+  -t YOUR_TOKEN \
+  --task classify
+
+# 2. 划分数据集
+python yolo_cli.py data split-classify \
+  --source data/raw/classify \
+  --output data/processed
+
+# 3. 训练
+python yolo_cli.py train \
+  --task classify \
+  --data data/processed
+```
+
+### 获取 Token
+
+在 Label Studio 界面：**Account & Settings** → **Personal Access Token**
+
+💡 **提示**: 命令支持 Refresh Token 和 Access Token，会自动识别和转换
+
+---
+
+#### 4. 推理预测
+
+```bash
+# 单张图片预测（自动识别任务类型）
+python yolo_cli.py predict image \
   results/training/best.pt \
   test.jpg
 
-# 批量检测
-python yolo_cli.py detect batch \
+# 分割任务预测
+python yolo_cli.py predict image \
+  results/training/best.pt \
+  test.jpg \
+  --task segment
+
+# 分类任务预测（Top-5）
+python yolo_cli.py predict image \
+  results/training/best.pt \
+  test.jpg \
+  --task classify \
+  --top-k 5
+
+# 批量预测
+python yolo_cli.py predict batch \
   results/training/best.pt \
   test_images/
 
-# 视频检测
-python yolo_cli.py detect video \
+# 视频预测
+python yolo_cli.py predict video \
   results/training/best.pt \
   video.mp4 \
   --show
+
+# 向后兼容：detect命令仍然可用
+python yolo_cli.py detect image \
+  results/training/best.pt \
+  test.jpg
 ```
 
 #### 5. 导出模型
@@ -171,9 +373,11 @@ python yolo_cli.py model export \
 
 ## 📂 数据准备
 
-在开始训练前，需要按照以下格式准备数据集。
+在开始训练前，需要根据任务类型按照以下格式准备数据集。
 
-### 数据集目录结构
+### 目标检测数据格式
+
+#### 数据集目录结构
 
 ```
 data/raw/
@@ -200,7 +404,7 @@ cat
 bicycle
 ```
 
-### 标签文件格式
+#### 检测标签文件格式
 
 每个标签文件（.txt）包含该图片中所有目标的标注信息，每行一个目标：
 
@@ -216,6 +420,63 @@ bicycle
 ```
 0 0.5 0.5 0.3 0.4
 1 0.2 0.3 0.1 0.15
+```
+
+### 实例分割数据格式
+
+#### 分割标签文件格式
+
+每个标签文件（.txt）包含多边形坐标点，每行一个实例：
+
+```
+<class_id> <x1> <y1> <x2> <y2> <x3> <y3> ... <xn> <yn>
+```
+
+- `class_id`: 类别索引（从0开始）
+- `x1 y1 ... xn yn`: 多边形的N个顶点坐标（归一化到0-1）
+- 至少需要3个点（6个坐标值）
+
+**示例（img001.txt）：**
+```
+0 0.1 0.2 0.3 0.2 0.3 0.4 0.1 0.4
+1 0.5 0.5 0.7 0.5 0.7 0.7 0.5 0.7
+```
+
+### 图像分类数据格式
+
+#### 分类目录结构
+
+分类任务使用目录结构组织，每个类别一个文件夹：
+
+```
+data/classify/
+├── train/
+│   ├── class1/
+│   │   ├── img001.jpg
+│   │   └── img002.jpg
+│   ├── class2/
+│   │   └── img003.jpg
+│   └── class3/
+│       └── img004.jpg
+└── val/
+    ├── class1/
+    └── class2/
+```
+
+或者使用标签文件（每个文件包含单个类别ID）：
+
+**img001.txt**:
+```
+0
+```
+
+然后使用命令自动组织：
+
+```bash
+python yolo_cli.py data prepare-classify \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --classes data/raw/classes.txt
 ```
 
 ### 快速准备命令

@@ -24,5 +24,8 @@ tqdm>=4.66.0
 numpy>=1.24.0
 pandas>=2.0.0
 
+# HTTP requests (for Label Studio API)
+requests>=2.31.0
+
 # Optional: for better performance
 # torch>=2.0.0  # Usually installed with ultralytics

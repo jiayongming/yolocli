@@ -8,7 +8,7 @@ from pathlib import Path
 from ..ui.prompts import (
     select_main_menu, select_model_operation, select_data_operation,
     select_train_operation, select_detect_operation,
-    select_yolo_version, select_model_size, select_device,
+    select_yolo_version, select_task_type, select_model_size, select_device,
     select_augmentation_preset, select_export_formats,
     build_training_config, input_text, input_path, input_number,
     confirm_action
@@ -41,14 +41,15 @@ def run_model_operations():
                 print_section_header("下载预训练模型")
                 
                 version = select_yolo_version()
+                task_type = select_task_type()
                 size_str = select_model_size()
                 
                 sizes = [size_str] if size_str != 'all' else None
                 download_all = (size_str == 'all')
                 
-                if confirm_action(f"确认下载 {version} {size_str if not download_all else '所有'} 模型?"):
+                if confirm_action(f"确认下载 {version} {task_type} {size_str if not download_all else '所有'} 模型?"):
                     from ..commands.model import download
-                    download(version=version, size=sizes, all=download_all, output_dir=None)
+                    download(version=version, size=sizes, task=task_type, all=download_all, output_dir=None)
             
             elif operation == 'export':
                 # 导出模型
@@ -230,9 +231,16 @@ def run_quick_train():
         print_info("  6. 开始训练")
         console.print()
         
-        # 获取参数
-        images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
-        labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
+        # 选择任务类型
+        task_type = select_task_type()
+        
+        # 根据任务类型获取不同的数据路径
+        if task_type == 'classify':
+            images_dir = input_path("图像目录 (按类别组织):", default="data/raw/classify", must_exist=False)
+            labels_dir = images_dir  # 分类任务图像和标签目录相同
+        else:
+            images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
+            labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
         
         # 训练配置
         config = build_training_config()
@@ -243,6 +251,7 @@ def run_quick_train():
         
         console.print()
         print_info("配置摘要:")
+        print_info(f"  任务类型: {task_type}")
         print_info(f"  图像目录: {images_dir}")
         print_info(f"  标签目录: {labels_dir}")
         print_info(f"  YOLO版本: {config['version']}")
@@ -263,6 +272,7 @@ def run_quick_train():
             images_dir=images_dir,
             labels_dir=labels_dir,
             classes_file=None,
+            task=task_type,
             model_version=config['version'],
             model_size=config['model_size'],
             epochs=config['epochs'],

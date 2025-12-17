@@ -41,6 +41,7 @@ class ConfigManager:
         return {
             'model': {
                 'default_version': 'yolo11',
+                'default_task': 'detect',
                 'weights_dir': 'models/weights',
                 'pretrained': ['yolo11n.pt', 'yolo11s.pt', 'yolo11m.pt', 'yolo11l.pt', 'yolo11x.pt'],
             },
@@ -66,6 +67,26 @@ class ConfigManager:
                 'iou_threshold': 0.45,
                 'save_txt': True,
                 'save_json': True,
+            },
+            'tasks': {
+                'detect': {
+                    'default_model_size': 's',
+                    'default_conf': 0.25,
+                    'default_iou': 0.45,
+                },
+                'segment': {
+                    'default_model_size': 's',
+                    'default_conf': 0.25,
+                    'default_iou': 0.45,
+                    'overlap_mask': True,
+                    'mask_ratio': 4,
+                    'retina_masks': False,
+                },
+                'classify': {
+                    'default_model_size': 's',
+                    'dropout': 0.0,
+                    'top_k': 5,
+                },
             },
         }
     
@@ -166,6 +187,19 @@ class ConfigManager:
     def get_detection_config(self) -> Dict[str, Any]:
         """获取检测配置"""
         return self.config.get('detection', {})
+    
+    def get_task_config(self, task: str) -> Dict[str, Any]:
+        """
+        获取任务特定配置
+        
+        Args:
+            task: 任务类型 (detect, segment, classify)
+            
+        Returns:
+            Dict[str, Any]: 任务配置
+        """
+        tasks_config = self.config.get('tasks', {})
+        return tasks_config.get(task, {})
     
     def get_path(self, path_key: str, absolute: bool = False) -> Path:
         """

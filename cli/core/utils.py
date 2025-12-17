@@ -6,6 +6,50 @@ import os
 import torch
 from pathlib import Path
 from typing import Union, Optional, List, Tuple
+from enum import Enum
+
+
+class TaskType(Enum):
+    """YOLO任务类型枚举"""
+    DETECT = "detect"
+    SEGMENT = "segment"
+    CLASSIFY = "classify"
+    
+    @classmethod
+    def from_string(cls, task: str) -> 'TaskType':
+        """从字符串创建TaskType
+        
+        Args:
+            task: 任务名称字符串
+            
+        Returns:
+            TaskType: 任务类型枚举
+            
+        Raises:
+            ValueError: 如果任务类型无效
+        """
+        task = task.lower().strip()
+        for task_type in cls:
+            if task_type.value == task:
+                return task_type
+        raise ValueError(f"无效的任务类型: {task}. 支持的类型: {', '.join([t.value for t in cls])}")
+    
+    def get_model_suffix(self) -> str:
+        """获取模型文件后缀
+        
+        Returns:
+            str: 模型后缀（如 '', '-seg', '-cls'）
+        """
+        if self == TaskType.DETECT:
+            return ""
+        elif self == TaskType.SEGMENT:
+            return "-seg"
+        elif self == TaskType.CLASSIFY:
+            return "-cls"
+        return ""
+    
+    def __str__(self) -> str:
+        return self.value
 
 
 def detect_device() -> str:
@@ -266,3 +310,129 @@ def get_project_root() -> Path:
             return parent
     # 如果找不到，返回当前工作目录
     return Path.cwd()
+
+
+def validate_task_type(task: str) -> str:
+    """
+    验证任务类型
+    
+    Args:
+        task: 任务类型字符串
+        
+    Returns:
+        str: 验证后的任务类型（标准化为小写）
+        
+    Raises:
+        ValueError: 如果任务类型无效
+    """
+    try:
+        task_type = TaskType.from_string(task)
+        return task_type.value
+    except ValueError as e:
+        raise ValueError(str(e))
+
+
+def get_task_specific_config(task: str) -> dict:
+    """
+    获取任务特定配置
+    
+    Args:
+        task: 任务类型
+        
+    Returns:
+        dict: 任务特定配置字典
+    """
+    task_type = TaskType.from_string(task)
+    
+    # 基础配置
+    base_config = {
+        'default_conf': 0.25,
+        'default_iou': 0.45,
+    }
+    
+    # 任务特定配置
+    if task_type == TaskType.DETECT:
+        return {
+            **base_config,
+            'save_txt': True,
+            'save_json': True,
+        }
+    elif task_type == TaskType.SEGMENT:
+        return {
+            **base_config,
+            'save_txt': True,
+            'save_json': True,
+            'overlap_mask': True,
+            'mask_ratio': 4,
+            'retina_masks': False,
+        }
+    elif task_type == TaskType.CLASSIFY:
+        return {
+            'default_conf': 0.25,
+            'top_k': 5,
+            'dropout': 0.0,
+        }
+    
+    return base_config
+
+
+def get_model_name_with_task(base_model: str, task: str) -> str:
+    """
+    根据任务类型获取完整的模型名称
+    
+    Args:
+        base_model: 基础模型名称（如 'yolo11s.pt' 或 'yolo11s'）
+        task: 任务类型
+        
+    Returns:
+        str: 完整的模型名称
+        
+    Examples:
+        >>> get_model_name_with_task('yolo11s.pt', 'segment')
+        'yolo11s-seg.pt'
+        >>> get_model_name_with_task('yolo11s', 'classify')
+        'yolo11s-cls'
+    """
+    task_type = TaskType.from_string(task)
+    suffix = task_type.get_model_suffix()
+    
+    # 移除已有的任务后缀
+    base = base_model.replace('-seg', '').replace('-cls', '')
+    
+    # 分离扩展名
+    if '.' in base:
+        name, ext = base.rsplit('.', 1)
+        return f"{name}{suffix}.{ext}"
+    else:
+        return f"{base}{suffix}"
+
+
+def parse_model_name(model_name: str) -> Tuple[str, str]:
+    """
+    解析模型名称，提取任务类型
+    
+    Args:
+        model_name: 模型名称（如 'yolo11s-seg.pt'）
+        
+    Returns:
+        Tuple[str, str]: (基础名称, 任务类型)
+        
+    Examples:
+        >>> parse_model_name('yolo11s-seg.pt')
+        ('yolo11s', 'segment')
+        >>> parse_model_name('yolo11s.pt')
+        ('yolo11s', 'detect')
+    """
+    # 移除扩展名
+    if '.' in model_name:
+        base = model_name.rsplit('.', 1)[0]
+    else:
+        base = model_name
+    
+    # 检查任务后缀
+    if base.endswith('-seg'):
+        return (base[:-4], TaskType.SEGMENT.value)
+    elif base.endswith('-cls'):
+        return (base[:-4], TaskType.CLASSIFY.value)
+    else:
+        return (base, TaskType.DETECT.value)

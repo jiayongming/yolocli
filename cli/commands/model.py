@@ -10,7 +10,10 @@ import os
 
 from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
-from ..core.utils import detect_device, get_device_name, format_size, get_file_size, ensure_dir
+from ..core.utils import (
+    detect_device, get_device_name, format_size, get_file_size, ensure_dir,
+    TaskType, validate_task_type, get_model_name_with_task, parse_model_name
+)
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_model_list, print_section_header, create_progress_bar,
@@ -24,6 +27,7 @@ app = typer.Typer(help="模型管理命令")
 def download(
     version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
     size: Optional[List[str]] = typer.Option(None, "--size", "-s", help="模型大小 (n/s/m/l/x)，可多选"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     all: bool = typer.Option(False, "--all", "-a", help="下载该版本所有模型"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
 ):
@@ -32,18 +36,27 @@ def download(
     print_section_header("下载预训练模型")
     
     try:
+        # 验证任务类型
+        task = validate_task_type(task)
+        task_type = TaskType.from_string(task)
+        
         # 标准化版本
         version = YOLOVersionManager.normalize_version(version)
         print_info(f"YOLO版本: {version}")
+        print_info(f"任务类型: {task}")
         
         # 确定要下载的模型
         if all:
-            models_to_download = YOLOVersionManager.get_all_models(version)
+            base_models = YOLOVersionManager.get_all_models(version)
+            # 为所有基础模型添加任务后缀
+            models_to_download = [get_model_name_with_task(m, task) for m in base_models]
         elif size:
-            models_to_download = [YOLOVersionManager.get_model_name(version, s) for s in size]
+            base_models = [YOLOVersionManager.get_model_name(version, s) for s in size]
+            models_to_download = [get_model_name_with_task(m, task) for m in base_models]
         else:
             # 默认下载 small 模型
-            models_to_download = [YOLOVersionManager.get_model_name(version, 's')]
+            base_model = YOLOVersionManager.get_model_name(version, 's')
+            models_to_download = [get_model_name_with_task(base_model, task)]
         
         # 确定输出目录
         if output_dir is None:
@@ -184,6 +197,7 @@ def export(
 def list_models(
     directory: Optional[str] = typer.Option(None, "--dir", "-d", help="模型目录"),
     version: Optional[str] = typer.Option(None, "--version", "-v", help="筛选版本"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="筛选任务类型 (detect/segment/classify/all)"),
 ):
     """列出本地模型"""
     
@@ -211,33 +225,56 @@ def list_models(
         print_info("使用 'yolo-cli model download' 下载模型")
         return
     
-    # 整理模型信息
-    models = []
+    # 验证任务类型筛选
+    if task and task.lower() != 'all':
+        task = validate_task_type(task)
+    
+    # 整理模型信息，按任务类型分组
+    models_by_task = {
+        'detect': [],
+        'segment': [],
+        'classify': [],
+    }
+    
     for model_file in model_files:
         ver, size = YOLOVersionManager.parse_model_name(model_file.name)
+        base_name, model_task = parse_model_name(model_file.name)
         
         # 版本筛选
         if version and ver != YOLOVersionManager.normalize_version(version):
+            continue
+        
+        # 任务类型筛选
+        if task and task.lower() != 'all' and model_task != task:
             continue
         
         model_info = {
             'name': model_file.name,
             'version': ver or 'Unknown',
             'size': size or 'Unknown',
+            'task': model_task,
             'params': YOLOVersionManager.get_model_info(size)['params'] if size else 'N/A',
             'file_size': format_size(get_file_size(model_file)),
             'path': str(model_file),
         }
-        models.append(model_info)
+        models_by_task[model_task].append(model_info)
     
-    if not models:
-        print_warning(f"未找到版本为 {version} 的模型")
+    # 计算总数
+    total_models = sum(len(models) for models in models_by_task.values())
+    
+    if total_models == 0:
+        print_warning(f"未找到匹配的模型")
         return
     
-    # 打印模型列表
-    print_model_list(models)
+    # 按任务类型打印模型列表
+    for task_name, models in models_by_task.items():
+        if models:
+            console.print(f"\n[bold cyan]{'=' * 60}[/bold cyan]")
+            console.print(f"[bold cyan]{task_name.upper()} 模型[/bold cyan]")
+            console.print(f"[bold cyan]{'=' * 60}[/bold cyan]")
+            print_model_list(models)
     
-    print_info(f"\n共找到 {len(models)} 个模型")
+    print_info(f"\n共找到 {total_models} 个模型")
 
 
 @app.command("info")
@@ -262,10 +299,12 @@ def model_info(
     
     # 解析模型信息
     version, size = YOLOVersionManager.parse_model_name(model_path.name)
+    base_name, model_task = parse_model_name(model_path.name)
     
     print_key_value("模型名称", model_path.name)
     print_key_value("完整路径", str(model_path))
     print_key_value("文件大小", format_size(get_file_size(model_path)))
+    print_key_value("任务类型", model_task.upper())
     
     if version:
         print_key_value("YOLO版本", version)

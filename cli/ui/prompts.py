@@ -163,6 +163,25 @@ def select_yolo_version() -> str:
         return "yolov8"
 
 
+def select_task_type() -> str:
+    """
+    选择任务类型
+    
+    Returns:
+        str: 选中的任务类型
+    """
+    choices = [
+        "detect - 目标检测",
+        "segment - 实例分割",
+        "classify - 图像分类",
+    ]
+    
+    result = select_option("选择任务类型:", choices, default=choices[0])
+    
+    # 提取任务类型
+    return result.split(' ')[0]
+
+
 def select_model_size() -> str:
     """
     选择模型大小

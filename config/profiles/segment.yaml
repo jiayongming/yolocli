@@ -1,0 +1,23 @@
+# 实例分割配置预设
+
+# 模型配置
+model:
+  default_task: segment
+
+# 训练配置
+training:
+  epochs: 200
+  batch: 16
+  imgsz: 640
+  patience: 50
+
+# 数据增强配置
+augmentation:
+  default_preset: balanced
+
+# 分割特定配置
+segment:
+  overlap_mask: true
+  mask_ratio: 4
+  retina_masks: false
+

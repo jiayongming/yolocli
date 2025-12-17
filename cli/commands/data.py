@@ -11,14 +11,89 @@ import random
 from collections import defaultdict
 
 from ..core.config import ConfigManager
-from ..core.utils import ensure_dir, get_dataset_info, parse_ratio_string, find_files
+from ..core.utils import (
+    ensure_dir, get_dataset_info, parse_ratio_string, find_files,
+    TaskType, validate_task_type
+)
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_dataset_info, print_section_header, print_table,
     create_progress_bar, print_key_value, console
 )
+from ..converters.labelstudio import LabelStudioClient, LabelStudioConverter
 
 app = typer.Typer(help="数据处理命令")
+
+
+def _validate_segment_label(label_file: Path) -> bool:
+    """
+    验证分割标签文件格式
+    
+    Args:
+        label_file: 标签文件路径
+        
+    Returns:
+        bool: 标签格式是否有效
+    """
+    try:
+        with open(label_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                # 分割标签至少需要：class_id + 至少3个点（6个坐标值）
+                if len(parts) < 7:  # 1 (class) + 6 (3个点的坐标)
+                    return False
+                # 检查是否有偶数个坐标值（x,y配对）
+                if (len(parts) - 1) % 2 != 0:
+                    return False
+                # 验证所有值都是有效数字
+                try:
+                    int(parts[0])  # class_id
+                    for val in parts[1:]:
+                        coord = float(val)
+                        if coord < 0 or coord > 1:
+                            return False
+                except ValueError:
+                    return False
+        return True
+    except Exception:
+        return False
+
+
+def _validate_detect_label(label_file: Path) -> bool:
+    """
+    验证检测标签文件格式
+    
+    Args:
+        label_file: 标签文件路径
+        
+    Returns:
+        bool: 标签格式是否有效
+    """
+    try:
+        with open(label_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                # 检测标签需要：class_id + 4个坐标值
+                if len(parts) != 5:
+                    return False
+                # 验证所有值都是有效数字
+                try:
+                    int(parts[0])  # class_id
+                    for val in parts[1:]:
+                        coord = float(val)
+                        if coord < 0 or coord > 1:
+                            return False
+                except ValueError:
+                    return False
+        return True
+    except Exception:
+        return False
 
 
 @app.command("split")
@@ -28,10 +103,15 @@ def split_dataset(
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
     ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
     seed: int = typer.Option(42, "--seed", "-s", help="随机种子"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
     """划分数据集为训练集、验证集、测试集"""
     
     print_section_header("数据集划分")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    print_info(f"任务类型: {task}")
     
     images_path = Path(images_dir)
     labels_path = Path(labels_dir)
@@ -79,7 +159,14 @@ def split_dataset(
     for img_file in find_files(images_path, ['.jpg', '.jpeg', '.png']):
         label_file = labels_path / f"{img_file.stem}.txt"
         if label_file.exists():
-            pairs.append((img_file, label_file))
+            # 验证标签格式
+            if task == 'segment':
+                if _validate_segment_label(label_file):
+                    pairs.append((img_file, label_file))
+                else:
+                    print_warning(f"分割标签格式无效: {img_file.name}")
+            else:
+                pairs.append((img_file, label_file))
         else:
             print_warning(f"标签文件缺失: {img_file.name}")
     
@@ -159,10 +246,15 @@ def generate_yaml(
     train_dir: str = typer.Option("images/train", "--train", help="训练集目录"),
     val_dir: str = typer.Option("images/val", "--val", help="验证集目录"),
     test_dir: str = typer.Option("images/test", "--test", help="测试集目录"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
     """生成dataset.yaml配置文件"""
     
     print_section_header("生成 dataset.yaml")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    print_info(f"任务类型: {task}")
     
     # 确定数据集路径
     if data_path is None:
@@ -259,10 +351,15 @@ def generate_yaml(
 @app.command("verify")
 def verify_dataset(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
 ):
     """验证数据集完整性"""
     
     print_section_header("数据集验证")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    print_info(f"任务类型: {task}")
     
     # 确定数据集路径
     if data_path is None:
@@ -303,14 +400,13 @@ def verify_dataset(
         if label_dir.exists():
             for label_file in label_dir.glob('*.txt'):
                 try:
-                    with open(label_file, 'r') as f:
-                        for line_num, line in enumerate(f, 1):
-                            line = line.strip()
-                            if not line:
-                                continue
-                            parts = line.split()
-                            if len(parts) < 5:
-                                issues.append(f"{split}: 标签格式错误 - {label_file.name}:{line_num}")
+                    # 根据任务类型验证标签格式
+                    if task == 'segment':
+                        if not _validate_segment_label(label_file):
+                            issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
+                    elif task == 'detect':
+                        if not _validate_detect_label(label_file):
+                            issues.append(f"{split}: 检测标签格式错误 - {label_file.name}")
                 except Exception as e:
                     issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
     
@@ -324,6 +420,277 @@ def verify_dataset(
             print_warning(f"  ... 还有 {len(issues) - 20} 个问题")
     else:
         print_success("数据集验证通过，未发现问题")
+
+
+@app.command("split-classify")
+def split_classify(
+    source_dir: str = typer.Option(..., "--source", "-s", help="源目录（已按类别组织）"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
+    seed: int = typer.Option(42, "--seed", help="随机种子"),
+):
+    """划分已按类别组织的分类数据集"""
+    
+    print_section_header("划分分类数据集")
+    
+    source_path = Path(source_dir)
+    
+    # 验证源目录
+    if not source_path.exists():
+        print_error(f"源目录不存在: {source_dir}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'classify'
+    else:
+        output_path = Path(output_dir)
+    
+    print_info(f"源目录: {source_path}")
+    print_info(f"输出目录: {output_path}")
+    
+    # 获取所有类别
+    classes = [d.name for d in source_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    classes.sort()
+    
+    if not classes:
+        print_error("源目录中没有找到类别子目录")
+        raise typer.Exit(1)
+    
+    print_info(f"类别数量: {len(classes)}")
+    print_info(f"类别: {', '.join(classes)}")
+    
+    # 解析比例
+    try:
+        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
+        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
+    except ValueError as e:
+        print_error(f"比例格式错误: {e}")
+        raise typer.Exit(1)
+    
+    # 设置随机种子
+    random.seed(seed)
+    
+    # 创建输出目录结构
+    for split in ['train', 'val', 'test']:
+        for class_name in classes:
+            ensure_dir(output_path / split / class_name)
+    
+    # 统计
+    stats = defaultdict(lambda: {'train': 0, 'val': 0, 'test': 0})
+    total_stats = {'train': 0, 'val': 0, 'test': 0}
+    
+    print_info("开始划分数据...")
+    
+    # 处理每个类别
+    for class_name in classes:
+        class_dir = source_path / class_name
+        images = list(class_dir.glob('*'))
+        images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+        
+        # 打乱顺序
+        random.shuffle(images)
+        
+        # 计算划分点
+        total = len(images)
+        train_end = int(total * train_ratio)
+        val_end = train_end + int(total * val_ratio)
+        
+        # 划分数据
+        splits_data = {
+            'train': images[:train_end],
+            'val': images[train_end:val_end],
+            'test': images[val_end:]
+        }
+        
+        # 复制文件
+        for split_name, split_images in splits_data.items():
+            for img_path in split_images:
+                dst_path = output_path / split_name / class_name / img_path.name
+                shutil.copy2(img_path, dst_path)
+                stats[class_name][split_name] += 1
+                total_stats[split_name] += 1
+    
+    # 打印统计信息
+    console.print()
+    columns = ["数据集", "样本数", "比例"]
+    total_samples = sum(total_stats.values())
+    rows = [
+        ["训练集", total_stats['train'], f"{total_stats['train']/total_samples*100:.1f}%"],
+        ["验证集", total_stats['val'], f"{total_stats['val']/total_samples*100:.1f}%"],
+        ["测试集", total_stats['test'], f"{total_stats['test']/total_samples*100:.1f}%"],
+        ["总计", total_samples, "100.0%"],
+    ]
+    print_table("数据集划分结果", columns, rows, show_lines=True)
+    
+    # 显示每个类别的统计
+    console.print()
+    print_info("各类别分布:")
+    for class_name in classes:
+        total_class = sum(stats[class_name].values())
+        print_info(f"  {class_name}: train={stats[class_name]['train']}, val={stats[class_name]['val']}, test={stats[class_name]['test']} (总计{total_class})")
+    
+    # 保存类别文件
+    classes_file = output_path / 'classes.txt'
+    with open(classes_file, 'w', encoding='utf-8') as f:
+        for class_name in classes:
+            f.write(f"{class_name}\n")
+    
+    print_success(f"✓ 类别列表已保存: {classes_file}")
+    print_success(f"✓ 分类数据集划分完成！输出目录: {output_path}")
+
+
+@app.command("prepare-classify")
+def prepare_classify(
+    images_dir: str = typer.Option(..., "--images", "-i", help="图像目录"),
+    labels_dir: str = typer.Option(..., "--labels", "-l", help="标签目录"),
+    classes_file: str = typer.Option(..., "--classes", "-c", help="类别文件路径"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
+    seed: int = typer.Option(42, "--seed", "-s", help="随机种子"),
+):
+    """为分类任务准备数据集（从标签文件组织为目录结构）"""
+    
+    print_section_header("准备分类数据集")
+    
+    images_path = Path(images_dir)
+    labels_path = Path(labels_dir)
+    classes_path = Path(classes_file)
+    
+    # 验证输入
+    if not images_path.exists():
+        print_error(f"图像目录不存在: {images_dir}")
+        raise typer.Exit(1)
+    
+    if not labels_path.exists():
+        print_error(f"标签目录不存在: {labels_dir}")
+        raise typer.Exit(1)
+    
+    if not classes_path.exists():
+        print_error(f"类别文件不存在: {classes_file}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'classify'
+    else:
+        output_path = Path(output_dir)
+    
+    print_info(f"图像目录: {images_path}")
+    print_info(f"标签目录: {labels_path}")
+    print_info(f"类别文件: {classes_path}")
+    print_info(f"输出目录: {output_path}")
+    
+    # 读取类别
+    with open(classes_path, 'r', encoding='utf-8') as f:
+        classes = [line.strip() for line in f if line.strip()]
+    
+    print_info(f"类别数量: {len(classes)}")
+    print_info(f"类别: {', '.join(classes)}")
+    
+    # 解析比例
+    try:
+        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
+        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
+    except ValueError as e:
+        print_error(f"比例格式错误: {e}")
+        raise typer.Exit(1)
+    
+    # 设置随机种子
+    random.seed(seed)
+    
+    # 创建输出目录结构
+    for split in ['train', 'val', 'test']:
+        for class_name in classes:
+            ensure_dir(output_path / split / class_name)
+    
+    # 收集图像及其标签
+    print_info("扫描图像和标签文件...")
+    samples = []
+    
+    for img_file in find_files(images_path, ['.jpg', '.jpeg', '.png']):
+        label_file = labels_path / f"{img_file.stem}.txt"
+        if label_file.exists():
+            try:
+                # 读取标签文件（分类任务：每个文件只包含一个类别ID）
+                with open(label_file, 'r') as f:
+                    line = f.readline().strip()
+                    if line:
+                        class_id = int(line)
+                        if 0 <= class_id < len(classes):
+                            samples.append((img_file, class_id))
+                        else:
+                            print_warning(f"类别ID超出范围: {img_file.name} (class_id={class_id})")
+            except Exception as e:
+                print_warning(f"无法读取标签: {label_file.name} - {e}")
+        else:
+            print_warning(f"标签文件缺失: {img_file.name}")
+    
+    if not samples:
+        print_error("未找到有效的图像-标签对")
+        raise typer.Exit(1)
+    
+    print_info(f"找到 {len(samples)} 个有效样本")
+    
+    # 打乱顺序
+    random.shuffle(samples)
+    
+    # 计算划分点
+    total = len(samples)
+    train_end = int(total * train_ratio)
+    val_end = train_end + int(total * val_ratio)
+    
+    splits_data = {
+        'train': samples[:train_end],
+        'val': samples[train_end:val_end],
+        'test': samples[val_end:]
+    }
+    
+    # 复制文件到对应的类别目录
+    print_info("开始组织文件...")
+    
+    with create_progress_bar() as progress:
+        task = progress.add_task("组织文件", total=total)
+        
+        stats = {split: defaultdict(int) for split in ['train', 'val', 'test']}
+        
+        for split_name, split_samples in splits_data.items():
+            for img_file, class_id in split_samples:
+                class_name = classes[class_id]
+                
+                # 复制图像到对应类别目录
+                dst_img = output_path / split_name / class_name / img_file.name
+                shutil.copy2(img_file, dst_img)
+                
+                stats[split_name][class_name] += 1
+                progress.advance(task)
+    
+    # 打印统计信息
+    console.print()
+    for split_name in ['train', 'val', 'test']:
+        split_stats = stats[split_name]
+        total_split = sum(split_stats.values())
+        
+        if total_split > 0:
+            console.print(f"\n[bold cyan]{split_name.upper()}集统计:[/bold cyan]")
+            for class_name in classes:
+                count = split_stats.get(class_name, 0)
+                if count > 0:
+                    print_info(f"  {class_name}: {count} 张")
+            print_info(f"  总计: {total_split} 张")
+    
+    print_success(f"\n分类数据集准备完成！输出目录: {output_path}")
+    print_info(f"数据集结构：")
+    print_info(f"  {output_path}/")
+    print_info(f"    ├── train/")
+    for class_name in classes[:3]:  # 显示前3个类别
+        print_info(f"    │   ├── {class_name}/")
+    if len(classes) > 3:
+        print_info(f"    │   └── ...")
+    print_info(f"    ├── val/")
+    print_info(f"    └── test/")
 
 
 @app.command("stats")
@@ -396,6 +763,315 @@ def dataset_stats(
             print_info(f"总边界框数量: {bbox_counts}")
         else:
             print_warning("未找到标注数据")
+
+
+@app.command("convert-labelstudio")
+def convert_labelstudio(
+    input_file: str = typer.Option(..., "--input", "-i", help="Label Studio导出文件 (JSON/CSV)"),
+    url: str = typer.Option(..., "--url", "-u", help="Label Studio服务器URL"),
+    token: str = typer.Option(..., "--token", "-t", help="API访问令牌"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录 (默认: data/raw)"),
+    task: str = typer.Option("detect", "--task", help="任务类型 (detect/classify)"),
+    format_type: str = typer.Option("auto", "--format", "-f", help="输入格式 (auto/json/csv)"),
+    skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip", help="跳过已下载的图片"),
+    max_workers: int = typer.Option(4, "--max-workers", "-w", help="并发下载线程数"),
+):
+    """从Label Studio导出数据转换为YOLO格式"""
+    
+    print_section_header("Label Studio 数据转换")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    print_info(f"任务类型: {task}")
+    
+    # 验证输入文件
+    input_path = Path(input_file)
+    if not input_path.exists():
+        print_error(f"输入文件不存在: {input_file}")
+        raise typer.Exit(1)
+    
+    print_info(f"输入文件: {input_path}")
+    
+    # 确定输出目录（默认为 data/raw）
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_raw', absolute=True)
+    else:
+        output_path = Path(output_dir)
+    
+    print_info(f"输出目录: {output_path}")
+    
+    # 初始化Label Studio客户端
+    print_info(f"连接到 Label Studio: {url}")
+    client = LabelStudioClient(url, token)
+    
+    # 测试连接
+    success, message = client.test_connection()
+    if not success:
+        print_error(f"连接失败: {message}")
+        raise typer.Exit(1)
+    
+    print_success(f"✓ {message}")
+    
+    # 检测文件格式
+    if format_type == "auto":
+        format_type = LabelStudioConverter.detect_format(input_path)
+    
+    print_info(f"文件格式: {format_type.upper()}")
+    
+    # 解析数据
+    print_info("解析标注数据...")
+    try:
+        if format_type == "json":
+            parsed_data = LabelStudioConverter.parse_json(input_path)
+        else:
+            parsed_data = LabelStudioConverter.parse_csv(input_path)
+        
+        if not parsed_data:
+            print_error("未找到有效的标注数据")
+            raise typer.Exit(1)
+        
+        print_success(f"✓ 解析完成：找到 {len(parsed_data)} 个标注任务")
+    except Exception as e:
+        print_error(f"解析失败: {str(e)}")
+        raise typer.Exit(1)
+    
+    # 构建类别映射
+    print_info("构建类别映射...")
+    class_mapping = LabelStudioConverter.build_class_mapping(parsed_data, task)
+    
+    if not class_mapping:
+        print_error("未找到任何类别")
+        raise typer.Exit(1)
+    
+    print_success(f"✓ 找到 {len(class_mapping)} 个类别: {', '.join(class_mapping.keys())}")
+    
+    # 创建输出目录结构
+    if task == 'detect':
+        images_dir = output_path / 'images'
+        labels_dir = output_path / 'labels'
+        ensure_dir(images_dir)
+        ensure_dir(labels_dir)
+    else:  # classify
+        images_dir = output_path / 'classify'
+        labels_dir = None
+        # 为每个类别创建目录
+        for class_name in class_mapping.keys():
+            ensure_dir(images_dir / class_name)
+    
+    # 准备下载列表
+    print_info("准备下载图片...")
+    if task == 'detect':
+        download_list = LabelStudioConverter.prepare_download_list(parsed_data, images_dir)
+    else:  # classify - 直接下载到类别目录
+        download_list = []
+        for item in parsed_data:
+            category = item.get('category')
+            if category and category in class_mapping:
+                ls_path = item['image_path']
+                filename = item['filename']
+                local_path = images_dir / category / filename
+                download_list.append((ls_path, local_path))
+    
+    print_info(f"共需下载 {len(download_list)} 张图片")
+    if skip_existing:
+        print_info("断点续传已启用，已存在的文件将被跳过")
+    
+    # 批量下载图片
+    print_info(f"开始下载图片 (并发数: {max_workers})...")
+    
+    download_stats = {"downloaded": 0, "skipped": 0, "failed": 0}
+    
+    with create_progress_bar() as progress:
+        download_task = progress.add_task("下载图片", total=len(download_list))
+        
+        def progress_callback(current, total, status, filename):
+            progress.update(download_task, advance=1)
+        
+        download_stats = client.download_images_batch(
+            download_list,
+            skip_existing=skip_existing,
+            max_workers=max_workers,
+            progress_callback=progress_callback
+        )
+    
+    console.print()
+    
+    # 打印下载统计
+    columns = ["状态", "数量"]
+    rows = [
+        ["✓ 已下载", download_stats["downloaded"]],
+        ["⊙ 已跳过", download_stats["skipped"]],
+        ["✗ 失败", download_stats["failed"]],
+        ["总计", len(download_list)],
+    ]
+    print_table("下载统计", columns, rows, show_lines=True)
+    
+    if download_stats["failed"] > 0:
+        print_warning(f"有 {download_stats['failed']} 张图片下载失败")
+    
+    # 生成YOLO格式标签/组织文件
+    print_info("生成YOLO格式数据...")
+    
+    if task == 'detect':
+        # 检测任务：生成标签文件
+        generated_count = 0
+        empty_count = 0
+        
+        with create_progress_bar() as progress:
+            label_task = progress.add_task("生成标签", total=len(parsed_data))
+            
+            for item in parsed_data:
+                filename = item['filename']
+                image_path = images_dir / filename
+                
+                # 只为成功下载的图片生成标签
+                if not image_path.exists():
+                    progress.update(label_task, advance=1)
+                    continue
+                
+                label_path = labels_dir / f"{Path(filename).stem}.txt"
+                
+                # 写入标签
+                with open(label_path, 'w', encoding='utf-8') as f:
+                    for ann in item['annotations']:
+                        labels = ann.get('labels', [])
+                        if not labels:
+                            continue
+                        
+                        # 获取类别ID
+                        class_name = labels[0]
+                        class_id = class_mapping.get(class_name, 0)
+                        
+                        # 转换坐标
+                        x_center, y_center, w, h = LabelStudioConverter.convert_bbox_to_yolo(
+                            ann['x'], ann['y'], ann['width'], ann['height']
+                        )
+                        
+                        # 写入YOLO格式
+                        f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
+                
+                if item['annotations']:
+                    generated_count += 1
+                else:
+                    empty_count += 1
+                
+                progress.update(label_task, advance=1)
+        
+        console.print()
+        print_success(f"✓ 生成了 {generated_count} 个标签文件")
+        if empty_count > 0:
+            print_warning(f"有 {empty_count} 个图片没有标注")
+    
+    else:  # classify
+        # 分类任务：统计每个类别的图片数量
+        organized_count = 0
+        class_stats = defaultdict(int)
+        
+        for item in parsed_data:
+            category = item['category']
+            if not category:
+                continue
+            
+            filename = item['filename']
+            file_path = images_dir / category / filename
+            
+            if file_path.exists():
+                organized_count += 1
+                class_stats[category] += 1
+        
+        console.print()
+        print_success(f"✓ 分类图片已按类别组织: {organized_count} 个文件")
+        
+        # 显示每个类别的统计
+        for class_name in sorted(class_stats.keys()):
+            print_info(f"  {class_name}: {class_stats[class_name]} 张")
+    
+    # 保存classes.txt
+    classes_file = output_path / 'classes.txt'
+    with open(classes_file, 'w', encoding='utf-8') as f:
+        for class_name in sorted(class_mapping.keys()):
+            f.write(f"{class_name}\n")
+    
+    print_success(f"✓ 保存类别列表: {classes_file}")
+    
+    # 保存转换日志
+    log_file = output_path / 'convert_log.txt'
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write("Label Studio 数据转换日志\n")
+        f.write("=" * 50 + "\n")
+        f.write(f"输入文件: {input_path}\n")
+        f.write(f"Label Studio URL: {url}\n")
+        f.write(f"任务类型: {task}\n")
+        f.write(f"类别数量: {len(class_mapping)}\n")
+        f.write(f"类别列表: {', '.join(class_mapping.keys())}\n")
+        f.write(f"\n下载统计:\n")
+        f.write(f"  已下载: {download_stats['downloaded']}\n")
+        f.write(f"  已跳过: {download_stats['skipped']}\n")
+        f.write(f"  失败: {download_stats['failed']}\n")
+        f.write(f"  总计: {len(download_list)}\n")
+        if task == 'detect':
+            f.write(f"\n标签生成:\n")
+            f.write(f"  生成数量: {generated_count}\n")
+            f.write(f"  空标注: {empty_count}\n")
+        else:
+            f.write(f"\n文件组织:\n")
+            f.write(f"  组织数量: {organized_count}\n")
+    
+    # 显示最终统计
+    console.print()
+    print_section_header("转换完成")
+    
+    columns = ["项目", "值"]
+    rows = [
+        ["输出目录", str(output_path)],
+        ["任务类型", task],
+        ["类别数量", len(class_mapping)],
+        ["图片总数", len(download_list)],
+        ["成功下载", download_stats['downloaded']],
+        ["跳过下载", download_stats['skipped']],
+    ]
+    
+    if task == 'detect':
+        rows.append(["标签文件", generated_count])
+    
+    print_table("转换摘要", columns, rows, show_lines=True)
+    
+    # 显示后续步骤提示
+    console.print()
+    print_section_header("后续步骤")
+    print_info("数据已转换为YOLO格式，保存在 data/raw 目录")
+    print_info("接下来可以使用以下命令继续处理:")
+    console.print()
+    
+    if task == 'detect':
+        console.print("  [bold cyan]1. 划分数据集:[/bold cyan]")
+        console.print(f"     python yolo_cli.py data split \\")
+        console.print(f"       --images {output_path}/images \\")
+        console.print(f"       --labels {output_path}/labels \\")
+        console.print(f"       --output data/processed \\")
+        console.print(f"       --ratios 0.7:0.2:0.1 \\")
+        console.print(f"       --task detect")
+    else:
+        console.print("  [bold cyan]1. 划分分类数据集:[/bold cyan]")
+        console.print(f"     python yolo_cli.py data split-classify \\")
+        console.print(f"       --source {output_path}/classify \\")
+        console.print(f"       --output data/processed \\")
+        console.print(f"       --ratios 0.7:0.2:0.1")
+    
+    console.print()
+    console.print("  [bold cyan]2. 生成配置文件:[/bold cyan]")
+    console.print(f"     python yolo_cli.py data generate-yaml \\")
+    console.print(f"       --path data/processed \\")
+    console.print(f"       --classes {output_path}/classes.txt \\")
+    console.print(f"       --task {task}")
+    
+    console.print()
+    console.print("  [bold cyan]3. 开始训练:[/bold cyan]")
+    console.print(f"     python yolo_cli.py train --data data/dataset.yaml")
+    
+    console.print()
+    print_success("转换完成！")
 
 
 if __name__ == "__main__":

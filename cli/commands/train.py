@@ -11,7 +11,10 @@ import yaml
 
 from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
-from ..core.utils import detect_device, get_device_name, ensure_dir
+from ..core.utils import (
+    detect_device, get_device_name, ensure_dir,
+    TaskType, validate_task_type, get_model_name_with_task
+)
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_section_header, print_training_config, print_key_value,
@@ -93,6 +96,7 @@ AUGMENTATION_PRESETS = {
 def start_training(
     model: str = typer.Option("yolo11s.pt", "--model", "-m", help="模型名称或路径"),
     data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     epochs: int = typer.Option(200, "--epochs", "-e", help="训练轮数"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
     imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),
@@ -104,10 +108,20 @@ def start_training(
     save_period: int = typer.Option(10, "--save-period", help="保存周期"),
     resume: bool = typer.Option(False, "--resume", "-r", help="从last.pt恢复训练"),
     pretrained: bool = typer.Option(True, "--pretrained/--from-scratch", help="使用预训练权重"),
+    # 分割任务特定参数
+    overlap_mask: Optional[bool] = typer.Option(None, "--overlap-mask", help="[分割] 是否允许掩码重叠"),
+    mask_ratio: Optional[int] = typer.Option(None, "--mask-ratio", help="[分割] 掩码下采样比例"),
+    # 分类任务特定参数
+    dropout: Optional[float] = typer.Option(None, "--dropout", help="[分类] Dropout比例"),
 ):
     """开始训练YOLO模型"""
     
     print_section_header("开始训练")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    task_type = TaskType.from_string(task)
+    print_info(f"任务类型: {task}")
     
     # 验证数据集配置文件
     data_path = Path(data)
@@ -132,6 +146,13 @@ def start_training(
         model_name = Path(model).stem
         name = f"{model_name}_{timestamp}"
     
+    # 确保模型名称包含正确的任务后缀
+    model_path = Path(model)
+    if not model_path.exists():
+        # 如果是模型名称而非路径，添加任务后缀
+        model = get_model_name_with_task(model, task)
+        print_info(f"使用模型: {model}")
+    
     # 获取数据增强配置
     if augmentation not in AUGMENTATION_PRESETS:
         print_warning(f"未知的增强预设: {augmentation}，使用 'balanced'")
@@ -139,8 +160,33 @@ def start_training(
     
     aug_config = AUGMENTATION_PRESETS[augmentation].copy()
     
+    # 添加任务特定配置
+    task_specific_config = {}
+    if task_type == TaskType.SEGMENT:
+        # 分割任务特定参数
+        if overlap_mask is not None:
+            task_specific_config['overlap_mask'] = overlap_mask
+        else:
+            task_specific_config['overlap_mask'] = True
+        
+        if mask_ratio is not None:
+            task_specific_config['mask_ratio'] = mask_ratio
+        else:
+            task_specific_config['mask_ratio'] = 4
+    
+    elif task_type == TaskType.CLASSIFY:
+        # 分类任务特定参数
+        if dropout is not None:
+            task_specific_config['dropout'] = dropout
+        
+        # 分类任务通常使用较小的图像尺寸
+        if imgsz == 640:
+            imgsz = 224
+            print_info(f"分类任务使用默认图像尺寸: {imgsz}")
+    
     # 显示训练配置
     train_config = {
+        '任务类型': task.upper(),
         '模型': model,
         '数据集': data,
         '训练轮数': epochs,
@@ -154,6 +200,11 @@ def start_training(
         '保存周期': save_period,
         '预训练权重': '是' if pretrained else '否',
     }
+    
+    # 添加任务特定配置到显示
+    if task_specific_config:
+        for key, value in task_specific_config.items():
+            train_config[f'[{task}] {key}'] = value
     
     print_training_config(train_config)
     
@@ -177,25 +228,29 @@ def start_training(
         print_info("开始训练...")
         console.print()
         
-        results = yolo_model.train(
-            data=str(data_path),
-            epochs=epochs,
-            imgsz=imgsz,
-            batch=batch,
-            device=device,
-            project=project,
-            name=name,
-            pretrained=pretrained,
-            save=True,
-            save_period=save_period,
-            val=True,
-            plots=True,
-            patience=patience,
-            verbose=True,
-            exist_ok=True,
-            resume=resume,
+        # 合并所有配置
+        training_kwargs = {
+            'data': str(data_path),
+            'epochs': epochs,
+            'imgsz': imgsz,
+            'batch': batch,
+            'device': device,
+            'project': project,
+            'name': name,
+            'pretrained': pretrained,
+            'save': True,
+            'save_period': save_period,
+            'val': True,
+            'plots': True,
+            'patience': patience,
+            'verbose': True,
+            'exist_ok': True,
+            'resume': resume,
             **aug_config,
-        )
+            **task_specific_config,
+        }
+        
+        results = yolo_model.train(**training_kwargs)
         
         # 训练完成
         console.print()
@@ -320,6 +375,7 @@ def generate_config(
 def validate_model(
     model: str = typer.Argument(..., help="模型路径"),
     data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型（自动从模型推断）"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
     imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),
     device: str = typer.Option("auto", "--device", help="设备"),
@@ -332,6 +388,15 @@ def validate_model(
     if not model_path.exists():
         print_error(f"模型不存在: {model}")
         raise typer.Exit(1)
+    
+    # 如果未指定任务类型，从模型名称推断
+    if task is None:
+        from ..core.utils import parse_model_name
+        _, task = parse_model_name(model_path.name)
+    else:
+        task = validate_task_type(task)
+    
+    print_info(f"任务类型: {task}")
     
     data_path = Path(data)
     if not data_path.exists():

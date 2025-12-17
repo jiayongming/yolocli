@@ -3,6 +3,7 @@
 # 模型配置
 model:
   default_version: yolo11  # yolo11 或 yolov8
+  default_task: detect  # detect, segment, classify
   weights_dir: models/weights
   pretrained:
     - yolo11n.pt
@@ -44,3 +45,21 @@ dataset:
   val_ratio: 0.2
   test_ratio: 0.1
   random_seed: 42
+
+# 任务类型配置
+tasks:
+  detect:
+    default_model_size: s
+    default_conf: 0.25
+    default_iou: 0.45
+  segment:
+    default_model_size: s
+    default_conf: 0.25
+    default_iou: 0.45
+    overlap_mask: true
+    mask_ratio: 4
+    retina_masks: false
+  classify:
+    default_model_size: s
+    dropout: 0.0
+    top_k: 5
