@@ -315,16 +315,23 @@ def start_training(
         console.print()
         print_success("训练完成！")
         
-        weights_dir = Path(project) / name / 'weights'
+        # 从YOLO结果对象获取实际保存目录
+        if hasattr(results, 'save_dir'):
+            save_dir = Path(results.save_dir)
+        else:
+            # 回退到手动构建路径
+            save_dir = Path(project) / name
+        
+        weights_dir = save_dir / 'weights'
         best_pt = weights_dir / 'best.pt'
         last_pt = weights_dir / 'last.pt'
         
         if best_pt.exists():
-            print_success(f"最佳模型: {best_pt}")
+            print_success(f"最佳模型: {best_pt.absolute()}")
         if last_pt.exists():
-            print_info(f"最后模型: {last_pt}")
+            print_info(f"最后模型: {last_pt.absolute()}")
         
-        print_info(f"结果目录: {Path(project) / name}")
+        print_info(f"结果目录: {save_dir.absolute()}")
         
     except KeyboardInterrupt:
         print_warning("\n训练被用户中断")

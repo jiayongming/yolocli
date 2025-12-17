@@ -5,6 +5,7 @@
 import typer
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
@@ -347,6 +348,17 @@ def quick_train(
         # 使用完整模型路径避免重复下载
         full_model_path = str(model_path) if model_path.exists() else model_name
         
+        # 保存 project 和 name 的值用于后续显示
+        actual_project = project if project else str(config.get_path('results', absolute=True) / 'training')
+        
+        # 生成默认名称（如果未指定）
+        if not name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_stem = Path(full_model_path).stem if Path(full_model_path).exists() else model_name
+            actual_name = f"{model_stem}_{timestamp}"
+        else:
+            actual_name = name
+        
         start_training(
             model=full_model_path,
             data=dataset_yaml,
@@ -375,16 +387,17 @@ def quick_train(
         print_success("所有步骤已完成！")
         console.print()
         
-        # 显示训练结果位置
-        if project:
-            results_path = Path(project)
-        else:
-            results_path = config.get_path('results', absolute=True) / 'training'
+        # 显示训练结果位置（使用实际的保存路径）
+        results_path = Path(actual_project) / actual_name
+        best_model_path = results_path / 'weights' / 'best.pt'
         
         print_info("训练结果位置:")
-        print_info(f"  项目目录: {results_path}")
-        print_info(f"  最佳模型: {results_path / (name or 'train') / 'weights' / 'best.pt'}")
-        print_info(f"  数据集配置: {dataset_yaml}")
+        print_info(f"  项目目录: {results_path.absolute()}")
+        if best_model_path.exists():
+            print_info(f"  最佳模型: {best_model_path.absolute()}")
+        else:
+            print_info(f"  最佳模型: {best_model_path}")
+        print_info(f"  数据集配置: {Path(dataset_yaml).absolute()}")
         
         console.print()
         print_info("下一步操作:")
