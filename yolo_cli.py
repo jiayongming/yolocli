@@ -9,6 +9,14 @@ YOLO CLI - YOLO推理快捷操作框架
 版本: 1.0.0
 """
 
+import os
+import warnings
+
+# 禁用终端 CPR (Cursor Position Request) 警告
+# 这解决了在某些终端环境（如 Docker、CI/CD、SSH）下的兼容性问题
+os.environ.setdefault('PROMPT_TOOLKIT_NO_CPR', '1')
+warnings.filterwarnings('ignore', message='.*cursor position requests.*')
+
 import typer
 from typing import Optional
 from rich.console import Console
