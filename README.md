@@ -111,7 +111,30 @@ python yolo_cli.py quick train \
 
 ### 图像分类快速开始
 
-分类任务将自动组织数据为目录结构：
+分类任务支持两种数据组织方式：
+
+**方式1：按类别目录组织（推荐）**
+
+图像已按类别组织在子目录中：
+```
+data/raw/images/
+  ├── class1/
+  │   ├── img1.jpg
+  │   └── img2.jpg
+  └── class2/
+      ├── img3.jpg
+      └── img4.jpg
+```
+
+```bash
+python yolo_cli.py quick train \
+  --task classify \
+  --images data/raw/images
+```
+
+**方式2：从标签文件转换**
+
+如果你的数据是 images + labels 分开的格式，可以指定 labels 参数：
 
 ```bash
 python yolo_cli.py quick train \
@@ -130,13 +153,25 @@ python yolo_cli.py quick train \
 
 **自定义参数：**
 ```bash
+# 检测/分割任务
 python yolo_cli.py quick train \
+  --task detect \
   --images data/raw/images \
   --labels data/raw/labels \
   --version yolo11 \
   --size s \
   --epochs 200 \
   --batch 16 \
+  --device 0
+
+# 分类任务
+python yolo_cli.py quick train \
+  --task classify \
+  --images data/raw/images \
+  --version yolo11 \
+  --size s \
+  --epochs 100 \
+  --batch 32 \
   --device 0
 ```
 
@@ -162,6 +197,7 @@ python yolo_cli.py model download --version yolo11 --all
 
 #### 2. 准备数据集
 
+**检测/分割任务：**
 ```bash
 # 划分数据集
 python yolo_cli.py data split \
@@ -176,6 +212,21 @@ python yolo_cli.py data generate-yaml \
 
 # 验证数据集
 python yolo_cli.py data verify --path data/processed
+```
+
+**分类任务：**
+```bash
+# 划分按类别组织的数据集
+python yolo_cli.py data split \
+  --source-dir data/raw/images \
+  --task classify \
+  --ratios 0.7:0.2:0.1
+
+# 生成dataset.yaml
+python yolo_cli.py data generate-yaml \
+  --path data/processed \
+  --task classify \
+  --output data/dataset.yaml
 ```
 
 #### 3. 训练模型

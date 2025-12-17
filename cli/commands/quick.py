@@ -29,7 +29,7 @@ app = typer.Typer(help="一键训练命令")
 @app.command("train")
 def quick_train(
     images_dir: str = typer.Option(..., "--images", "-i", help="原始图像目录"),
-    labels_dir: str = typer.Option(..., "--labels", "-l", help="原始标签目录"),
+    labels_dir: Optional[str] = typer.Option(None, "--labels", "-l", help="原始标签目录（检测/分割必需，分类可选）"),
     classes_file: Optional[str] = typer.Option(None, "--classes", "-c", help="类别文件路径 (默认: data/raw/classes.txt)"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     model_version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
@@ -58,7 +58,10 @@ def quick_train(
         # 分割任务
         python yolo_cli.py quick train --task segment --images data/raw/images --labels data/raw/labels
         
-        # 分类任务
+        # 分类任务（图像按类别目录组织）
+        python yolo_cli.py quick train --task classify --images data/raw/images
+        
+        # 分类任务（从 images + labels 转换）
         python yolo_cli.py quick train --task classify --images data/raw/images --labels data/raw/labels
     """
     
@@ -88,13 +91,20 @@ def quick_train(
     try:
         # 验证输入目录
         images_path = Path(images_dir)
-        labels_path = Path(labels_dir)
         
         if not images_path.exists():
             print_error(f"图像目录不存在: {images_dir}")
             raise typer.Exit(1)
         
-        if not labels_path.exists():
+        # 对于检测/分割任务，labels_dir 是必需的
+        if task_type != TaskType.CLASSIFY and labels_dir is None:
+            print_error(f"{task} 任务需要指定 --labels 参数")
+            print_info("示例: python yolo_cli.py quick train --task detect --images data/raw/images --labels data/raw/labels")
+            raise typer.Exit(1)
+        
+        labels_path = Path(labels_dir) if labels_dir else None
+        
+        if labels_path and not labels_path.exists():
             print_error(f"标签目录不存在: {labels_dir}")
             raise typer.Exit(1)
         
@@ -104,8 +114,9 @@ def quick_train(
             possible_classes = [
                 Path("data/raw/classes.txt"),
                 images_path.parent / "classes.txt",
-                labels_path.parent / "classes.txt",
             ]
+            if labels_path:
+                possible_classes.append(labels_path.parent / "classes.txt")
             
             for cls_file in possible_classes:
                 if cls_file.exists():
@@ -199,17 +210,25 @@ def quick_train(
                     )
                 else:
                     # 需要从 images + labels 组织为分类结构
-                    print_info("检测到 images + labels 结构，转换为分类数据集...")
-                    prepare_classify(
-                        images_dir=images_dir,
-                        labels_dir=labels_dir,
-                        classes_file=classes_file,
-                        output_dir=str(output_dir),
-                        ratios=ratios,
-                        seed=42
-                    )
+                    if labels_dir:
+                        print_info("检测到 images + labels 结构，转换为分类数据集...")
+                        prepare_classify(
+                            images_dir=images_dir,
+                            labels_dir=labels_dir,
+                            classes_file=classes_file,
+                            output_dir=str(output_dir),
+                            ratios=ratios,
+                            seed=42
+                        )
+                    else:
+                        print_error("分类任务的图像目录应按类别组织（每个类别一个子目录）")
+                        print_info("或者使用 --labels 参数提供标签文件来转换数据")
+                        raise typer.Exit(1)
             else:
                 # 检测/分割任务：划分数据集
+                if not labels_dir:
+                    print_error(f"{task} 任务需要指定 --labels 参数")
+                    raise typer.Exit(1)
                 split_dataset(
                     images_dir=images_dir,
                     labels_dir=labels_dir,
