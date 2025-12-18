@@ -10,8 +10,9 @@
 ## ✨ 特性
 
 - ⚡ **一键训练**: 自动完成数据处理、模型下载和训练的完整流程
-- 🎯 **完整工作流**: 涵盖模型下载、数据处理、训练、推理、导出全流程
-- 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传 🆕
+- 🎯 **完整工作流**: 涵盖模型下载、数据处理、训练、验证、推理、导出全流程
+- 📊 **模型验证**: 全面的性能评估工具，支持模型对比和详细指标分析 🆕
+- 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传
 - 🎮 **交互式模式**: 友好的交互式界面，引导式操作，适合新手
 - 🔄 **多版本支持**: 同时支持YOLOv8和YOLO11，自动版本管理
 - 🎯 **多任务支持**: 支持检测、分割、分类三种任务类型
@@ -30,9 +31,10 @@
   - [目标检测快速开始](#目标检测快速开始)
   - [实例分割快速开始](#实例分割快速开始)
   - [图像分类快速开始](#图像分类快速开始)
-- [Label Studio 数据转换](#-label-studio-数据转换) 🆕
+- [Label Studio 数据转换](#-label-studio-数据转换)
 - [数据准备](#-数据准备)
 - [完整工作流程](#-完整工作流程)
+- [模型验证](#-模型验证) 🆕
 - [GPU配置指南](#-gpu配置指南)
 - [命令参考](#-命令参考)
 - [使用示例](#-使用示例)
@@ -862,21 +864,80 @@ python yolo_cli.py train resume \
   --checkpoint results/my_project/exp_001/weights/last.pt
 ```
 
-### 步骤5：评估模型
+### 步骤5：验证模型性能
 
-训练完成后，评估模型性能：
+训练完成后，使用验证命令全面评估模型性能：
+
+#### 5.1 基本验证
 
 ```bash
-python yolo_cli.py train validate \
+python yolo_cli.py validate run \
   results/training/best.pt \
   --data data/dataset.yaml
 ```
 
-输出指标包括：
-- mAP50：IoU阈值为0.5时的平均精度
-- mAP50-95：IoU阈值从0.5到0.95的平均精度
-- Precision：精确率
-- Recall：召回率
+#### 5.2 自定义验证参数
+
+```bash
+python yolo_cli.py validate run \
+  results/training/best.pt \
+  --data data/dataset.yaml \
+  --split test \
+  --conf 0.25 \
+  --iou 0.6 \
+  --save-json \
+  --plots
+```
+
+**参数说明：**
+- `--split`: 验证数据集 (val/test/train)
+- `--conf`: 置信度阈值（默认：0.001）
+- `--iou`: IoU阈值（默认：0.6）
+- `--save-json`: 保存JSON格式结果
+- `--plots`: 生成可视化图表
+
+#### 5.3 验证指标说明
+
+对于**检测任务**，输出指标包括：
+- **mAP@0.5**: IoU阈值为0.5时的平均精度
+- **mAP@0.5:0.95**: IoU阈值从0.5到0.95的平均精度（主要指标）
+- **Precision（精确率）**: 预测为正样本中实际为正样本的比例
+- **Recall（召回率）**: 实际正样本中被正确预测的比例
+- **每类别AP**: 各个类别的单独性能指标
+
+对于**分割任务**，额外输出：
+- **边界框指标**: 与检测任务相同
+- **掩码指标**: 针对分割掩码的mAP、Precision、Recall
+
+对于**分类任务**，输出：
+- **Top-1准确率**: 最高概率类别正确的比例
+- **Top-5准确率**: 前5个最高概率中包含正确类别的比例
+
+#### 5.4 比较多个模型
+
+比较不同模型的性能，找出最佳模型：
+
+```bash
+python yolo_cli.py validate compare \
+  model1.pt,model2.pt,model3.pt \
+  --data data/dataset.yaml \
+  --conf 0.25
+```
+
+会生成性能对比表格，自动标识最佳模型。
+
+#### 5.5 结果文件
+
+验证完成后，结果保存在 `results/validation/` 目录：
+```
+results/validation/
+├── model_name_timestamp/
+│   ├── validation_summary.json    # 验证结果摘要
+│   ├── confusion_matrix.png       # 混淆矩阵
+│   ├── F1_curve.png              # F1曲线
+│   ├── PR_curve.png              # Precision-Recall曲线
+│   └── results.json              # 详细结果
+```
 
 ### 步骤6：使用模型进行推理
 
@@ -1011,12 +1072,18 @@ python yolo_cli.py quick train \
   --batch 16 \
   --device auto
 
-# 3. 测试推理
+# 3. 验证模型
+python yolo_cli.py validate run \
+  results/training/best.pt \
+  --data data/dataset.yaml \
+  --plots
+
+# 4. 测试推理
 python yolo_cli.py detect image \
   results/training/best.pt \
   test_image.jpg
 
-# 4. 导出模型
+# 5. 导出模型
 python yolo_cli.py model export \
   results/training/best.pt \
   --format onnx
@@ -1066,10 +1133,13 @@ python yolo_cli.py train start \
   --augmentation balanced \
   --device auto
 
-# 8. 评估模型
-python yolo_cli.py train validate \
+# 8. 验证模型
+python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml
+  --data data/dataset.yaml \
+  --conf 0.25 \
+  --save-json \
+  --plots
 
 # 9. 测试推理
 python yolo_cli.py detect image \
@@ -1097,6 +1167,212 @@ python yolo_cli.py interactive
 - 🔍 参数提示：智能推荐和验证输入
 - ✅ 确认步骤：每步操作前确认
 - 📊 实时反馈：显示操作结果和进度
+
+## 📊 模型验证
+
+模型验证功能提供全面的性能评估工具，帮助你深入了解模型表现。
+
+### 核心功能
+
+#### ✨ 单模型验证
+
+验证单个模型的性能，获取详细指标和可视化报告：
+
+```bash
+# 基本验证
+python yolo_cli.py validate run results/training/best.pt
+
+# 在测试集上验证（使用实际部署阈值）
+python yolo_cli.py validate run best.pt --split test --conf 0.25
+
+# 完整配置验证（保存所有结果）
+python yolo_cli.py validate run best.pt \
+  --split test \
+  --conf 0.25 \
+  --iou 0.6 \
+  --save-json \
+  --plots \
+  --project results/final_validation
+```
+
+#### 🆚 模型对比
+
+同时验证多个模型，快速找出最佳模型：
+
+```bash
+# 比较不同大小的模型
+python yolo_cli.py validate compare \
+  yolo11n.pt,yolo11s.pt,yolo11m.pt \
+  --data data/dataset.yaml
+
+# 比较不同训练配置的checkpoint
+python yolo_cli.py validate compare \
+  exp1/best.pt,exp2/best.pt,exp3/best.pt \
+  --conf 0.25
+```
+
+### 性能指标说明
+
+#### 检测任务（Detection）
+
+```
+🎯 检测指标
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ 指标               ┃ 值            ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ mAP@0.5            │ 0.8542        │  ← IoU=0.5时的平均精度
+│ mAP@0.5:0.95       │ 0.6234        │  ← COCO标准指标（更严格）
+│ 精确率 (Precision) │ 0.8123        │  ← 预测正确率
+│ 召回率 (Recall)    │ 0.7856        │  ← 目标检出率
+└────────────────────┴───────────────┘
+
+📋 各类别指标 (AP@0.5)
+┏━━━━━━━━━━┳━━━━━━━━━┓
+┃ 类别     ┃ AP@0.5  ┃
+┡━━━━━━━━━━╇━━━━━━━━━┩
+│ person   │ 0.9123  │
+│ car      │ 0.8456  │
+└──────────┴─────────┘
+```
+
+**指标解释：**
+- **mAP@0.5**: 检测框与真实框IoU≥0.5时的平均精度，常用基准
+- **mAP@0.5:0.95**: IoU从0.5到0.95的平均精度，更全面的评估指标
+- **Precision（精确率）**: 预测为正样本中实际为正的比例，高精确率=低误报
+- **Recall（召回率）**: 实际正样本中被检测到的比例，高召回率=低漏报
+
+#### 分割任务（Segmentation）
+
+分割任务会显示边界框和掩码两套指标：
+
+```
+🎯 分割指标
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ 指标类型  ┃ 指标               ┃ 值            ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ 边界框    │ mAP@0.5            │ 0.8542        │
+│           │ mAP@0.5:0.95       │ 0.6234        │
+│           │                    │               │
+│ 掩码      │ mAP@0.5            │ 0.8321        │
+│           │ mAP@0.5:0.95       │ 0.6012        │
+└───────────┴────────────────────┴───────────────┘
+```
+
+#### 分类任务（Classification）
+
+```
+🎯 分类指标
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ 指标          ┃ 值            ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Top-1 准确率  │ 0.9234        │  ← 最高概率类别正确的比例
+│ Top-5 准确率  │ 0.9876        │  ← 前5个概率中包含正确答案
+└───────────────┴───────────────┘
+```
+
+### 主要参数
+
+| 参数 | 说明 | 默认值 | 推荐值 |
+|------|------|--------|--------|
+| `--split` | 验证数据集 | val | val（模型选择）<br>test（最终评估） |
+| `--conf` | 置信度阈值 | 0.001 | 训练验证：0.001<br>部署验证：0.25-0.5 |
+| `--iou` | IoU阈值 | 0.6 | 0.5-0.7 |
+| `--batch` | 批次大小 | 16 | 根据GPU内存调整 |
+| `--plots` | 生成图表 | True | 重要验证时启用 |
+| `--save-json` | 保存结果 | True | 建议启用 |
+
+### 验证结果文件
+
+验证完成后，结果保存在 `results/validation/` 目录：
+
+```
+results/validation/
+└── model_name_20251218_143022/
+    ├── validation_summary.json    # 验证结果摘要
+    ├── confusion_matrix.png       # 混淆矩阵
+    ├── F1_curve.png              # F1分数曲线
+    ├── PR_curve.png              # Precision-Recall曲线
+    ├── P_curve.png               # Precision曲线
+    ├── R_curve.png               # Recall曲线
+    └── results.json              # 详细结果数据
+```
+
+### 典型使用场景
+
+#### 1. 训练后选择最佳模型
+
+```bash
+# 训练完成后立即验证
+python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py validate run results/training/best.pt --plots
+```
+
+#### 2. 对比不同模型选择最优
+
+```bash
+# 比较不同大小的模型
+python yolo_cli.py validate compare \
+  yolo11n.pt,yolo11s.pt,yolo11m.pt \
+  --data data/dataset.yaml
+```
+
+#### 3. 部署前最终验证
+
+```bash
+# 在测试集上使用实际部署阈值验证
+python yolo_cli.py validate run best.pt \
+  --split test \
+  --conf 0.25 \
+  --save-json \
+  --plots \
+  --project results/final_validation \
+  --name production_model_v1
+```
+
+#### 4. 性能监控
+
+```bash
+# 定期验证模型性能
+python yolo_cli.py validate run production_model.pt \
+  --data latest_dataset.yaml \
+  --save-json
+```
+
+### 最佳实践
+
+1. **多阶段验证**
+   - 训练中：使用默认阈值（0.001）快速评估
+   - 模型选择：在验证集上比较多个模型
+   - 最终确认：在测试集上用实际部署阈值验证
+
+2. **保存重要结果**
+   - 使用 `--project` 和 `--name` 组织验证结果
+   - 启用 `--save-json` 保存详细数据
+   - 启用 `--plots` 生成可视化报告
+
+3. **合理设置阈值**
+   - 训练验证：使用低阈值（0.001）评估模型潜力
+   - 部署验证：使用实际阈值（0.25-0.5）评估实际效果
+
+### 查看帮助
+
+```bash
+# 主命令帮助
+python yolo_cli.py validate --help
+
+# 子命令帮助
+python yolo_cli.py validate run --help
+python yolo_cli.py validate compare --help
+```
+
+### 示例脚本
+
+项目提供了完整的示例脚本，包含9个典型使用场景：
+
+```bash
+# 运行交互式示例教程
+./examples/validate_examples.sh
+```
 
 ## 🎮 GPU配置指南
 
@@ -1200,7 +1476,18 @@ watch -n 1 nvidia-smi
 python yolo_cli.py [COMMAND] [OPTIONS]
 ```
 
-### 可用命令
+### 可用命令列表
+
+- **quick** - 一键训练（自动化完整流程）⚡
+- **model** - 模型管理（下载、导出、列表）
+- **data** - 数据处理（划分、验证、统计）
+- **train** - 模型训练（启动、恢复、配置）
+- **validate** - 模型验证（性能评估、模型比较）✨
+- **predict** - 模型预测（检测、分割、分类）
+- **detect** - 目标检测（图片、视频、批量）[别名]
+- **interactive-mode** - 交互式模式 🎮
+
+### 命令详细说明
 
 #### `quick` - 一键训练 ⚡
 
@@ -1315,12 +1602,51 @@ python yolo_cli.py train config [OPTIONS]
   --output TEXT          输出文件
   --profile TEXT         配置预设 (small/medium/large)
 
-# 验证模型
+# 验证模型（已移至 validate 命令）
 python yolo_cli.py train validate MODEL [OPTIONS]
   --data TEXT            数据集配置文件
   --batch INTEGER        批次大小
   --imgsz INTEGER        图像尺寸
   --device TEXT          设备
+```
+
+#### `validate` - 模型验证
+
+```bash
+# 运行验证
+python yolo_cli.py validate run MODEL [OPTIONS]
+  --data TEXT            数据集配置文件 (默认: data/dataset.yaml)
+  --split TEXT           验证数据集 (val/test/train, 默认: val)
+  --task TEXT            任务类型 (detect/segment/classify, 自动推断)
+  --batch INTEGER        批次大小 (默认: 16)
+  --imgsz INTEGER        图像尺寸 (默认: 640)
+  --conf FLOAT           置信度阈值 (默认: 0.001)
+  --iou FLOAT            IoU阈值 (默认: 0.6)
+  --device TEXT          设备 (默认: auto)
+  --save-json            保存JSON格式结果
+  --save-hybrid          保存混合标签
+  --plots                生成可视化图表
+  --verbose              详细输出
+  --project TEXT         结果保存目录
+  --name TEXT            验证实验名称
+
+# 比较多个模型
+python yolo_cli.py validate compare MODELS [OPTIONS]
+  --data TEXT            数据集配置文件
+  --split TEXT           验证数据集
+  --conf FLOAT           置信度阈值
+  --iou FLOAT            IoU阈值
+  --device TEXT          设备
+
+示例:
+  # 基本验证
+  python yolo_cli.py validate run best.pt
+  
+  # 在测试集上验证并保存详细结果
+  python yolo_cli.py validate run best.pt --split test --conf 0.25 --save-json --plots
+  
+  # 比较多个模型
+  python yolo_cli.py validate compare model1.pt,model2.pt,model3.pt --data data/dataset.yaml
 ```
 
 #### `detect` - 目标检测
@@ -1385,6 +1711,9 @@ python yolo_cli.py quick train \
   --images data/raw/images \
   --labels data/raw/labels
 
+# 3. 验证模型（可选但推荐）
+python yolo_cli.py validate run results/training/best.pt
+
 # 完成！模型保存在 results/training/*/weights/best.pt
 ```
 
@@ -1414,7 +1743,14 @@ python yolo_cli.py train start \
   --batch 16 \
   --augmentation balanced
 
-# 6. 测试模型
+# 6. 验证模型
+python yolo_cli.py validate run \
+  results/training/best.pt \
+  --data data/dataset.yaml \
+  --conf 0.25 \
+  --plots
+
+# 7. 测试模型
 python yolo_cli.py detect image \
   results/training/best.pt \
   test.jpg

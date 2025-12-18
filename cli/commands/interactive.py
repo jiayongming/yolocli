@@ -7,7 +7,8 @@ from pathlib import Path
 
 from ..ui.prompts import (
     select_main_menu, select_model_operation, select_data_operation,
-    select_train_operation, select_detect_operation,
+    select_train_operation, select_detect_operation, select_validate_operation,
+    select_validation_split,
     select_yolo_version, select_task_type, select_model_size, select_device,
     select_augmentation_preset, select_export_formats,
     build_training_config, input_text, input_path, input_number,
@@ -22,7 +23,7 @@ from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
 
 # 导入命令函数
-from . import model, data, train, detect
+from . import model, data, train, detect, validate
 
 app = typer.Typer(help="交互式模式")
 
@@ -410,6 +411,102 @@ def run_detect_operations():
                 break
 
 
+def run_validate_operations():
+    """验证操作"""
+    while True:
+        operation = select_validate_operation()
+        
+        if operation == 'back':
+            break
+        
+        try:
+            if operation == 'run':
+                # 验证单个模型
+                print_section_header("验证模型性能")
+                
+                model_path = input_path("模型路径:", default="results/training/best.pt", must_exist=False)
+                data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
+                split = select_validation_split()
+                
+                # 验证参数
+                conf = input_number("置信度阈值 (训练验证用0.001，部署验证用0.25):", default=0.001, min_value=0.0, max_value=1.0)
+                iou = input_number("IoU阈值:", default=0.6, min_value=0.0, max_value=1.0)
+                batch = int(input_number("批次大小:", default=16, min_value=1))
+                
+                # 可选项
+                save_json = confirm_action("保存JSON格式结果?", default=True)
+                plots = confirm_action("生成可视化图表?", default=True)
+                
+                console.print()
+                print_info("验证配置:")
+                print_info(f"  模型: {model_path}")
+                print_info(f"  数据集: {data_path}")
+                print_info(f"  验证集: {split}")
+                print_info(f"  置信度阈值: {conf}")
+                print_info(f"  IoU阈值: {iou}")
+                print_info(f"  批次大小: {batch}")
+                
+                if confirm_action("确认开始验证?"):
+                    from ..commands.validate import validate_model
+                    validate_model(
+                        model=model_path,
+                        data=data_path,
+                        split=split,
+                        task=None,  # 自动推断
+                        batch=batch,
+                        imgsz=640,
+                        conf=conf,
+                        iou=iou,
+                        device='auto',
+                        save_json=save_json,
+                        save_hybrid=False,
+                        plots=plots,
+                        verbose=True,
+                        project=None,
+                        name=None,
+                    )
+            
+            elif operation == 'compare':
+                # 比较多个模型
+                print_section_header("比较多个模型")
+                
+                print_info("请输入要比较的模型路径，用逗号分隔")
+                print_info("示例: model1.pt,model2.pt,model3.pt")
+                models_str = input_text("模型路径 (逗号分隔):", default="")
+                
+                if not models_str:
+                    print_warning("未输入模型路径")
+                    continue
+                
+                data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
+                conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
+                
+                console.print()
+                print_info(f"将比较以下模型:")
+                for i, model in enumerate(models_str.split(','), 1):
+                    print_info(f"  {i}. {model.strip()}")
+                
+                if confirm_action("确认开始对比?"):
+                    from ..commands.validate import compare_models
+                    compare_models(
+                        models=models_str,
+                        data=data_path,
+                        split='val',
+                        conf=conf,
+                        iou=0.6,
+                        device='auto',
+                    )
+            
+            console.print()
+            if not confirm_action("继续验证操作?", default=False):
+                break
+                
+        except Exception as e:
+            print_error(f"操作失败: {e}")
+            if not confirm_action("继续?", default=True):
+                break
+
+
 @app.command()
 def start():
     """启动交互式模式"""
@@ -442,6 +539,9 @@ def start():
                 elif choice == 'quick':
                     # 一键训练
                     run_quick_train()
+                
+                elif choice == 'validate':
+                    run_validate_operations()
                 
                 elif choice == 'detect':
                     run_detect_operations()

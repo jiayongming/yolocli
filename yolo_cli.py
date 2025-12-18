@@ -21,7 +21,7 @@ import typer
 from typing import Optional
 from rich.console import Console
 
-from cli.commands import model, data, train, detect, interactive, quick, predict
+from cli.commands import model, data, train, detect, interactive, quick, predict, validate
 from cli.ui.display import print_logo, print_info
 from cli import __version__
 
@@ -38,6 +38,7 @@ app.add_typer(quick.app, name="quick", help="一键训练 (自动化完整流程
 app.add_typer(model.app, name="model", help="模型管理 (下载、导出、列表)")
 app.add_typer(data.app, name="data", help="数据处理 (划分、验证、统计)")
 app.add_typer(train.app, name="train", help="模型训练 (启动、恢复、配置)")
+app.add_typer(validate.app, name="validate", help="模型验证 (性能评估、模型比较)")
 app.add_typer(predict.app, name="predict", help="模型预测 (检测、分割、分类)")
 # 向后兼容：保留detect作为predict的别名
 app.add_typer(detect.app, name="detect", help="目标检测 (图片、视频、批量) [别名]")
@@ -99,6 +100,7 @@ def main(
         console.print("  [cyan]model[/cyan]              模型管理 (下载、导出、列表)")
         console.print("  [cyan]data[/cyan]               数据处理 (划分、验证、统计)")
         console.print("  [cyan]train[/cyan]              模型训练 (启动、恢复、配置)")
+        console.print("  [cyan]validate[/cyan]           模型验证 (性能评估、模型比较)")
         console.print("  [cyan]predict[/cyan]            模型预测 (检测、分割、分类)")
         console.print("  [cyan]detect[/cyan]             目标检测 (图片、视频、批量) [别名]")
         console.print("  [cyan]interactive-mode[/cyan]   交互式模式 🎮")
@@ -112,6 +114,9 @@ def main(
         console.print()
         console.print("  [dim]# 训练模型[/dim]")
         console.print("  python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml")
+        console.print()
+        console.print("  [dim]# 验证模型[/dim]")
+        console.print("  python yolo_cli.py validate run results/training/best.pt --data data/dataset.yaml")
         console.print()
         console.print("  [dim]# 检测图片[/dim]")
         console.print("  python yolo_cli.py detect image results/training/best.pt test.jpg")

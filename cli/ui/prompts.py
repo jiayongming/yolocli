@@ -338,6 +338,7 @@ def select_main_menu() -> str:
         "model - 模型管理 (下载、导出、列表)",
         "data - 数据处理 (划分、验证、统计)",
         "train - 模型训练 (训练、恢复)",
+        "validate - 模型验证 (性能评估、模型对比) 🆕",
         "detect - 图像检测 (单图、批量)",
         "exit - 退出",
     ]
@@ -419,4 +420,38 @@ def select_detect_operation() -> str:
     ]
     
     result = select_option("选择检测操作:", choices)
+    return result.split(' ')[0]
+
+
+def select_validate_operation() -> str:
+    """
+    选择验证操作
+    
+    Returns:
+        str: 选中的操作
+    """
+    choices = [
+        "run - 验证单个模型",
+        "compare - 比较多个模型",
+        "back - 返回主菜单",
+    ]
+    
+    result = select_option("选择验证操作:", choices)
+    return result.split(' ')[0]
+
+
+def select_validation_split() -> str:
+    """
+    选择验证数据集
+    
+    Returns:
+        str: 选中的数据集
+    """
+    choices = [
+        "val - 验证集 (用于模型选择)",
+        "test - 测试集 (用于最终评估)",
+        "train - 训练集 (检查过拟合)",
+    ]
+    
+    result = select_option("选择验证数据集:", choices, default=choices[0])
     return result.split(' ')[0]
