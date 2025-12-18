@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from ultralytics import YOLO
 import yaml
+import numpy as np
 
 from ..core.utils import (
     detect_device, get_device_name, ensure_dir,
@@ -22,6 +23,34 @@ from rich.table import Table
 from rich.panel import Panel
 
 app = typer.Typer(help="模型验证命令")
+
+
+def safe_float(value):
+    """
+    安全地将numpy数组或标量转换为float
+    
+    Args:
+        value: 任意类型的值（numpy数组、标量、None等）
+    
+    Returns:
+        float: 转换后的浮点数
+    """
+    if value is None:
+        return 0.0
+    # 处理numpy数组
+    if isinstance(value, np.ndarray):
+        return float(value.mean()) if len(value) > 0 else 0.0
+    # 处理numpy标量类型（numpy.float64, numpy.int32等）
+    if hasattr(value, 'item'):
+        try:
+            return float(value.item())
+        except (TypeError, ValueError, AttributeError):
+            pass
+    # 处理普通Python类型
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @app.command("run")
@@ -232,13 +261,14 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             metrics_table.add_column("指标", style="cyan", width=20)
             metrics_table.add_column("值", style="green", justify="right", width=15)
             
-            metrics_table.add_row("mAP@0.5", f"{box_metrics.map50:.4f}")
-            metrics_table.add_row("mAP@0.5:0.95", f"{box_metrics.map:.4f}")
-            metrics_table.add_row("精确率 (Precision)", f"{box_metrics.mp:.4f}")
-            metrics_table.add_row("召回率 (Recall)", f"{box_metrics.mr:.4f}")
+            metrics_table.add_row("mAP@0.5", f"{safe_float(box_metrics.map50):.4f}")
+            metrics_table.add_row("mAP@0.5:0.95", f"{safe_float(box_metrics.map):.4f}")
+            metrics_table.add_row("精确率 (Precision)", f"{safe_float(box_metrics.mp):.4f}")
+            metrics_table.add_row("召回率 (Recall)", f"{safe_float(box_metrics.mr):.4f}")
             
-            if hasattr(box_metrics, 'f1'):
-                metrics_table.add_row("F1分数", f"{box_metrics.f1:.4f}")
+            # F1分数（如果存在）
+            if hasattr(box_metrics, 'f1') and box_metrics.f1 is not None:
+                metrics_table.add_row("F1分数", f"{safe_float(box_metrics.f1):.4f}")
             
             console.print(metrics_table)
             
@@ -257,7 +287,8 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                     class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
                 
                 for class_name, ap50 in zip(class_names, box_metrics.ap50):
-                    class_table.add_row(class_name, f"{ap50:.4f}")
+                    # 使用safe_float确保正确转换
+                    class_table.add_row(class_name, f"{safe_float(ap50):.4f}")
                 
                 console.print(class_table)
     
@@ -273,18 +304,18 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             metrics_table.add_column("值", style="green", justify="right", width=15)
             
             # 边界框指标
-            metrics_table.add_row("边界框", "mAP@0.5", f"{box_metrics.map50:.4f}")
-            metrics_table.add_row("", "mAP@0.5:0.95", f"{box_metrics.map:.4f}")
-            metrics_table.add_row("", "Precision", f"{box_metrics.mp:.4f}")
-            metrics_table.add_row("", "Recall", f"{box_metrics.mr:.4f}")
+            metrics_table.add_row("边界框", "mAP@0.5", f"{safe_float(box_metrics.map50):.4f}")
+            metrics_table.add_row("", "mAP@0.5:0.95", f"{safe_float(box_metrics.map):.4f}")
+            metrics_table.add_row("", "Precision", f"{safe_float(box_metrics.mp):.4f}")
+            metrics_table.add_row("", "Recall", f"{safe_float(box_metrics.mr):.4f}")
             
             # 掩码指标
             if mask_metrics:
                 metrics_table.add_row("", "", "")
-                metrics_table.add_row("掩码", "mAP@0.5", f"{mask_metrics.map50:.4f}")
-                metrics_table.add_row("", "mAP@0.5:0.95", f"{mask_metrics.map:.4f}")
-                metrics_table.add_row("", "Precision", f"{mask_metrics.mp:.4f}")
-                metrics_table.add_row("", "Recall", f"{mask_metrics.mr:.4f}")
+                metrics_table.add_row("掩码", "mAP@0.5", f"{safe_float(mask_metrics.map50):.4f}")
+                metrics_table.add_row("", "mAP@0.5:0.95", f"{safe_float(mask_metrics.map):.4f}")
+                metrics_table.add_row("", "Precision", f"{safe_float(mask_metrics.mp):.4f}")
+                metrics_table.add_row("", "Recall", f"{safe_float(mask_metrics.mr):.4f}")
             
             console.print(metrics_table)
     
@@ -295,8 +326,8 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             metrics_table.add_column("指标", style="cyan", width=20)
             metrics_table.add_column("值", style="green", justify="right", width=15)
             
-            metrics_table.add_row("Top-1 准确率", f"{results.top1:.4f}")
-            metrics_table.add_row("Top-5 准确率", f"{results.top5:.4f}")
+            metrics_table.add_row("Top-1 准确率", f"{safe_float(results.top1):.4f}")
+            metrics_table.add_row("Top-5 准确率", f"{safe_float(results.top5):.4f}")
             
             console.print(metrics_table)
 
@@ -321,10 +352,10 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
         if hasattr(results, 'box') and results.box:
             box_metrics = results.box
             summary['metrics'] = {
-                'mAP50': float(box_metrics.map50),
-                'mAP50_95': float(box_metrics.map),
-                'precision': float(box_metrics.mp),
-                'recall': float(box_metrics.mr),
+                'mAP50': safe_float(box_metrics.map50),
+                'mAP50_95': safe_float(box_metrics.map),
+                'precision': safe_float(box_metrics.mp),
+                'recall': safe_float(box_metrics.mr),
             }
             
             if hasattr(box_metrics, 'ap50') and len(box_metrics.ap50) > 0:
@@ -333,8 +364,10 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
                 else:
                     class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
                 
+                # 确保AP值被正确转换为Python float
                 summary['per_class'] = {
-                    name: float(ap) for name, ap in zip(class_names, box_metrics.ap50)
+                    name: safe_float(ap) 
+                    for name, ap in zip(class_names, box_metrics.ap50)
                 }
     
     elif task_type == TaskType.SEGMENT:
@@ -344,26 +377,26 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
             
             summary['metrics'] = {
                 'box': {
-                    'mAP50': float(box_metrics.map50),
-                    'mAP50_95': float(box_metrics.map),
-                    'precision': float(box_metrics.mp),
-                    'recall': float(box_metrics.mr),
+                    'mAP50': safe_float(box_metrics.map50),
+                    'mAP50_95': safe_float(box_metrics.map),
+                    'precision': safe_float(box_metrics.mp),
+                    'recall': safe_float(box_metrics.mr),
                 }
             }
             
             if mask_metrics:
                 summary['metrics']['mask'] = {
-                    'mAP50': float(mask_metrics.map50),
-                    'mAP50_95': float(mask_metrics.map),
-                    'precision': float(mask_metrics.mp),
-                    'recall': float(mask_metrics.mr),
+                    'mAP50': safe_float(mask_metrics.map50),
+                    'mAP50_95': safe_float(mask_metrics.map),
+                    'precision': safe_float(mask_metrics.mp),
+                    'recall': safe_float(mask_metrics.mr),
                 }
     
     elif task_type == TaskType.CLASSIFY:
         if hasattr(results, 'top1') and hasattr(results, 'top5'):
             summary['metrics'] = {
-                'top1_accuracy': float(results.top1),
-                'top5_accuracy': float(results.top5),
+                'top1_accuracy': safe_float(results.top1),
+                'top5_accuracy': safe_float(results.top5),
             }
     
     return summary
@@ -465,7 +498,7 @@ def compare_models(
     for result in all_results:
         if hasattr(result['results'], 'box') and result['results'].box:
             box_metrics = result['results'].box
-            map50 = box_metrics.map50
+            map50 = safe_float(box_metrics.map50)
             
             if map50 > best_map50:
                 best_map50 = map50
@@ -473,10 +506,10 @@ def compare_models(
             
             comparison_table.add_row(
                 result['name'],
-                f"{box_metrics.map50:.4f}",
-                f"{box_metrics.map:.4f}",
-                f"{box_metrics.mp:.4f}",
-                f"{box_metrics.mr:.4f}",
+                f"{safe_float(box_metrics.map50):.4f}",
+                f"{safe_float(box_metrics.map):.4f}",
+                f"{safe_float(box_metrics.mp):.4f}",
+                f"{safe_float(box_metrics.mr):.4f}",
             )
     
     console.print(comparison_table)
