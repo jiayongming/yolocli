@@ -1425,11 +1425,14 @@ python yolo_cli.py interactive
 验证单个模型的性能，获取详细指标和可视化报告：
 
 ```bash
-# 基本验证
+# 基本验证（自动检测任务类型）🆕
 python yolo_cli.py validate run results/training/best.pt
 
 # 在测试集上验证（使用实际部署阈值）
 python yolo_cli.py validate run best.pt --split test --conf 0.25
+
+# 显式指定任务类型（推荐用于分类模型）
+python yolo_cli.py validate run best.pt --task classify --data data/processed
 
 # 完整配置验证（保存所有结果）
 python yolo_cli.py validate run best.pt \
@@ -1440,6 +1443,14 @@ python yolo_cli.py validate run best.pt \
   --plots \
   --project results/final_validation
 ```
+
+**🎯 智能任务类型检测** 🆕
+
+系统会自动从模型本身检测任务类型，无需手动指定：
+- ✅ 加载模型后，从模型对象获取真实任务类型
+- ✅ 优先级：模型实际类型 > 文件名推断 > 手动指定
+- ✅ 自动适配不同任务的评估指标和参数
+- 💡 建议：首次验证新模型时，可以显式指定 `--task` 以确保准确
 
 #### 🆚 模型对比
 
@@ -1515,6 +1526,27 @@ python yolo_cli.py validate compare \
 │ Top-5 准确率  │ 0.9876        │  ← 前5个概率中包含正确答案
 └───────────────┴───────────────┘
 ```
+
+**分类模型验证示例** 🆕：
+```bash
+# 自动检测任务类型（推荐）
+python yolo_cli.py validate run best.pt --data data/processed
+
+# 或显式指定（更保险）
+python yolo_cli.py validate run best.pt --task classify --data data/processed
+
+# 完整验证
+python yolo_cli.py validate run best.pt \
+  --task classify \
+  --data data/processed \
+  --split test \
+  --save-json \
+  --plots
+```
+
+**注意**：
+- 分类模型的 `validation_summary.json` 中不会包含 `conf_threshold` 和 `iou_threshold`（这些仅用于检测/分割任务）
+- 系统会自动从模型加载后检测真实任务类型，即使文件名是 `best.pt` 也能正确识别
 
 ### 主要参数
 

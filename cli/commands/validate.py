@@ -189,6 +189,25 @@ def validate_model(
         print_info("加载模型...")
         yolo_model = YOLO(str(model_path))
         
+        # 从模型本身检测真实的任务类型（优先于文件名推断）
+        if hasattr(yolo_model, 'task'):
+            model_task = yolo_model.task
+            # 映射 YOLO 内部任务名称到我们的任务类型
+            task_mapping = {
+                'classify': 'classify',
+                'detect': 'detect',
+                'segment': 'segment',
+                'pose': 'detect',  # 姿态估计也归类为检测
+                'obb': 'detect',   # 旋转框检测也归类为检测
+            }
+            if model_task in task_mapping:
+                detected_task = task_mapping[model_task]
+                if task != detected_task:
+                    print_warning(f"从模型检测到任务类型: {detected_task.upper()} (文件名推断: {task.upper()})")
+                    task = detected_task
+                    task_type = TaskType.from_string(task)
+                    print_info(f"使用模型实际任务类型: {task.upper()}")
+        
         # 开始验证
         print_info("开始验证...")
         console.print()
@@ -342,10 +361,13 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
         'task': task_type.value,
         'dataset': data,
         'split': split,
-        'conf_threshold': conf,
-        'iou_threshold': iou,
         'timestamp': datetime.now().isoformat(),
     }
+    
+    # 只有检测和分割任务才记录 conf 和 iou 阈值
+    if task_type in [TaskType.DETECT, TaskType.SEGMENT]:
+        summary['conf_threshold'] = conf
+        summary['iou_threshold'] = iou
     
     # 根据任务类型添加指标
     if task_type == TaskType.DETECT:
