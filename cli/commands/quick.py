@@ -34,9 +34,9 @@ def quick_train(
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     model_version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
     model_size: str = typer.Option("s", "--size", "-s", help="模型大小 (n/s/m/l/x)"),
-    epochs: int = typer.Option(200, "--epochs", "-e", help="训练轮数"),
-    batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
-    imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),
+    epochs: Optional[int] = typer.Option(None, "--epochs", "-e", help="训练轮数 (检测/分割默认200，分类默认100)"),
+    batch: Optional[int] = typer.Option(None, "--batch", "-b", help="批次大小 (检测/分割默认16，分类默认32)"),
+    imgsz: Optional[int] = typer.Option(None, "--imgsz", help="图像尺寸 (检测/分割默认640，分类默认224)"),
     device: str = typer.Option("auto", "--device", "-d", help="设备"),
     augmentation: str = typer.Option("balanced", "--augmentation", "-a", help="数据增强策略"),
     ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="数据集划分比例"),
@@ -73,17 +73,28 @@ def quick_train(
     task_type = TaskType.from_string(task)
     print_info(f"任务类型: {task.upper()}")
     
-    # 根据任务类型调整默认参数
+    # 根据任务类型设置默认参数（仅当用户未指定时）
     if task_type == TaskType.CLASSIFY:
-        if imgsz == 640:
+        # 图像尺寸：分类任务默认 224，检测/分割默认 640
+        if imgsz is None:
             imgsz = 224
-            print_info(f"分类任务使用图像尺寸: {imgsz}")
-        if epochs == 200:
+            print_info(f"使用分类任务默认图像尺寸: {imgsz}")
+        # 训练轮数：分类任务默认 100，检测/分割默认 200
+        if epochs is None:
             epochs = 100
-            print_info(f"分类任务使用训练轮数: {epochs}")
-        if batch == 16:
+            print_info(f"使用分类任务默认训练轮数: {epochs}")
+        # 批次大小：分类任务默认 32，检测/分割默认 16
+        if batch is None:
             batch = 32
-            print_info(f"分类任务使用批次大小: {batch}")
+            print_info(f"使用分类任务默认批次大小: {batch}")
+    else:
+        # 检测/分割任务的默认值
+        if imgsz is None:
+            imgsz = 640
+        if epochs is None:
+            epochs = 200
+        if batch is None:
+            batch = 16
     
     total_steps = 8 if task == 'classify' else 7
     current_step = 0

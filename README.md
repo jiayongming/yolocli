@@ -166,7 +166,7 @@ python yolo_cli.py quick train \
   --batch 16 \
   --device 0
 
-# 分类任务
+# 分类任务（使用默认参数）
 python yolo_cli.py quick train \
   --task classify \
   --images data/raw/images \
@@ -175,7 +175,20 @@ python yolo_cli.py quick train \
   --epochs 100 \
   --batch 32 \
   --device 0
+
+# 分类任务（自定义训练轮数）
+python yolo_cli.py quick train \
+  --task classify \
+  --images data/raw/images \
+  --epochs 200 \
+  --batch 32 \
+  --device 0
 ```
+
+**参数说明：**
+- 如果不指定 `--epochs`、`--batch`、`--imgsz`，系统会根据任务类型使用合适的默认值
+- 显式指定的参数值会完全按照你的设置执行（不会被自动调整）
+
 
 ### 交互式模式（推荐新手）
 
@@ -1733,11 +1746,12 @@ python yolo_cli.py quick train [OPTIONS]
   --images TEXT          原始图像目录 (必需)
   --labels TEXT          原始标签目录 (必需)
   --classes TEXT         类别文件路径
+  --task TEXT            任务类型 (detect/segment/classify, 默认: detect)
   --version TEXT         YOLO版本 (默认: yolo11)
   --size TEXT            模型大小 (默认: s)
-  --epochs INTEGER       训练轮数 (默认: 200)
-  --batch INTEGER        批次大小 (默认: 16)
-  --imgsz INTEGER        图像尺寸 (默认: 640)
+  --epochs INTEGER       训练轮数 (检测/分割默认: 200, 分类默认: 100)
+  --batch INTEGER        批次大小 (检测/分割默认: 16, 分类默认: 32)
+  --imgsz INTEGER        图像尺寸 (检测/分割默认: 640, 分类默认: 224)
   --device TEXT          设备 (默认: auto)
   --augmentation TEXT    数据增强策略 (默认: balanced)
   --ratios TEXT          数据集划分比例 (默认: 0.7:0.2:0.1)
@@ -1745,6 +1759,10 @@ python yolo_cli.py quick train [OPTIONS]
   --skip-stats           跳过数据统计
   --project TEXT         项目目录
   --name TEXT            实验名称
+
+注意：
+- 显式指定的参数值会覆盖默认值
+- 例如：--epochs 200 在分类任务中也会使用 200 轮（不会被改为 100）
 
 # 快速恢复训练
 python yolo_cli.py quick resume [OPTIONS]
