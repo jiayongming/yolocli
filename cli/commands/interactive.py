@@ -202,17 +202,40 @@ def run_data_operations():
                             classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
                             all_classes.update(classes)
                     
-                    if all_classes:
-                        print_info(f"检测到 {len(all_classes)} 个类别")
-                        if confirm_action("是否选择正类进行正负样本统计?", default=True):
-                            from ..ui.prompts import select_multiple
-                            positive_classes = select_multiple(
-                                "选择正类 (空格选择，回车确认):",
-                                sorted(list(all_classes))
-                            )
-                            if positive_classes:
-                                positive_classes_str = ','.join(positive_classes)
-                                print_info(f"已选择正类: {positive_classes_str}")
+                if all_classes:
+                    print_info(f"检测到 {len(all_classes)} 个类别: {', '.join(sorted(all_classes))}")
+                    console.print()
+                    print_info("💡 正负样本统计说明：")
+                    print_info("   - 选择一个或多个类别作为「正类」")
+                    print_info("   - 其余类别将自动归为「负类」")
+                    print_info("   - 适用于异常检测、二分类等场景")
+                    console.print()
+                    
+                    if confirm_action("是否选择正类进行正负样本统计?", default=True):
+                        from ..ui.prompts import select_multiple
+                        
+                        console.print()
+                        print_info("📋 操作说明：")
+                        print_info("   1. 使用 ↑↓ 键移动")
+                        print_info("   2. 使用 空格键 选择/取消选择")
+                        print_info("   3. 按 回车键 确认选择")
+                        console.print()
+                        
+                        positive_classes = select_multiple(
+                            "选择正类 (空格选择，回车确认):",
+                            sorted(list(all_classes))
+                        )
+                        
+                        if positive_classes:
+                            positive_classes_str = ','.join(positive_classes)
+                            console.print()
+                            print_success(f"✓ 已选择正类: {positive_classes_str}")
+                            negative_classes = [c for c in all_classes if c not in positive_classes]
+                            if negative_classes:
+                                print_info(f"  负类: {', '.join(sorted(negative_classes))}")
+                        else:
+                            console.print()
+                            print_warning("⚠️  未选择任何正类，将跳过正负样本统计")
                 
                 from ..commands.data import dataset_stats
                 dataset_stats(data_path=data_path, detailed=detailed, task=task_type, positive_classes=positive_classes_str)

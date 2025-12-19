@@ -181,6 +181,8 @@ def get_dataset_info(data_path: Union[str, Path]) -> dict:
     """
     提取数据集信息
     
+    自动检测数据集类型（检测/分割 或 分类）并统计
+    
     Args:
         data_path: 数据集路径
     
@@ -197,18 +199,45 @@ def get_dataset_info(data_path: Union[str, Path]) -> dict:
         'test_labels': 0,
     }
     
+    # 检测是否是分类数据集结构
+    # 分类：images/train/class1/*.jpg, images/train/class2/*.jpg
+    # 检测：images/train/*.jpg + labels/train/*.txt
+    train_dir = data_path / 'images' / 'train'
+    is_classify = False
+    
+    if train_dir.exists():
+        # 检查train目录下是否有子目录（类别目录）
+        subdirs = [d for d in train_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+        # 如果有子目录且没有labels目录，可能是分类任务
+        if subdirs and not (data_path / 'labels' / 'train').exists():
+            is_classify = True
+    
     # 统计各个split的图像和标签数量
     for split in ['train', 'val', 'test']:
         img_dir = data_path / 'images' / split
         label_dir = data_path / 'labels' / split
         
-        if img_dir.exists():
+        if not img_dir.exists():
+            continue
+        
+        if is_classify:
+            # 分类任务：递归统计类别子目录中的图像
+            image_count = 0
+            for class_dir in img_dir.iterdir():
+                if class_dir.is_dir() and not class_dir.name.startswith('.'):
+                    image_count += len(list(class_dir.glob('*.jpg'))) + \
+                                  len(list(class_dir.glob('*.png'))) + \
+                                  len(list(class_dir.glob('*.jpeg')))
+            info[f'{split}_images'] = image_count
+            info[f'{split}_labels'] = image_count  # 分类任务：图像数=标签数
+        else:
+            # 检测/分割任务：扁平结构
             info[f'{split}_images'] = len(list(img_dir.glob('*.jpg'))) + \
                                       len(list(img_dir.glob('*.png'))) + \
                                       len(list(img_dir.glob('*.jpeg')))
-        
-        if label_dir.exists():
-            info[f'{split}_labels'] = len(list(label_dir.glob('*.txt')))
+            
+            if label_dir.exists():
+                info[f'{split}_labels'] = len(list(label_dir.glob('*.txt')))
     
     return info
 

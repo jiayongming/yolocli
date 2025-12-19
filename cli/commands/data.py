@@ -806,7 +806,11 @@ def _print_positive_negative_stats_classify(data_path: Path, positive_classes: L
         positive_classes: 正类列表
     """
     if not positive_classes:
-        print_warning("未指定正类，跳过正负样本统计")
+        console.print()
+        print_warning("⚠️  未选择正类，无法进行正负样本统计")
+        print_info("提示: 在多选列表中，使用空格键选择一个或多个正类，然后按回车确认")
+        print_info("或者在命令行模式中使用 --positive-classes 参数指定正类")
+        console.print()
         return
     
     split_stats = {}
