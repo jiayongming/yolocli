@@ -4,7 +4,7 @@
 
 import typer
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import yaml
 import shutil
 import random
@@ -797,13 +797,257 @@ def prepare_classify(
     print_info(f"    └── test/")
 
 
+def _print_positive_negative_stats_classify(data_path: Path, positive_classes: List[str]):
+    """
+    统计并打印分类任务的正负样本数量
+    
+    Args:
+        data_path: 数据集路径
+        positive_classes: 正类列表
+    """
+    if not positive_classes:
+        print_warning("未指定正类，跳过正负样本统计")
+        return
+    
+    split_stats = {}
+    class_stats = defaultdict(lambda: {'train': 0, 'val': 0, 'test': 0})
+    
+    for split in ['train', 'val', 'test']:
+        split_dir = data_path / 'images' / split
+        
+        if not split_dir.exists():
+            continue
+        
+        positive_count = 0
+        negative_count = 0
+        
+        # 遍历所有类别目录
+        for class_dir in split_dir.iterdir():
+            if not class_dir.is_dir() or class_dir.name.startswith('.'):
+                continue
+            
+            class_name = class_dir.name
+            # 统计该类别的图片数量
+            images = list(find_files(class_dir))
+            count = len(images)
+            class_stats[class_name][split] = count
+            
+            # 判断是正类还是负类
+            if class_name in positive_classes:
+                positive_count += count
+            else:
+                negative_count += count
+        
+        total = positive_count + negative_count
+        
+        if total > 0:
+            split_stats[split] = {
+                'positive': positive_count,
+                'negative': negative_count,
+                'total': total,
+            }
+    
+    # 打印统计表格
+    if split_stats:
+        console.print()
+        
+        # 显示正类信息
+        print_info(f"正类定义: {', '.join(positive_classes)}")
+        console.print()
+        
+        # 分集统计
+        columns = ["数据集", "正类样本", "负类样本", "总样本", "正类比例"]
+        rows = []
+        
+        total_positive = 0
+        total_negative = 0
+        total_samples = 0
+        
+        for split in ['train', 'val', 'test']:
+            if split in split_stats:
+                stats = split_stats[split]
+                rows.append([
+                    split.upper(),
+                    stats['positive'],
+                    stats['negative'],
+                    stats['total'],
+                    f"{stats['positive']/stats['total']*100:.1f}%"
+                ])
+                total_positive += stats['positive']
+                total_negative += stats['negative']
+                total_samples += stats['total']
+        
+        # 添加总计行
+        if total_samples > 0:
+            rows.append([
+                "总计",
+                total_positive,
+                total_negative,
+                total_samples,
+                f"{total_positive/total_samples*100:.1f}%"
+            ])
+        
+        print_table("正负样本分布", columns, rows, show_lines=True)
+        
+        # 打印详细的类别分布
+        console.print()
+        print_info("各类别详细分布:")
+        
+        # 按正负分组显示
+        console.print("\n[bold cyan]正类:[/bold cyan]")
+        for class_name in sorted(positive_classes):
+            if class_name in class_stats:
+                stats = class_stats[class_name]
+                total_class = sum(stats.values())
+                print_info(f"  {class_name}: train={stats['train']}, val={stats['val']}, test={stats['test']} (总计 {total_class})")
+        
+        console.print("\n[bold yellow]负类:[/bold yellow]")
+        negative_classes = [c for c in class_stats.keys() if c not in positive_classes]
+        for class_name in sorted(negative_classes):
+            stats = class_stats[class_name]
+            total_class = sum(stats.values())
+            print_info(f"  {class_name}: train={stats['train']}, val={stats['val']}, test={stats['test']} (总计 {total_class})")
+        
+        # 样本说明
+        console.print()
+        print_info("样本说明:")
+        print_info(f"  • 正类: {', '.join(positive_classes)}")
+        print_info(f"  • 负类: 除正类外的所有类别")
+    else:
+        print_warning("未找到有效的数据集")
+
+
+def _print_positive_negative_stats(data_path: Path):
+    """
+    统计并打印正负样本数量（检测/分割任务）
+    
+    正样本：标签文件存在且非空（包含至少一个标注）
+    负样本：标签文件不存在或为空
+    
+    Args:
+        data_path: 数据集路径
+    """
+    split_stats = {}
+    
+    for split in ['train', 'val', 'test']:
+        img_dir = data_path / 'images' / split
+        label_dir = data_path / 'labels' / split
+        
+        if not img_dir.exists():
+            continue
+        
+        positive_count = 0
+        negative_count = 0
+        positive_with_objects = 0  # 有标注对象的图片数
+        total_objects = 0  # 总标注对象数
+        
+        # 遍历所有图像
+        for img_file in find_files(img_dir):
+            label_file = label_dir / f"{img_file.stem}.txt"
+            
+            if label_file.exists():
+                # 检查标签文件是否非空
+                try:
+                    with open(label_file, 'r') as f:
+                        lines = [line.strip() for line in f if line.strip()]
+                    
+                    if lines:
+                        # 标签文件存在且有内容 -> 正样本
+                        positive_count += 1
+                        positive_with_objects += 1
+                        total_objects += len(lines)
+                    else:
+                        # 标签文件存在但为空 -> 负样本
+                        negative_count += 1
+                except Exception:
+                    # 无法读取标签文件 -> 视为负样本
+                    negative_count += 1
+            else:
+                # 标签文件不存在 -> 负样本
+                negative_count += 1
+        
+        total = positive_count + negative_count
+        
+        if total > 0:
+            split_stats[split] = {
+                'positive': positive_count,
+                'negative': negative_count,
+                'total': total,
+                'total_objects': total_objects,
+                'avg_objects': total_objects / positive_with_objects if positive_with_objects > 0 else 0
+            }
+    
+    # 打印统计表格
+    if split_stats:
+        console.print()
+        
+        # 分集统计
+        columns = ["数据集", "正样本", "负样本", "总样本", "正样本比例"]
+        rows = []
+        
+        total_positive = 0
+        total_negative = 0
+        total_samples = 0
+        
+        for split in ['train', 'val', 'test']:
+            if split in split_stats:
+                stats = split_stats[split]
+                rows.append([
+                    split.upper(),
+                    stats['positive'],
+                    stats['negative'],
+                    stats['total'],
+                    f"{stats['positive']/stats['total']*100:.1f}%"
+                ])
+                total_positive += stats['positive']
+                total_negative += stats['negative']
+                total_samples += stats['total']
+        
+        # 添加总计行
+        if total_samples > 0:
+            rows.append([
+                "总计",
+                total_positive,
+                total_negative,
+                total_samples,
+                f"{total_positive/total_samples*100:.1f}%"
+            ])
+        
+        print_table("正负样本分布", columns, rows, show_lines=True)
+        
+        # 打印详细信息
+        console.print()
+        print_info("样本说明:")
+        print_info("  • 正样本: 包含标注对象的图像（标签文件存在且非空）")
+        print_info("  • 负样本: 不包含标注对象的图像（标签文件不存在或为空）")
+        
+        # 打印每个集的平均标注数
+        console.print()
+        print_info("平均标注对象数:")
+        for split in ['train', 'val', 'test']:
+            if split in split_stats:
+                stats = split_stats[split]
+                print_info(f"  {split.upper()}: {stats['avg_objects']:.2f} 个对象/图像 (总计 {stats['total_objects']} 个对象)")
+    else:
+        print_warning("未找到有效的数据集")
+
+
 @app.command("stats")
 def dataset_stats(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
     detailed: bool = typer.Option(False, "--detailed", "-d", help="显示详细统计"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    positive_classes: Optional[str] = typer.Option(None, "--positive-classes", help="正类列表（逗号分隔，仅用于分类任务）"),
 ):
-    """数据集统计分析"""
+    """数据集统计分析
+    
+    示例:
+      # 检测任务统计（含正负样本）
+      python yolo_cli.py data stats --path data/processed --detailed --task detect
+      
+      # 分类任务统计（指定正类）
+      python yolo_cli.py data stats --path data/processed --detailed --task classify --positive-classes "normal,good"
+    """
     
     print_section_header("数据集统计")
     
@@ -838,6 +1082,18 @@ def dataset_stats(
     print_dataset_info(info)
     
     if detailed:
+        # 统计正负样本
+        if is_classify:
+            # 分类任务：需要指定正类
+            if positive_classes:
+                print_section_header("正负样本统计")
+                positive_class_list = [c.strip() for c in positive_classes.split(',') if c.strip()]
+                _print_positive_negative_stats_classify(data_path, positive_class_list)
+        else:
+            # 检测/分割任务
+            print_section_header("正负样本统计")
+            _print_positive_negative_stats(data_path)
+        
         # 统计类别分布
         print_section_header("类别分布统计")
         

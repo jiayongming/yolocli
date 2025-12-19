@@ -694,8 +694,8 @@ nc: 2
 # 基本验证
 python yolo_cli.py data verify --path data/processed
 
-# 详细统计（包含类别分布）
-python yolo_cli.py data stats --path data/processed --detailed
+# 详细统计（包含类别分布和正负样本统计）
+python yolo_cli.py data stats --path data/processed --detailed --task detect
 ```
 
 验证内容包括：
@@ -703,6 +703,109 @@ python yolo_cli.py data stats --path data/processed --detailed
 - 验证标签文件格式是否正确
 - 统计各类别的分布情况
 - 检测潜在的数据问题
+
+#### 正负样本统计
+
+在详细统计模式下，系统会自动统计正负样本分布，帮助你评估数据集质量：
+
+**定义**：
+- **正样本** ✅: 包含标注对象的图像（标签文件存在且非空）
+- **负样本** ❌: 不包含标注对象的图像（标签文件不存在或为空）
+
+**输出示例**：
+
+```
+正负样本分布
+┏━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ 数据集  ┃ 正样本  ┃ 负样本  ┃ 总样本  ┃ 正样本比例 ┃
+┡━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━┩
+│ TRAIN   │ 450     │ 50      │ 500     │ 90.0%      │
+│ VAL     │ 120     │ 10      │ 130     │ 92.3%      │
+│ TEST    │ 60      │ 5       │ 65      │ 92.3%      │
+│ 总计    │ 630     │ 65      │ 695     │ 90.6%      │
+└─────────┴─────────┴─────────┴─────────┴────────────┘
+
+平均标注对象数:
+  TRAIN: 2.45 个对象/图像 (总计 1103 个对象)
+  VAL: 2.38 个对象/图像 (总计 285 个对象)
+  TEST: 2.52 个对象/图像 (总计 151 个对象)
+```
+
+**质量评估标准**：
+
+| 正样本比例 | 评估结果 | 建议操作 |
+|-----------|---------|---------|
+| > 95% | 🟢 优秀 | 数据集干净，可以直接训练 |
+| 80-95% | 🟡 正常 | 可以训练，注意监控效果 |
+| 60-80% | 🟠 警告 | 建议检查和清理负样本 |
+| < 60% | 🔴 问题 | 必须清理数据后再训练 |
+
+**平均对象数评估**：
+
+| 平均对象数 | 场景 | 建议 |
+|-----------|------|------|
+| < 1 | 目标稀疏 | 可能需要调整anchor大小 |
+| 1-5 | 正常范围 | 使用标准训练参数 |
+| 5-10 | 目标较密 | 可以适当增加batch size |
+| > 10 | 目标密集 | 建议更大batch size和更多训练轮数 |
+
+**应用场景**：
+
+1. **训练前数据检查** - 识别标签缺失或标注不完整
+2. **数据平衡评估** - 了解正负样本比例，避免样本不平衡
+3. **数据清理效果评估** - 对比清理前后的统计结果
+4. **标注密度分析** - 评估每张图像的平均标注对象数
+
+**分类任务的正负样本统计**：
+
+对于分类任务，你可以指定哪些类别为"正类"，其余为"负类"，这在异常检测等场景中特别有用。
+
+**命令行模式**：
+```bash
+# 指定正类（适用于异常检测等场景）
+python yolo_cli.py data stats \
+  --path data/processed \
+  --detailed \
+  --task classify \
+  --positive-classes "normal,good"
+```
+
+**交互式模式**：
+1. 选择 `数据处理` → `数据统计`
+2. 选择任务类型：`classify`
+3. 输入数据集路径
+4. 确认显示详细统计
+5. 系统会自动检测所有类别，并让你从列表中选择正类
+6. 使用空格键选择多个正类，回车确认
+
+**输出示例**（分类任务）：
+```
+正负样本分布
+┏━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ 数据集  ┃ 正类样本  ┃ 负类样本  ┃ 总样本  ┃ 正类比例   ┃
+┡━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━┩
+│ TRAIN   │ 300       │ 200       │ 500     │ 60.0%      │
+│ VAL     │ 80        │ 50        │ 130     │ 61.5%      │
+│ TEST    │ 40        │ 25        │ 65      │ 61.5%      │
+│ 总计    │ 420       │ 275       │ 695     │ 60.4%      │
+└─────────┴───────────┴───────────┴─────────┴────────────┘
+
+各类别详细分布:
+
+正类:
+  good: train=150, val=40, test=20 (总计 210)
+  normal: train=150, val=40, test=20 (总计 210)
+
+负类:
+  defect: train=120, val=30, test=15 (总计 165)
+  anomaly: train=80, val=20, test=10 (总计 110)
+```
+
+**注意事项**：
+- 检测/分割任务：自动统计有标注对象（正）和无标注对象（负）的图像
+- 分类任务：需要手动指定正类，其余类别自动归为负类
+- 空标签文件和无标签文件都视为负样本（仅检测/分割任务）
+- 格式错误的标注会在 `verify` 命令中报告
 
 ### 步骤3：下载预训练模型
 
@@ -1119,7 +1222,7 @@ python yolo_cli.py data generate-yaml \
 
 # 5. 验证数据集
 python yolo_cli.py data verify --path data/processed
-python yolo_cli.py data stats --path data/processed --detailed
+python yolo_cli.py data stats --path data/processed --detailed --task detect
 
 # 6. 下载预训练模型
 python yolo_cli.py model download --version yolo11 --size s
@@ -1163,10 +1266,20 @@ python yolo_cli.py interactive
 ```
 
 交互式模式提供：
-- 📋 主菜单：选择操作类型（模型/数据/训练/检测）
+- 📋 主菜单：选择操作类型（模型/数据/训练/检测/验证）
 - 🔍 参数提示：智能推荐和验证输入
 - ✅ 确认步骤：每步操作前确认
 - 📊 实时反馈：显示操作结果和进度
+- 📈 数据统计：支持详细统计，包含正负样本分布
+
+**在交互式模式中使用数据统计**：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `数据统计`
+3. 选择任务类型（detect/segment/classify）
+4. 输入数据集路径（默认：data/processed）
+5. 确认显示详细统计（包含正负样本统计）
+6. 系统会自动显示完整的统计信息，包括正负样本分布、平均对象数和类别分布
 
 ## 📊 模型验证
 
@@ -1568,8 +1681,17 @@ python yolo_cli.py data verify [OPTIONS]
 
 # 数据统计
 python yolo_cli.py data stats [OPTIONS]
-  --path TEXT        数据集路径
-  --detailed         显示详细统计
+  --path TEXT              数据集路径
+  --detailed               显示详细统计（包括正负样本统计）
+  --task TEXT              任务类型 (detect/segment/classify)
+  --positive-classes TEXT  正类列表（逗号分隔，仅用于分类任务）
+
+示例:
+  # 检测任务统计
+  python yolo_cli.py data stats --path data/processed --detailed --task detect
+  
+  # 分类任务统计（指定正类）
+  python yolo_cli.py data stats --path data/processed --detailed --task classify --positive-classes "normal,good"
 ```
 
 #### `train` - 模型训练

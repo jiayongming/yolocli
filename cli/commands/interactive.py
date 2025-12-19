@@ -184,11 +184,38 @@ def run_data_operations():
                 # 数据统计
                 print_section_header("数据统计")
                 
+                task_type = select_task_type()
                 data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
-                detailed = confirm_action("显示详细统计?", default=True)
+                detailed = confirm_action("显示详细统计 (含正负样本统计)?", default=True)
+                
+                # 如果是分类任务且需要详细统计，让用户选择正类
+                positive_classes_str = None
+                if task_type == 'classify' and detailed:
+                    from pathlib import Path
+                    data_path_obj = Path(data_path)
+                    
+                    # 获取所有类别
+                    all_classes = set()
+                    for split in ['train', 'val', 'test']:
+                        split_dir = data_path_obj / 'images' / split
+                        if split_dir.exists():
+                            classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                            all_classes.update(classes)
+                    
+                    if all_classes:
+                        print_info(f"检测到 {len(all_classes)} 个类别")
+                        if confirm_action("是否选择正类进行正负样本统计?", default=True):
+                            from ..ui.prompts import select_multiple
+                            positive_classes = select_multiple(
+                                "选择正类 (空格选择，回车确认):",
+                                sorted(list(all_classes))
+                            )
+                            if positive_classes:
+                                positive_classes_str = ','.join(positive_classes)
+                                print_info(f"已选择正类: {positive_classes_str}")
                 
                 from ..commands.data import dataset_stats
-                dataset_stats(data_path=data_path, detailed=detailed)
+                dataset_stats(data_path=data_path, detailed=detailed, task=task_type, positive_classes=positive_classes_str)
             
             console.print()
             if not confirm_action("继续数据操作?", default=False):
