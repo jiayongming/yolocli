@@ -279,11 +279,12 @@ class LabelStudioConverter:
                 return 'json'  # 默认
     
     @staticmethod
-    def parse_json(json_file: Path) -> List[Dict]:
+    def parse_json(json_file: Path, include_negative: bool = True) -> List[Dict]:
         """解析Label Studio JSON格式
         
         Args:
             json_file: JSON文件路径
+            include_negative: 是否包含无标注的图片（负样本）
             
         Returns:
             List[Dict]: 解析后的数据列表
@@ -294,6 +295,7 @@ class LabelStudioConverter:
                     'category': str,       # 分类任务的类别
                     'image_width': int,
                     'image_height': int,
+                    'is_negative': bool,   # 是否为负样本（无标注）
                 }, ...]
         """
         with open(json_file, 'r', encoding='utf-8') as f:
@@ -302,23 +304,12 @@ class LabelStudioConverter:
         parsed_data = []
         
         for task in data:
-            # 跳过没有标注的任务
-            if not task.get('annotations'):
-                continue
-            
             # 获取图片路径
             image_path = task['data'].get('image', '')
             if not image_path:
                 continue
             
             filename = Path(image_path).name
-            
-            # 获取第一个标注（通常只有一个）
-            annotation = task['annotations'][0]
-            results = annotation.get('result', [])
-            
-            if not results:
-                continue
             
             item = {
                 'image_path': image_path,
@@ -327,47 +318,59 @@ class LabelStudioConverter:
                 'category': None,
                 'image_width': None,
                 'image_height': None,
+                'is_negative': True,  # 默认为负样本
             }
             
-            # 解析标注结果
-            for result in results:
-                result_type = result.get('type', '')
-                value = result.get('value', {})
+            # 检查是否有标注
+            if task.get('annotations'):
+                annotation = task['annotations'][0]
+                results = annotation.get('result', [])
                 
-                if result_type == 'rectanglelabels':
-                    # 目标检测标注
-                    annotation_item = {
-                        'type': 'rectangle',
-                        'x': value.get('x', 0),
-                        'y': value.get('y', 0),
-                        'width': value.get('width', 0),
-                        'height': value.get('height', 0),
-                        'labels': value.get('rectanglelabels', []),
-                    }
+                if results:
+                    item['is_negative'] = False
                     
-                    # 获取原始图像尺寸
-                    if 'original_width' in result:
-                        item['image_width'] = result['original_width']
-                        item['image_height'] = result['original_height']
-                    
-                    item['annotations'].append(annotation_item)
-                    
-                elif result_type == 'choices':
-                    # 分类标注
-                    choices = value.get('choices', [])
-                    if choices:
-                        item['category'] = choices[0]
+                    # 解析标注结果
+                    for result in results:
+                        result_type = result.get('type', '')
+                        value = result.get('value', {})
+                        
+                        if result_type == 'rectanglelabels':
+                            # 目标检测标注
+                            annotation_item = {
+                                'type': 'rectangle',
+                                'x': value.get('x', 0),
+                                'y': value.get('y', 0),
+                                'width': value.get('width', 0),
+                                'height': value.get('height', 0),
+                                'labels': value.get('rectanglelabels', []),
+                            }
+                            
+                            # 获取原始图像尺寸
+                            if 'original_width' in result:
+                                item['image_width'] = result['original_width']
+                                item['image_height'] = result['original_height']
+                            
+                            item['annotations'].append(annotation_item)
+                            
+                        elif result_type == 'choices':
+                            # 分类标注
+                            choices = value.get('choices', [])
+                            if choices:
+                                item['category'] = choices[0]
             
-            parsed_data.append(item)
+            # 根据 include_negative 参数决定是否添加负样本
+            if include_negative or not item['is_negative']:
+                parsed_data.append(item)
         
         return parsed_data
     
     @staticmethod
-    def parse_csv(csv_file: Path) -> List[Dict]:
+    def parse_csv(csv_file: Path, include_negative: bool = True) -> List[Dict]:
         """解析Label Studio CSV格式
         
         Args:
             csv_file: CSV文件路径
+            include_negative: 是否包含无标注的图片（负样本）
             
         Returns:
             List[Dict]: 解析后的数据列表（格式同parse_json）
@@ -391,6 +394,7 @@ class LabelStudioConverter:
                     'category': None,
                     'image_width': None,
                     'image_height': None,
+                    'is_negative': True,  # 默认为负样本
                 }
                 
                 # 尝试解析label字段（可能是JSON字符串）
@@ -418,19 +422,22 @@ class LabelStudioConverter:
                                         item['image_height'] = label['original_height']
                                     
                                     item['annotations'].append(annotation_item)
+                                    item['is_negative'] = False
                     except json.JSONDecodeError:
                         # 可能是直接的类别名
                         item['category'] = label_str
+                        item['is_negative'] = False
                 
                 # 检查是否有直接的类别列（分类任务）
                 # 根据实际CSV结构，可能有state、category等列
                 for col in ['state', 'category', 'class', 'label']:
                     if col in row and row[col] and not item['category']:
                         item['category'] = row[col]
+                        item['is_negative'] = False
                         break
                 
-                # 只添加有标注的项
-                if item['annotations'] or item['category']:
+                # 根据 include_negative 参数决定是否添加负样本
+                if include_negative or not item['is_negative']:
                     parsed_data.append(item)
         
         return parsed_data

@@ -293,6 +293,7 @@ python yolo_cli.py data convert-labelstudio \
 
 - ✅ **智能 Token 处理**: 支持 Refresh Token，自动转换为 Access Token
 - ✅ **批量下载图片**: 从 Label Studio API 自动下载所有标注图片
+- ✅ **负样本支持**: 自动包含无标注图片作为负样本（检测任务）🆕
 - ✅ **断点续传**: 已下载文件自动跳过，支持中断后继续
 - ✅ **多线程并发**: 可配置并发数（`--max-workers`，默认 4）
 - ✅ **格式自动检测**: 支持 JSON 和 CSV 导出格式
@@ -317,6 +318,55 @@ data/raw/
 │   └── ...
 └── classes.txt      # 类别列表
 ```
+
+### 负样本支持 🆕
+
+对于检测任务，系统**自动包含无标注的图片作为负样本**：
+
+**为什么需要负样本？**
+- ✅ 减少误报（False Positives）- 模型学习识别"背景"
+- ✅ 提高鲁棒性 - 适应真实场景中的无目标图像
+- ✅ 标准做法 - COCO、Pascal VOC 等数据集都包含负样本
+- ✅ 推荐比例 - 10-20% 负样本
+
+**如何工作？**
+```bash
+# 默认包含负样本（推荐）
+python yolo_cli.py data convert-labelstudio \
+  --input export.json \
+  --url http://localhost:8080 \
+  --token YOUR_TOKEN \
+  --task detect \
+  --include-negative  # 默认开启
+
+# 如果不想包含负样本
+python yolo_cli.py data convert-labelstudio \
+  --input export.json \
+  --url http://localhost:8080 \
+  --token YOUR_TOKEN \
+  --task detect \
+  --no-negative  # 显式关闭
+```
+
+**输出示例**：
+```
+✓ 解析完成：找到 150 个任务
+  正样本（有标注）: 120
+  负样本（无标注）: 30
+  负样本比例: 20.0%
+
+下载统计:
+  ✓ 已下载: 145
+  ⊙ 已跳过: 5
+  总计: 150
+
+✓ 生成了 120 个标签文件（正样本）
+✓ 创建了 30 个空标签文件（负样本）
+  负样本有助于减少误报，提高模型鲁棒性
+```
+
+**交互式模式**：
+在交互模式中，系统会询问是否包含负样本，并提供说明。
 
 ### 完整工作流
 
@@ -661,6 +711,46 @@ data/processed/
 │   └── test/        # 测试集标签
 └── split_statistics.txt  # 划分统计信息
 ```
+
+**负样本支持** 🆕
+
+如果图片目录中有缺失标签文件的图片，可以将它们作为负样本包含：
+
+```bash
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --output data/processed \
+  --create-empty-labels  # 为缺失标签的图片创建空标签
+```
+
+**特性：**
+- ✅ 自动为缺失标签的图片创建空的 `.txt` 文件
+- ✅ 这些图片将作为负样本（背景）参与训练
+- ✅ 统计输出会区分正样本和负样本
+- ✅ 有助于减少误报，提高模型鲁棒性
+
+**输出示例：**
+```
+找到 150 个有效样本
+  正样本（有标注）: 120
+  负样本（无标注）: 30 - 已创建空标签文件
+  
+数据集划分结果:
+┏━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━┓
+┃ 数据集 ┃ 样本数 ┃ 正样本 ┃ 负样本 ┃ 比例   ┃
+┡━━━━━━╇━━━━━━╇━━━━━━╇━━━━━━╇━━━━━━┩
+│ 训练集 │  105  │   84  │  21  │ 70.0% │
+│ 验证集 │   30  │   24  │   6  │ 20.0% │
+│ 测试集 │   15  │   12  │   3  │ 10.0% │
+│ 总计   │  150  │  120  │  30  │ 100.0%│
+└──────┴──────┴──────┴──────┴──────┘
+```
+
+**使用场景：**
+- 有一些未标注的背景图片
+- 从 Label Studio 导出时未使用 `--include-negative`
+- 希望手动添加负样本以提高模型质量
 
 #### 2.2 生成数据集配置文件
 
@@ -1510,11 +1600,14 @@ python yolo_cli.py validate compare --help
 
 ### 示例脚本
 
-项目提供了完整的示例脚本，包含9个典型使用场景：
+项目提供了完整的示例脚本，包含多个典型使用场景：
 
 ```bash
 # 运行交互式示例教程
 ./examples/validate_examples.sh
+
+# 测试数据集拆分的负样本支持（新增）
+./examples/test_split_with_negative.sh
 ```
 
 ## 🎮 GPU配置指南
@@ -1690,11 +1783,15 @@ python yolo_cli.py model info MODEL
 ```bash
 # 划分数据集
 python yolo_cli.py data split [OPTIONS]
-  --images TEXT      图像目录 (必需)
-  --labels TEXT      标签目录 (必需)
-  --output TEXT      输出目录
-  --ratios TEXT      划分比例 (默认: 0.7:0.2:0.1)
-  --seed INTEGER     随机种子
+  --images TEXT                 图像目录 (必需，检测/分割任务)
+  --labels TEXT                 标签目录 (必需，检测/分割任务)
+  --source TEXT                 源目录 (必需，分类任务)
+  --output TEXT                 输出目录
+  --ratios TEXT                 划分比例 (默认: 0.7:0.2:0.1)
+  --seed INTEGER                随机种子
+  --task TEXT                   任务类型 (detect/segment/classify)
+  --create-empty-labels         为缺失标签的图片创建空标签（负样本）🆕
+  --no-empty-labels             不创建空标签（默认）
 
 # 生成dataset.yaml
 python yolo_cli.py data generate-yaml [OPTIONS]

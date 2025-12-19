@@ -105,12 +105,15 @@ def split_dataset(
     ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
     seed: int = typer.Option(42, "--seed", help="随机种子"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    create_empty_labels: bool = typer.Option(False, "--create-empty-labels/--no-empty-labels", help="为缺失标签的图片创建空标签（负样本）"),
 ):
     """划分数据集为训练集、验证集、测试集
     
     支持两种使用方式:
     1. 检测/分割任务: --images 和 --labels
     2. 分类任务: --source
+    
+    对于检测任务，可以使用 --create-empty-labels 将无标签图片作为负样本
     """
     
     print_section_header("数据集划分")
@@ -126,6 +129,8 @@ def split_dataset(
             raise typer.Exit(1)
         if images_dir or labels_dir:
             print_warning("分类任务不需要 --images 和 --labels 参数，将被忽略")
+        if create_empty_labels:
+            print_warning("分类任务不支持 --create-empty-labels 参数，将被忽略")
         return _split_classify_dataset(source_dir, output_dir, ratios, seed)
     else:
         if not images_dir or not labels_dir:
@@ -133,7 +138,7 @@ def split_dataset(
             raise typer.Exit(1)
         if source_dir:
             print_warning("检测/分割任务不需要 --source 参数，将被忽略")
-        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, ratios, seed, task)
+        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, ratios, seed, task, create_empty_labels)
 
 
 def _split_detect_segment_dataset(
@@ -143,6 +148,7 @@ def _split_detect_segment_dataset(
     ratios: str,
     seed: int,
     task: str,
+    create_empty_labels: bool = False,
 ):
     """检测/分割任务的数据集划分"""
     
@@ -188,6 +194,8 @@ def _split_detect_segment_dataset(
     # 收集图像-标签对
     print_info("扫描图像和标签文件...")
     pairs = []
+    missing_labels = []
+    created_labels = []
     
     for img_file in find_files(images_path, ['.jpg', '.jpeg', '.png']):
         label_file = labels_path / f"{img_file.stem}.txt"
@@ -195,19 +203,42 @@ def _split_detect_segment_dataset(
             # 验证标签格式
             if task == 'segment':
                 if _validate_segment_label(label_file):
-                    pairs.append((img_file, label_file))
+                    pairs.append((img_file, label_file, False))  # False = 非负样本
                 else:
                     print_warning(f"分割标签格式无效: {img_file.name}")
             else:
-                pairs.append((img_file, label_file))
+                pairs.append((img_file, label_file, False))  # False = 非负样本
         else:
-            print_warning(f"标签文件缺失: {img_file.name}")
+            if create_empty_labels:
+                # 创建空标签文件（负样本）
+                try:
+                    label_file.parent.mkdir(parents=True, exist_ok=True)
+                    label_file.touch()  # 创建空文件
+                    pairs.append((img_file, label_file, True))  # True = 负样本
+                    created_labels.append(img_file.name)
+                except Exception as e:
+                    print_warning(f"无法创建标签文件 {label_file.name}: {e}")
+                    missing_labels.append(img_file.name)
+            else:
+                print_warning(f"标签文件缺失: {img_file.name}")
+                missing_labels.append(img_file.name)
     
     if not pairs:
         print_error("未找到有效的图像-标签对")
         raise typer.Exit(1)
     
+    # 统计正负样本
+    positive_count = sum(1 for _, _, is_negative in pairs if not is_negative)
+    negative_count = sum(1 for _, _, is_negative in pairs if is_negative)
+    
     print_info(f"找到 {len(pairs)} 个有效样本")
+    if positive_count > 0:
+        print_info(f"  正样本（有标注）: {positive_count}")
+    if negative_count > 0:
+        print_success(f"  负样本（无标注）: {negative_count} - 已创建空标签文件")
+    if missing_labels and not create_empty_labels:
+        print_warning(f"  跳过的图片（缺失标签）: {len(missing_labels)}")
+        print_info(f"    提示: 使用 --create-empty-labels 将这些图片作为负样本")
     
     # 打乱顺序
     random.shuffle(pairs)
@@ -230,9 +261,11 @@ def _split_detect_segment_dataset(
         task_id = progress.add_task("复制文件", total=total)
         
         stats = {}
+        split_negative_counts = {}
         for split_name, split_pairs in splits.items():
             count = 0
-            for img_file, label_file in split_pairs:
+            negative_count_split = 0
+            for img_file, label_file, is_negative in split_pairs:
                 # 复制图像
                 dst_img = output_path / 'images' / split_name / img_file.name
                 shutil.copy2(img_file, dst_img)
@@ -242,19 +275,34 @@ def _split_detect_segment_dataset(
                 shutil.copy2(label_file, dst_label)
                 
                 count += 1
+                if is_negative:
+                    negative_count_split += 1
                 progress.advance(task_id)
             
             stats[split_name] = count
+            split_negative_counts[split_name] = negative_count_split
     
     # 打印统计信息
     console.print()
-    columns = ["数据集", "样本数", "比例"]
-    rows = [
-        ["训练集", stats['train'], f"{stats['train']/total*100:.1f}%"],
-        ["验证集", stats['val'], f"{stats['val']/total*100:.1f}%"],
-        ["测试集", stats['test'], f"{stats['test']/total*100:.1f}%"],
-        ["总计", total, "100.0%"],
-    ]
+    if negative_count > 0:
+        columns = ["数据集", "样本数", "正样本", "负样本", "比例"]
+        rows = [
+            ["训练集", stats['train'], stats['train'] - split_negative_counts['train'], 
+             split_negative_counts['train'], f"{stats['train']/total*100:.1f}%"],
+            ["验证集", stats['val'], stats['val'] - split_negative_counts['val'], 
+             split_negative_counts['val'], f"{stats['val']/total*100:.1f}%"],
+            ["测试集", stats['test'], stats['test'] - split_negative_counts['test'], 
+             split_negative_counts['test'], f"{stats['test']/total*100:.1f}%"],
+            ["总计", total, positive_count, negative_count, "100.0%"],
+        ]
+    else:
+        columns = ["数据集", "样本数", "比例"]
+        rows = [
+            ["训练集", stats['train'], f"{stats['train']/total*100:.1f}%"],
+            ["验证集", stats['val'], f"{stats['val']/total*100:.1f}%"],
+            ["测试集", stats['test'], f"{stats['test']/total*100:.1f}%"],
+            ["总计", total, "100.0%"],
+        ]
     print_table("数据集划分结果", columns, rows, show_lines=True)
     
     # 保存统计信息
@@ -263,10 +311,23 @@ def _split_detect_segment_dataset(
         f.write("数据集划分统计\n")
         f.write("=" * 50 + "\n")
         f.write(f"总样本数: {total}\n")
+        if negative_count > 0:
+            f.write(f"  正样本（有标注）: {positive_count}\n")
+            f.write(f"  负样本（无标注）: {negative_count}\n")
         f.write(f"训练集: {stats['train']} ({stats['train']/total*100:.1f}%)\n")
+        if negative_count > 0:
+            f.write(f"  正样本: {stats['train'] - split_negative_counts['train']}\n")
+            f.write(f"  负样本: {split_negative_counts['train']}\n")
         f.write(f"验证集: {stats['val']} ({stats['val']/total*100:.1f}%)\n")
+        if negative_count > 0:
+            f.write(f"  正样本: {stats['val'] - split_negative_counts['val']}\n")
+            f.write(f"  负样本: {split_negative_counts['val']}\n")
         f.write(f"测试集: {stats['test']} ({stats['test']/total*100:.1f}%)\n")
+        if negative_count > 0:
+            f.write(f"  正样本: {stats['test'] - split_negative_counts['test']}\n")
+            f.write(f"  负样本: {split_negative_counts['test']}\n")
         f.write(f"随机种子: {seed}\n")
+        f.write(f"创建空标签: {'是' if create_empty_labels else '否'}\n")
     
     print_success(f"数据集划分完成！输出目录: {output_path}")
 
@@ -1186,8 +1247,13 @@ def convert_labelstudio(
     format_type: str = typer.Option("auto", "--format", "-f", help="输入格式 (auto/json/csv)"),
     skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip", help="跳过已下载的图片"),
     max_workers: int = typer.Option(4, "--max-workers", "-w", help="并发下载线程数"),
+    include_negative: bool = typer.Option(True, "--include-negative/--no-negative", help="包含无标注图片作为负样本（检测任务）"),
 ):
-    """从Label Studio导出数据转换为YOLO格式"""
+    """从Label Studio导出数据转换为YOLO格式
+    
+    对于检测任务，无标注的图片将作为负样本被下载并创建空标签文件。
+    负样本有助于减少误报，提高模型鲁棒性（推荐包含10-20%负样本）。
+    """
     
     print_section_header("Label Studio 数据转换")
     
@@ -1234,15 +1300,25 @@ def convert_labelstudio(
     print_info("解析标注数据...")
     try:
         if format_type == "json":
-            parsed_data = LabelStudioConverter.parse_json(input_path)
+            parsed_data = LabelStudioConverter.parse_json(input_path, include_negative=include_negative)
         else:
-            parsed_data = LabelStudioConverter.parse_csv(input_path)
+            parsed_data = LabelStudioConverter.parse_csv(input_path, include_negative=include_negative)
         
         if not parsed_data:
             print_error("未找到有效的标注数据")
             raise typer.Exit(1)
         
-        print_success(f"✓ 解析完成：找到 {len(parsed_data)} 个标注任务")
+        # 统计正负样本
+        positive_count = sum(1 for item in parsed_data if not item.get('is_negative', False))
+        negative_count = sum(1 for item in parsed_data if item.get('is_negative', False))
+        
+        print_success(f"✓ 解析完成：找到 {len(parsed_data)} 个任务")
+        if task == 'detect':
+            print_info(f"  正样本（有标注）: {positive_count}")
+            if include_negative:
+                print_info(f"  负样本（无标注）: {negative_count}")
+                if negative_count > 0:
+                    print_info(f"  负样本比例: {negative_count/len(parsed_data)*100:.1f}%")
     except Exception as e:
         print_error(f"解析失败: {str(e)}")
         raise typer.Exit(1)
@@ -1327,7 +1403,7 @@ def convert_labelstudio(
     if task == 'detect':
         # 检测任务：生成标签文件
         generated_count = 0
-        empty_count = 0
+        negative_count = 0
         
         with create_progress_bar() as progress:
             label_task = progress.add_task("生成标签", total=len(parsed_data))
@@ -1343,7 +1419,7 @@ def convert_labelstudio(
                 
                 label_path = labels_dir / f"{Path(filename).stem}.txt"
                 
-                # 写入标签
+                # 写入标签（负样本创建空文件）
                 with open(label_path, 'w', encoding='utf-8') as f:
                     for ann in item['annotations']:
                         labels = ann.get('labels', [])
@@ -1365,14 +1441,15 @@ def convert_labelstudio(
                 if item['annotations']:
                     generated_count += 1
                 else:
-                    empty_count += 1
+                    negative_count += 1
                 
                 progress.update(label_task, advance=1)
         
         console.print()
-        print_success(f"✓ 生成了 {generated_count} 个标签文件")
-        if empty_count > 0:
-            print_warning(f"有 {empty_count} 个图片没有标注")
+        print_success(f"✓ 生成了 {generated_count} 个标签文件（正样本）")
+        if negative_count > 0:
+            print_success(f"✓ 创建了 {negative_count} 个空标签文件（负样本）")
+            print_info(f"  负样本有助于减少误报，提高模型鲁棒性")
     
     else:  # classify
         # 分类任务：统计每个类别的图片数量
@@ -1423,8 +1500,9 @@ def convert_labelstudio(
         f.write(f"  总计: {len(download_list)}\n")
         if task == 'detect':
             f.write(f"\n标签生成:\n")
-            f.write(f"  生成数量: {generated_count}\n")
-            f.write(f"  空标注: {empty_count}\n")
+            f.write(f"  正样本（有标注）: {generated_count}\n")
+            f.write(f"  负样本（无标注）: {negative_count}\n")
+            f.write(f"  包含负样本: {'是' if include_negative else '否'}\n")
         else:
             f.write(f"\n文件组织:\n")
             f.write(f"  组织数量: {organized_count}\n")

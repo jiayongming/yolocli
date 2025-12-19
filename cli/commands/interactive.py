@@ -97,6 +97,17 @@ def run_data_operations():
                 task_type = select_task_type()
                 max_workers = input_number("并发下载线程数:", default=4, min_value=1, max_value=16)
                 
+                # 对于检测任务，询问是否包含负样本
+                include_negative = True
+                if task_type == 'detect':
+                    console.print()
+                    print_info("💡 负样本说明：")
+                    print_info("   - 无标注的图片可作为负样本训练")
+                    print_info("   - 有助于减少误报，提高模型鲁棒性")
+                    print_info("   - 推荐包含10-20%的负样本")
+                    console.print()
+                    include_negative = confirm_action("包含无标注图片作为负样本?", default=True)
+                
                 if confirm_action(f"确认转换 {task_type} 数据?"):
                     from ..commands.data import convert_labelstudio
                     convert_labelstudio(
@@ -107,7 +118,8 @@ def run_data_operations():
                         task=task_type,
                         format_type='auto',
                         skip_existing=True,
-                        max_workers=max_workers
+                        max_workers=max_workers,
+                        include_negative=include_negative
                     )
             
             elif operation == 'split':
@@ -138,6 +150,14 @@ def run_data_operations():
                     labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
                     ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
                     
+                    # 询问是否为缺失标签创建空文件
+                    console.print()
+                    print_info("💡 负样本处理：")
+                    print_info("   - 如果有图片缺失标签文件，可创建空标签作为负样本")
+                    print_info("   - 负样本有助于减少误报，提高模型鲁棒性")
+                    console.print()
+                    create_empty = confirm_action("为缺失标签的图片创建空标签文件?", default=False)
+                    
                     if confirm_action("确认划分数据集?"):
                         from ..commands.data import split_dataset
                         split_dataset(
@@ -147,7 +167,8 @@ def run_data_operations():
                             output_dir=None,
                             ratios=ratios,
                             seed=42,
-                            task=task_type
+                            task=task_type,
+                            create_empty_labels=create_empty
                         )
             
             elif operation == 'generate-yaml':
