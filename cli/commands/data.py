@@ -1116,6 +1116,18 @@ def dataset_stats(
     
     print_section_header("数据集统计")
     
+    # 规范化参数（处理从代码直接调用的情况）
+    # 当函数被其他代码直接调用时，typer 的默认值可能是 OptionInfo 对象
+    from typer.models import OptionInfo
+    if isinstance(data_path, OptionInfo):
+        data_path = None
+    if isinstance(detailed, OptionInfo):
+        detailed = False
+    if isinstance(task, OptionInfo):
+        task = "detect"
+    if isinstance(positive_classes, OptionInfo):
+        positive_classes = None
+    
     # 确定数据集路径
     if data_path is None:
         config = ConfigManager()
@@ -1150,7 +1162,7 @@ def dataset_stats(
         # 统计正负样本
         if is_classify:
             # 分类任务：需要指定正类
-            if positive_classes:
+            if positive_classes and isinstance(positive_classes, str):
                 print_section_header("正负样本统计")
                 positive_class_list = [c.strip() for c in positive_classes.split(',') if c.strip()]
                 _print_positive_negative_stats_classify(data_path, positive_class_list)

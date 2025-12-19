@@ -288,7 +288,7 @@ def quick_train(
             print_step(current_step, total_steps, "数据统计分析")
             console.print()
             
-            dataset_stats(data_path=str(output_dir), detailed=True, task=task)
+            dataset_stats(data_path=str(output_dir), detailed=True, task=task, positive_classes=None)
             
             print_success("✓ 数据统计完成")
             console.print()
