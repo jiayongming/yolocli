@@ -11,9 +11,10 @@
 
 - ⚡ **一键训练**: 自动完成数据处理、模型下载和训练的完整流程
 - 🎯 **完整工作流**: 涵盖模型下载、数据处理、训练、验证、推理、导出全流程
-- 📊 **模型验证**: 全面的性能评估工具，支持模型对比和详细指标分析 🆕
+- 📊 **模型验证增强**: 全面的性能评估，包含准确率、精确率、召回率、F1值等完整指标 🆕
+- 📈 **灵活数据划分**: 支持按比例或按样本数划分数据集，适合不同实验需求 🆕
 - 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传
-- 🎮 **交互式模式**: 友好的交互式界面，引导式操作，适合新手
+- 🎮 **交互式模式**: 友好的交互式界面，引导式操作，支持所有新功能 🆕
 - 🔄 **多版本支持**: 同时支持YOLOv8和YOLO11，自动版本管理
 - 🎯 **多任务支持**: 支持检测、分割、分类三种任务类型
 - 🎨 **美化输出**: 使用Rich库提供彩色输出、进度条、表格等
@@ -22,6 +23,24 @@
 - 📊 **数据增强**: 内置多种数据增强策略（保守/平衡/激进）
 - 🔧 **多GPU支持**: 支持单卡、多卡训练，适合共享服务器环境
 - 📦 **易于扩展**: 模块化设计，易于添加新功能
+
+## 🆕 最新更新 (v1.1.0 - 2025-12-22)
+
+### 📊 验证指标全面增强
+- ✅ 新增 **F1 分数**、**准确率 (Accuracy)** 指标
+- ✅ 每个类别的完整指标（Precision, Recall, F1, AP）
+- ✅ 推理速度详细统计
+- ✅ 增强的JSON输出，便于统计分析
+- ✅ 模型对比功能增强
+
+### 📈 数据集划分新功能
+- ✅ 新增 **按样本数划分** 功能 (`--counts 100:30:10`)
+- ✅ 保留原有 **按比例划分** 功能 (`--ratios 0.7:0.2:0.1`)
+- ✅ 智能处理样本数不足情况
+- ✅ 交互式模式完整支持两种划分方式
+- ✅ 适合快速实验和数据增量训练
+
+---
 
 ## 📋 目录
 
@@ -198,6 +217,13 @@ python yolo_cli.py quick train \
 python yolo_cli.py interactive-mode
 ```
 
+**交互式模式特色** 🆕：
+- ✅ 图形化菜单选择，无需记忆命令
+- ✅ 智能参数提示和默认值
+- ✅ **数据集划分支持两种方式**：按比例或按样本数
+- ✅ 每步操作前确认，避免误操作
+- ✅ 实时显示操作进度和结果
+
 ### 命令行模式
 
 #### 1. 下载预训练模型
@@ -214,11 +240,17 @@ python yolo_cli.py model download --version yolo11 --all
 
 **检测/分割任务：**
 ```bash
-# 划分数据集
+# 方式1: 按比例划分（传统方式）
 python yolo_cli.py data split \
   --images data/raw/images \
   --labels data/raw/labels \
   --ratios 0.7:0.2:0.1
+
+# 方式2: 按样本数划分 🆕
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --counts 100:30:10
 
 # 生成dataset.yaml
 python yolo_cli.py data generate-yaml \
@@ -231,11 +263,17 @@ python yolo_cli.py data verify --path data/processed
 
 **分类任务：**
 ```bash
-# 划分按类别组织的数据集
+# 方式1: 按比例划分
 python yolo_cli.py data split \
-  --source-dir data/raw/images \
+  --source data/raw/images \
   --task classify \
   --ratios 0.7:0.2:0.1
+
+# 方式2: 按样本数划分 🆕
+python yolo_cli.py data split \
+  --source data/raw/images \
+  --task classify \
+  --counts 200:50:20
 
 # 生成dataset.yaml
 python yolo_cli.py data generate-yaml \
@@ -692,7 +730,9 @@ ls data/raw/labels/*.txt | wc -l
 
 #### 2.1 划分数据集
 
-将原始数据划分为训练集、验证集和测试集：
+将原始数据划分为训练集、验证集和测试集。**支持两种划分方式** 🆕：
+
+**方式1: 按比例划分（传统方式）**
 
 ```bash
 python yolo_cli.py data split \
@@ -703,12 +743,43 @@ python yolo_cli.py data split \
   --seed 42
 ```
 
+**方式2: 按样本数划分（新功能）** 🆕
+
+适用于从大数据集中抽取固定数量的样本：
+
+```bash
+# 从300个样本中抽取：训练集100个，验证集30个，测试集10个
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --output data/processed \
+  --counts 100:30:10 \
+  --seed 42
+```
+
 **参数说明：**
 - `--images`: 原始图片目录
 - `--labels`: 原始标签目录
 - `--output`: 输出目录（默认：data/processed）
-- `--ratios`: 划分比例，格式为 train:val:test（默认：0.7:0.2:0.1）
+- `--ratios`: 划分比例，格式为 train:val:test（如：0.7:0.2:0.1）
+- `--counts`: 划分样本数，格式为 train:val:test（如：100:30:10）🆕
 - `--seed`: 随机种子，保证可重现性
+
+**使用场景建议：**
+
+| 场景 | 使用方式 | 示例 |
+|------|---------|------|
+| 使用全部数据 | `--ratios` | `--ratios 0.7:0.2:0.1` |
+| 快速原型验证 | `--counts` | `--counts 50:15:5` |
+| 数据增量实验 | `--counts` | 第1轮: `--counts 100:30:10`<br>第2轮: `--counts 200:60:20` |
+| 从大数据集抽样 | `--counts` | 从3000个中抽取: `--counts 100:30:10` |
+
+**注意事项：**
+- `--ratios` 和 `--counts` 二选一，不能同时使用
+- 如果两者都不指定，默认使用 `--ratios 0.7:0.2:0.1`
+- 使用 `--counts` 时，如果请求的样本数大于可用样本数，会自动使用所有样本并保持比例
+- 使用 `--counts` 时，如果请求的样本数小于可用样本数，会随机抽取指定数量的样本
+- 使用 `--seed` 参数确保每次划分结果一致，便于复现实验
 
 执行后，会生成以下目录结构：
 
@@ -1489,6 +1560,20 @@ python yolo_cli.py interactive
 - 📊 实时反馈：显示操作结果和进度
 - 📈 数据统计：支持详细统计，包含正负样本分布
 
+**在交互式模式中划分数据集** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `划分数据集`
+3. 选择任务类型（detect/segment/classify）
+4. **选择划分方式**：
+   - **按比例划分**：适合常规训练，使用全部数据
+   - **按样本数划分**：适合快速实验，从数据集中抽取固定数量的样本 🆕
+5. 根据选择的方式输入参数：
+   - 按比例：输入 `0.7:0.2:0.1`（train:val:test）
+   - 按样本数：输入 `100:30:10`（train:val:test）
+6. 对于检测/分割任务，可选择是否为缺失标签创建空文件（负样本）
+7. 确认后自动完成数据集划分
+
 **在交互式模式中使用数据统计**：
 
 1. 启动交互式模式：`python yolo_cli.py interactive-mode`
@@ -1925,11 +2010,16 @@ python yolo_cli.py data split [OPTIONS]
   --labels TEXT                 标签目录 (必需，检测/分割任务)
   --source TEXT                 源目录 (必需，分类任务)
   --output TEXT                 输出目录
-  --ratios TEXT                 划分比例 (默认: 0.7:0.2:0.1)
+  --ratios TEXT                 划分比例 (如: 0.7:0.2:0.1)
+  --counts TEXT                 划分样本数 (如: 100:30:10) 🆕
   --seed INTEGER                随机种子
   --task TEXT                   任务类型 (detect/segment/classify)
-  --create-empty-labels         为缺失标签的图片创建空标签（负样本）🆕
+  --create-empty-labels         为缺失标签的图片创建空标签（负样本）
   --no-empty-labels             不创建空标签（默认）
+
+注意:
+  - --ratios 和 --counts 二选一，不能同时使用
+  - 默认使用 --ratios 0.7:0.2:0.1
 
 # 生成dataset.yaml
 python yolo_cli.py data generate-yaml [OPTIONS]
@@ -2079,8 +2169,24 @@ python yolo_cli.py detect webcam MODEL [OPTIONS]
 #### `interactive` - 交互式模式
 
 ```bash
-python yolo_cli.py interactive
+python yolo_cli.py interactive-mode
 ```
+
+**功能亮点**：
+- 📋 图形化菜单，无需记忆命令
+- 🎯 智能参数提示和默认值
+- 📊 **数据集划分支持两种方式** 🆕：
+  - 按比例划分：使用全部数据（如：0.7:0.2:0.1）
+  - 按样本数划分：抽取固定数量（如：100:30:10）
+- ✅ 每步操作前确认
+- 🔄 支持所有命令行功能
+
+**数据集划分交互流程**：
+1. 选择任务类型（detect/segment/classify）
+2. **选择划分方式**（按比例/按样本数）🆕
+3. 输入相应参数
+4. 对于检测任务，可选择是否包含负样本
+5. 确认并执行
 
 ## 💡 使用示例
 
@@ -2102,6 +2208,57 @@ python yolo_cli.py quick train \
 python yolo_cli.py validate run results/training/best.pt
 
 # 完成！模型保存在 results/training/*/weights/best.pt
+```
+
+### 示例1-2：从大数据集中抽取样本训练 🆕
+
+**命令行方式**：
+
+```bash
+# 场景：有300个样本，但只想用其中140个来训练
+# 目标：训练集100个，验证集30个，测试集10个
+
+# 1. 按样本数划分数据集
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --counts 100:30:10
+
+# 2. 生成配置和训练（后续步骤相同）
+python yolo_cli.py data generate-yaml --path data/processed
+python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+```
+
+**交互式方式** 🎮：
+
+```bash
+# 启动交互式模式
+python yolo_cli.py interactive-mode
+
+# 在交互界面中：
+# 1. 选择：数据处理
+# 2. 选择：划分数据集
+# 3. 选择任务类型：detect
+# 4. 选择划分方式：按样本数划分 (推荐用于快速实验)
+# 5. 输入样本数：100:30:10
+# 6. 选择是否创建空标签（负样本）：根据需要
+# 7. 确认执行
+
+# 输出示例：
+# ℹ 划分方式: 按样本数
+# ℹ 目标样本数: 训练=100, 验证=30, 测试=10
+# ℹ 找到 300 个有效样本
+# ℹ 将从 300 个样本中随机抽取 140 个
+# 
+# 数据集划分结果
+# ┏━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+# ┃ 数据集 ┃ 样本数 ┃ 比例   ┃
+# ┡━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+# │ 训练集 │ 100    │ 71.4%  │
+# │ 验证集 │ 30     │ 21.4%  │
+# │ 测试集 │ 10     │ 7.1%   │
+# │ 总计   │ 140    │ 100.0% │
+# └────────┴────────┴────────┘
 ```
 
 ### 示例2：完整的训练流程（逐步控制）
@@ -2143,7 +2300,35 @@ python yolo_cli.py detect image \
   test.jpg
 ```
 
-### 示例2：使用配置文件训练
+### 示例2：使用交互式模式（推荐新手）🎮
+
+交互式模式提供图形化菜单，特别适合新手和需要精确控制的场景：
+
+```bash
+# 启动交互式模式
+python yolo_cli.py interactive-mode
+
+# 典型操作流程：
+# 1. 主菜单 → 选择"数据处理"
+# 2. 数据操作 → 选择"划分数据集"
+# 3. 任务类型 → 选择"detect"
+# 4. 划分方式 → 选择"按样本数划分" (快速实验)
+# 5. 输入样本数 → 100:30:10 (训练:验证:测试)
+# 6. 负样本处理 → 根据需要选择
+# 7. 确认执行 → 自动完成划分
+
+# 后续操作：
+# 8. 返回主菜单 → 选择"训练模型"
+# 9. 按提示完成模型训练
+```
+
+**交互式模式优势**：
+- 🎯 无需记忆命令参数
+- 📋 清晰的步骤引导
+- 🔄 支持按比例或按样本数划分（新功能）
+- ✅ 每步确认，避免误操作
+
+### 示例3：使用配置文件训练
 
 ```bash
 # 生成小数据集配置
@@ -2154,7 +2339,7 @@ python yolo_cli.py train config \
 # 使用配置文件训练（需要手动编辑脚本或使用配置文件中的参数）
 ```
 
-### 示例3：批量处理和导出
+### 示例4：批量处理和导出
 
 ```bash
 # 批量检测所有测试图片
@@ -2169,7 +2354,7 @@ python yolo_cli.py model export \
   --format onnx torchscript tflite
 ```
 
-### 示例4：不同数据集大小的推荐配置
+### 示例5：不同数据集大小的推荐配置
 
 ```bash
 # 小数据集 (<500张)

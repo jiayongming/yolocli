@@ -128,27 +128,78 @@ def run_data_operations():
                 
                 task_type = select_task_type()
                 
+                # 选择划分方式
+                from ..ui.prompts import select_option
+                console.print()
+                print_info("📊 数据集划分方式：")
+                print_info("   • 按比例划分：使用全部数据，按比例自动计算样本数")
+                print_info("   • 按样本数划分：从数据集中抽取固定数量的样本")
+                console.print()
+                
+                split_mode = select_option(
+                    "选择划分方式:",
+                    choices=[
+                        "按比例划分 (推荐用于常规训练)",
+                        "按样本数划分 (推荐用于快速实验)",
+                    ]
+                )
+                
+                use_counts = "样本数" in split_mode
+                
                 if task_type == 'classify':
                     # 分类任务
                     source_dir = input_path("源目录 (已按类别组织):", default="data/raw/images", must_exist=False)
-                    ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
                     
-                    if confirm_action("确认划分分类数据集?"):
-                        from ..commands.data import split_dataset
-                        split_dataset(
-                            images_dir=None,
-                            labels_dir=None,
-                            source_dir=source_dir,
-                            output_dir=None,
-                            ratios=ratios,
-                            seed=42,
-                            task=task_type
-                        )
+                    if use_counts:
+                        console.print()
+                        print_info("💡 按样本数划分说明：")
+                        print_info("   - 输入格式：train:val:test (如: 200:50:30)")
+                        print_info("   - 从所有类别中随机抽取指定总数的样本")
+                        console.print()
+                        counts = input_text("样本数 (train:val:test):", default="100:30:10")
+                        
+                        if confirm_action("确认划分分类数据集?"):
+                            from ..commands.data import split_dataset
+                            split_dataset(
+                                images_dir=None,
+                                labels_dir=None,
+                                source_dir=source_dir,
+                                output_dir=None,
+                                ratios=None,
+                                counts=counts,
+                                seed=42,
+                                task=task_type
+                            )
+                    else:
+                        ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
+                        
+                        if confirm_action("确认划分分类数据集?"):
+                            from ..commands.data import split_dataset
+                            split_dataset(
+                                images_dir=None,
+                                labels_dir=None,
+                                source_dir=source_dir,
+                                output_dir=None,
+                                ratios=ratios,
+                                counts=None,
+                                seed=42,
+                                task=task_type
+                            )
                 else:
                     # 检测/分割任务
                     images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
                     labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
-                    ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
+                    
+                    if use_counts:
+                        console.print()
+                        print_info("💡 按样本数划分说明：")
+                        print_info("   - 输入格式：train:val:test (如: 100:30:10)")
+                        print_info("   - 从所有样本中随机抽取指定数量")
+                        print_info("   - 适合快速原型验证和数据增量实验")
+                        console.print()
+                        counts = input_text("样本数 (train:val:test):", default="100:30:10")
+                    else:
+                        ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
                     
                     # 询问是否为缺失标签创建空文件
                     console.print()
@@ -165,7 +216,8 @@ def run_data_operations():
                             labels_dir=labels_dir,
                             source_dir=None,
                             output_dir=None,
-                            ratios=ratios,
+                            ratios=ratios if not use_counts else None,
+                            counts=counts if use_counts else None,
                             seed=42,
                             task=task_type,
                             create_empty_labels=create_empty

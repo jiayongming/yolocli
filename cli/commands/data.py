@@ -102,7 +102,8 @@ def split_dataset(
     labels_dir: Optional[str] = typer.Option(None, "--labels", "-l", help="标签目录 (检测/分割任务)"),
     source_dir: Optional[str] = typer.Option(None, "--source", "-s", help="源目录 (分类任务，已按类别组织)"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
-    ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="划分比例 (train:val:test)"),
+    ratios: Optional[str] = typer.Option(None, "--ratios", "-r", help="划分比例 (train:val:test，如: 0.7:0.2:0.1)"),
+    counts: Optional[str] = typer.Option(None, "--counts", "-c", help="划分样本数 (train:val:test，如: 100:30:10)"),
     seed: int = typer.Option(42, "--seed", help="随机种子"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     create_empty_labels: bool = typer.Option(False, "--create-empty-labels/--no-empty-labels", help="为缺失标签的图片创建空标签（负样本）"),
@@ -113,7 +114,24 @@ def split_dataset(
     1. 检测/分割任务: --images 和 --labels
     2. 分类任务: --source
     
+    支持两种划分方式（二选一）:
+    1. 按比例划分: --ratios 0.7:0.2:0.1 (默认)
+    2. 按样本数划分: --counts 100:30:10
+    
     对于检测任务，可以使用 --create-empty-labels 将无标签图片作为负样本
+    
+    示例:
+    \b
+      # 按比例划分（传统方式）
+      yolo-cli data split --images data/raw/images --labels data/raw/labels --ratios 0.7:0.2:0.1
+      
+    \b
+      # 按样本数划分（新功能）
+      yolo-cli data split --images data/raw/images --labels data/raw/labels --counts 100:30:10
+      
+    \b
+      # 分类任务按样本数划分
+      yolo-cli data split --source data/raw/images --task classify --counts 200:50:20
     """
     
     print_section_header("数据集划分")
@@ -121,6 +139,20 @@ def split_dataset(
     # 验证任务类型
     task = validate_task_type(task)
     print_info(f"任务类型: {task}")
+    
+    # 验证划分参数：ratios 和 counts 只能选一个
+    if ratios and counts:
+        print_error("--ratios 和 --counts 不能同时使用，请选择其中一种划分方式")
+        raise typer.Exit(1)
+    
+    # 如果都没有指定，使用默认比例
+    if not ratios and not counts:
+        ratios = "0.7:0.2:0.1"
+        print_info("使用默认划分比例: 0.7:0.2:0.1")
+    
+    # 确定划分方式
+    split_mode = "counts" if counts else "ratios"
+    split_param = counts if counts else ratios
     
     # 根据任务类型验证参数
     if task == 'classify':
@@ -131,26 +163,31 @@ def split_dataset(
             print_warning("分类任务不需要 --images 和 --labels 参数，将被忽略")
         if create_empty_labels:
             print_warning("分类任务不支持 --create-empty-labels 参数，将被忽略")
-        return _split_classify_dataset(source_dir, output_dir, ratios, seed)
+        return _split_classify_dataset(source_dir, output_dir, split_param, seed, split_mode)
     else:
         if not images_dir or not labels_dir:
             print_error("检测/分割任务需要指定 --images 和 --labels 参数")
             raise typer.Exit(1)
         if source_dir:
             print_warning("检测/分割任务不需要 --source 参数，将被忽略")
-        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, ratios, seed, task, create_empty_labels)
+        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, split_param, seed, task, create_empty_labels, split_mode)
 
 
 def _split_detect_segment_dataset(
     images_dir: str,
     labels_dir: str,
     output_dir: Optional[str],
-    ratios: str,
+    split_param: str,
     seed: int,
     task: str,
     create_empty_labels: bool = False,
+    split_mode: str = "ratios",
 ):
-    """检测/分割任务的数据集划分"""
+    """检测/分割任务的数据集划分
+    
+    Args:
+        split_mode: "ratios" 按比例划分, "counts" 按样本数划分
+    """
     
     images_path = Path(images_dir)
     labels_path = Path(labels_dir)
@@ -175,13 +212,35 @@ def _split_detect_segment_dataset(
     print_info(f"标签目录: {labels_path}")
     print_info(f"输出目录: {output_path}")
     
-    # 解析比例
-    try:
-        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
-        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
-    except ValueError as e:
-        print_error(f"比例格式错误: {e}")
-        raise typer.Exit(1)
+    # 解析划分参数
+    train_count = val_count = test_count = None
+    train_ratio = val_ratio = test_ratio = None
+    
+    if split_mode == "ratios":
+        # 按比例划分
+        try:
+            train_ratio, val_ratio, test_ratio = parse_ratio_string(split_param, 3)
+            print_info(f"划分方式: 按比例")
+            print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
+        except ValueError as e:
+            print_error(f"比例格式错误: {e}")
+            raise typer.Exit(1)
+    else:
+        # 按样本数划分
+        try:
+            parts = split_param.split(':')
+            if len(parts) != 3:
+                raise ValueError("必须提供3个数值（train:val:test）")
+            train_count = int(parts[0])
+            val_count = int(parts[1])
+            test_count = int(parts[2])
+            if train_count < 0 or val_count < 0 or test_count < 0:
+                raise ValueError("样本数不能为负数")
+            print_info(f"划分方式: 按样本数")
+            print_info(f"目标样本数: 训练={train_count}, 验证={val_count}, 测试={test_count}")
+        except ValueError as e:
+            print_error(f"样本数格式错误: {e}")
+            raise typer.Exit(1)
     
     # 设置随机种子
     random.seed(seed)
@@ -245,8 +304,29 @@ def _split_detect_segment_dataset(
     
     # 计算划分点
     total = len(pairs)
-    train_end = int(total * train_ratio)
-    val_end = train_end + int(total * val_ratio)
+    
+    if split_mode == "ratios":
+        # 按比例划分
+        train_end = int(total * train_ratio)
+        val_end = train_end + int(total * val_ratio)
+    else:
+        # 按样本数划分
+        total_requested = train_count + val_count + test_count
+        if total_requested > total:
+            print_warning(f"请求的总样本数({total_requested})大于可用样本数({total})")
+            print_info(f"将自动调整为使用所有 {total} 个样本，保持比例不变")
+            # 按比例缩放
+            scale = total / total_requested
+            train_end = int(train_count * scale)
+            val_end = train_end + int(val_count * scale)
+        else:
+            train_end = train_count
+            val_end = train_end + val_count
+            if total_requested < total:
+                print_info(f"总样本数({total}) > 请求样本数({total_requested}), 将随机抽取 {total_requested} 个样本")
+                # 只使用前 total_requested 个样本
+                pairs = pairs[:total_requested]
+                total = total_requested
     
     splits = {
         'train': pairs[:train_end],
@@ -310,6 +390,11 @@ def _split_detect_segment_dataset(
     with open(stats_file, 'w', encoding='utf-8') as f:
         f.write("数据集划分统计\n")
         f.write("=" * 50 + "\n")
+        f.write(f"划分方式: {'按样本数' if split_mode == 'counts' else '按比例'}\n")
+        if split_mode == "counts":
+            f.write(f"目标样本数: 训练={train_count}, 验证={val_count}, 测试={test_count}\n")
+        else:
+            f.write(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}\n")
         f.write(f"总样本数: {total}\n")
         if negative_count > 0:
             f.write(f"  正样本（有标注）: {positive_count}\n")
@@ -335,10 +420,15 @@ def _split_detect_segment_dataset(
 def _split_classify_dataset(
     source_dir: str,
     output_dir: Optional[str],
-    ratios: str,
+    split_param: str,
     seed: int,
+    split_mode: str = "ratios",
 ):
-    """分类任务的数据集划分"""
+    """分类任务的数据集划分
+    
+    Args:
+        split_mode: "ratios" 按比例划分, "counts" 按样本数划分
+    """
     
     source_path = Path(source_dir)
     
@@ -368,13 +458,35 @@ def _split_classify_dataset(
     print_info(f"类别数量: {len(classes)}")
     print_info(f"类别: {', '.join(classes)}")
     
-    # 解析比例
-    try:
-        train_ratio, val_ratio, test_ratio = parse_ratio_string(ratios, 3)
-        print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
-    except ValueError as e:
-        print_error(f"比例格式错误: {e}")
-        raise typer.Exit(1)
+    # 解析划分参数
+    train_count = val_count = test_count = None
+    train_ratio = val_ratio = test_ratio = None
+    
+    if split_mode == "ratios":
+        # 按比例划分
+        try:
+            train_ratio, val_ratio, test_ratio = parse_ratio_string(split_param, 3)
+            print_info(f"划分方式: 按比例")
+            print_info(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}")
+        except ValueError as e:
+            print_error(f"比例格式错误: {e}")
+            raise typer.Exit(1)
+    else:
+        # 按样本数划分（针对整个数据集）
+        try:
+            parts = split_param.split(':')
+            if len(parts) != 3:
+                raise ValueError("必须提供3个数值（train:val:test）")
+            train_count = int(parts[0])
+            val_count = int(parts[1])
+            test_count = int(parts[2])
+            if train_count < 0 or val_count < 0 or test_count < 0:
+                raise ValueError("样本数不能为负数")
+            print_info(f"划分方式: 按样本数（总样本数）")
+            print_info(f"目标样本数: 训练={train_count}, 验证={val_count}, 测试={test_count}")
+        except ValueError as e:
+            print_error(f"样本数格式错误: {e}")
+            raise typer.Exit(1)
     
     # 设置随机种子
     random.seed(seed)
@@ -390,34 +502,94 @@ def _split_classify_dataset(
     
     print_info("开始划分数据...")
     
-    # 处理每个类别
-    for class_name in classes:
-        class_dir = source_path / class_name
-        images = list(class_dir.glob('*'))
-        images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+    # 如果是按样本数划分，需要先收集所有图片并计算总数
+    if split_mode == "counts":
+        # 收集所有图片
+        all_images = []
+        for class_name in classes:
+            class_dir = source_path / class_name
+            images = list(class_dir.glob('*'))
+            images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+            for img in images:
+                all_images.append((img, class_name))
         
-        # 打乱顺序
-        random.shuffle(images)
+        total_available = len(all_images)
+        total_requested = train_count + val_count + test_count
         
-        # 计算划分点
-        total = len(images)
-        train_end = int(total * train_ratio)
-        val_end = train_end + int(total * val_ratio)
+        print_info(f"总可用样本数: {total_available}")
         
-        # 划分数据
-        splits_data = {
-            'train': images[:train_end],
-            'val': images[train_end:val_end],
-            'test': images[val_end:]
-        }
+        if total_requested > total_available:
+            print_warning(f"请求的总样本数({total_requested})大于可用样本数({total_available})")
+            print_info(f"将自动调整为使用所有 {total_available} 个样本，保持比例不变")
+            # 按比例缩放
+            scale = total_available / total_requested
+            actual_train = int(train_count * scale)
+            actual_val = int(val_count * scale)
+            actual_test = total_available - actual_train - actual_val
+        else:
+            actual_train = train_count
+            actual_val = val_count
+            actual_test = test_count
+            if total_requested < total_available:
+                print_info(f"将从 {total_available} 个样本中随机抽取 {total_requested} 个")
+        
+        # 打乱所有图片
+        random.shuffle(all_images)
+        
+        # 按样本数划分
+        train_images = all_images[:actual_train]
+        val_images = all_images[actual_train:actual_train + actual_val]
+        test_images = all_images[actual_train + actual_val:actual_train + actual_val + actual_test]
         
         # 复制文件
-        for split_name, split_images in splits_data.items():
-            for img_path in split_images:
-                dst_path = output_path / 'images' / split_name / class_name / img_path.name
-                shutil.copy2(img_path, dst_path)
-                stats[class_name][split_name] += 1
-                total_stats[split_name] += 1
+        for img_path, class_name in train_images:
+            dst_path = output_path / 'images' / 'train' / class_name / img_path.name
+            shutil.copy2(img_path, dst_path)
+            stats[class_name]['train'] += 1
+            total_stats['train'] += 1
+        
+        for img_path, class_name in val_images:
+            dst_path = output_path / 'images' / 'val' / class_name / img_path.name
+            shutil.copy2(img_path, dst_path)
+            stats[class_name]['val'] += 1
+            total_stats['val'] += 1
+        
+        for img_path, class_name in test_images:
+            dst_path = output_path / 'images' / 'test' / class_name / img_path.name
+            shutil.copy2(img_path, dst_path)
+            stats[class_name]['test'] += 1
+            total_stats['test'] += 1
+    
+    else:
+        # 按比例划分（原有逻辑）
+        # 处理每个类别
+        for class_name in classes:
+            class_dir = source_path / class_name
+            images = list(class_dir.glob('*'))
+            images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+            
+            # 打乱顺序
+            random.shuffle(images)
+            
+            # 计算划分点
+            total = len(images)
+            train_end = int(total * train_ratio)
+            val_end = train_end + int(total * val_ratio)
+            
+            # 划分数据
+            splits_data = {
+                'train': images[:train_end],
+                'val': images[train_end:val_end],
+                'test': images[val_end:]
+            }
+            
+            # 复制文件
+            for split_name, split_images in splits_data.items():
+                for img_path in split_images:
+                    dst_path = output_path / 'images' / split_name / class_name / img_path.name
+                    shutil.copy2(img_path, dst_path)
+                    stats[class_name][split_name] += 1
+                    total_stats[split_name] += 1
     
     # 打印统计信息
     console.print()
@@ -444,7 +616,29 @@ def _split_classify_dataset(
         for class_name in classes:
             f.write(f"{class_name}\n")
     
+    # 保存统计信息
+    stats_file = output_path / 'split_statistics.txt'
+    with open(stats_file, 'w', encoding='utf-8') as f:
+        f.write("分类数据集划分统计\n")
+        f.write("=" * 50 + "\n")
+        f.write(f"划分方式: {'按样本数' if split_mode == 'counts' else '按比例'}\n")
+        if split_mode == "counts":
+            f.write(f"目标样本数: 训练={train_count}, 验证={val_count}, 测试={test_count}\n")
+        else:
+            f.write(f"划分比例: 训练={train_ratio:.1%}, 验证={val_ratio:.1%}, 测试={test_ratio:.1%}\n")
+        f.write(f"总样本数: {total_samples}\n")
+        f.write(f"类别数量: {len(classes)}\n")
+        f.write(f"训练集: {total_stats['train']} ({total_stats['train']/total_samples*100:.1f}%)\n")
+        f.write(f"验证集: {total_stats['val']} ({total_stats['val']/total_samples*100:.1f}%)\n")
+        f.write(f"测试集: {total_stats['test']} ({total_stats['test']/total_samples*100:.1f}%)\n")
+        f.write(f"\n各类别详细统计:\n")
+        for class_name in classes:
+            total_class = sum(stats[class_name].values())
+            f.write(f"  {class_name}: train={stats[class_name]['train']}, val={stats[class_name]['val']}, test={stats[class_name]['test']} (总计{total_class})\n")
+        f.write(f"随机种子: {seed}\n")
+    
     print_success(f"✓ 类别列表已保存: {classes_file}")
+    print_success(f"✓ 统计信息已保存: {stats_file}")
     print_success(f"✓ 分类数据集划分完成！输出目录: {output_path}")
 
 
