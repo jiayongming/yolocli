@@ -1006,9 +1006,16 @@ def compare_models(
                 plots=False,
             )
             
+            # 尝试获取相对路径
+            try:
+                relative_path = str(model_path.relative_to(Path.cwd()))
+            except (ValueError, AttributeError):
+                relative_path = str(model_path)
+            
             all_results.append({
                 'name': model_path.name,
                 'path': str(model_path),
+                'relative_path': relative_path,
                 'results': results,
             })
             
@@ -1026,20 +1033,48 @@ def compare_models(
     console.print()
     print_section_header("性能比较结果")
     
+    # 检查是否有重名模型
+    model_names = [r['name'] for r in all_results]
+    has_duplicate_names = len(model_names) != len(set(model_names))
+    
     comparison_table = Table(show_header=True, header_style="bold cyan")
-    comparison_table.add_column("模型", style="cyan", width=30)
+    
+    # 如果有重名，显示完整路径；否则只显示文件名
+    if has_duplicate_names:
+        comparison_table.add_column("模型路径", style="cyan", width=50)
+    else:
+        comparison_table.add_column("模型", style="cyan", width=30)
+    
     comparison_table.add_column("mAP@0.5", style="green", justify="right", width=10)
     comparison_table.add_column("mAP@0.5:0.95", style="green", justify="right", width=12)
     comparison_table.add_column("Precision", style="yellow", justify="right", width=10)
     comparison_table.add_column("Recall", style="yellow", justify="right", width=10)
     comparison_table.add_column("F1", style="blue", justify="right", width=10)
+    comparison_table.add_column("Accuracy", style="magenta", justify="right", width=10)
+    comparison_table.add_column("速度(ms)", style="dim", justify="right", width=12)
     
     best_map50 = -1
-    best_model = None
+    best_model_display = None
+    best_model_path = None
     best_f1 = -1
-    best_f1_model = None
+    best_f1_model_display = None
+    best_f1_model_path = None
+    best_accuracy = -1
+    best_accuracy_model_display = None
+    best_accuracy_model_path = None
     
     for result in all_results:
+        # 确定显示名称
+        display_name = result['path'] if has_duplicate_names else result['name']
+        
+        # 计算推理速度
+        total_speed = 0.0
+        if hasattr(result['results'], 'speed'):
+            speed = result['results'].speed
+            if isinstance(speed, dict):
+                total_speed = sum(speed.values())
+        
+        # 处理检测任务
         if hasattr(result['results'], 'box') and result['results'].box:
             box_metrics = result['results'].box
             map50 = safe_float(box_metrics.map50)
@@ -1047,30 +1082,176 @@ def compare_models(
             recall = safe_float(box_metrics.mr)
             f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
             
+            # 计算准确率（与单一模型验证一致的三级计算方法）
+            accuracy = None
+            
+            # 方法1: 从混淆矩阵计算
+            try:
+                if hasattr(box_metrics, 'confusion_matrix') and box_metrics.confusion_matrix is not None:
+                    cm = box_metrics.confusion_matrix
+                    if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
+                        matrix = cm.matrix
+                        total = safe_float(matrix.sum())
+                        correct = safe_float(np.trace(matrix))
+                        if total > 0:
+                            accuracy = correct / total
+            except:
+                pass
+            
+            # 方法2: 从precision和recall推导
+            if accuracy is None and precision > 0 and recall > 0:
+                accuracy = (precision * recall) / (precision + recall - precision * recall)
+            
+            # 方法3: 使用mAP@0.5作为后备
+            if accuracy is None:
+                accuracy = map50
+            
+            # 更新最佳模型
             if map50 > best_map50:
                 best_map50 = map50
-                best_model = result['name']
+                best_model_display = display_name
+                best_model_path = result['path']
             
             if f1_score > best_f1:
                 best_f1 = f1_score
-                best_f1_model = result['name']
+                best_f1_model_display = display_name
+                best_f1_model_path = result['path']
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_accuracy_model_display = display_name
+                best_accuracy_model_path = result['path']
             
             comparison_table.add_row(
-                result['name'],
+                display_name,
                 f"{map50:.4f}",
                 f"{safe_float(box_metrics.map):.4f}",
                 f"{precision:.4f}",
                 f"{recall:.4f}",
                 f"{f1_score:.4f}",
+                f"{accuracy:.4f}",
+                f"{total_speed:.1f}" if total_speed > 0 else "N/A",
+            )
+        
+        # 处理分割任务
+        elif hasattr(result['results'], 'masks') and result['results'].masks:
+            mask_metrics = result['results'].masks
+            map50 = safe_float(mask_metrics.map50)
+            precision = safe_float(mask_metrics.mp)
+            recall = safe_float(mask_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            # 对分割任务，准确率使用与检测相同的计算方法
+            accuracy = None
+            if precision > 0 and recall > 0:
+                accuracy = (precision * recall) / (precision + recall - precision * recall)
+            if accuracy is None:
+                accuracy = map50
+            
+            # 更新最佳模型
+            if map50 > best_map50:
+                best_map50 = map50
+                best_model_display = display_name
+                best_model_path = result['path']
+            
+            if f1_score > best_f1:
+                best_f1 = f1_score
+                best_f1_model_display = display_name
+                best_f1_model_path = result['path']
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_accuracy_model_display = display_name
+                best_accuracy_model_path = result['path']
+            
+            comparison_table.add_row(
+                display_name,
+                f"{map50:.4f}",
+                f"{safe_float(mask_metrics.map):.4f}",
+                f"{precision:.4f}",
+                f"{recall:.4f}",
+                f"{f1_score:.4f}",
+                f"{accuracy:.4f}",
+                f"{total_speed:.1f}" if total_speed > 0 else "N/A",
+            )
+        
+        # 处理分类任务
+        elif hasattr(result['results'], 'top1') and hasattr(result['results'], 'top5'):
+            top1 = safe_float(result['results'].top1)
+            top5 = safe_float(result['results'].top5)
+            
+            # 分类任务使用top1作为准确率
+            accuracy = top1
+            
+            # 分类任务的F1需要从混淆矩阵计算
+            f1_score = 0.0
+            precision = 0.0
+            recall = 0.0
+            
+            try:
+                if hasattr(result['results'], 'confusion_matrix') and result['results'].confusion_matrix is not None:
+                    cm = result['results'].confusion_matrix
+                    if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
+                        matrix = cm.matrix
+                        # 计算宏平均
+                        num_classes = matrix.shape[0] - 1  # 排除背景类
+                        precisions = []
+                        recalls = []
+                        
+                        for i in range(num_classes):
+                            tp = safe_float(matrix[i, i])
+                            fp = safe_float(matrix[:, i].sum() - matrix[i, i])
+                            fn = safe_float(matrix[i, :].sum() - matrix[i, i])
+                            
+                            p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                            r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                            
+                            precisions.append(p)
+                            recalls.append(r)
+                        
+                        precision = np.mean(precisions) if precisions else 0.0
+                        recall = np.mean(recalls) if recalls else 0.0
+                        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            except:
+                pass
+            
+            # 更新最佳模型
+            if top1 > best_map50:  # 分类任务用top1替代mAP
+                best_map50 = top1
+                best_model_display = display_name
+                best_model_path = result['path']
+            
+            if f1_score > best_f1:
+                best_f1 = f1_score
+                best_f1_model_display = display_name
+                best_f1_model_path = result['path']
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_accuracy_model_display = display_name
+                best_accuracy_model_path = result['path']
+            
+            comparison_table.add_row(
+                display_name,
+                f"{top1:.4f}",  # Top-1作为主要指标
+                f"{top5:.4f}",  # Top-5
+                f"{precision:.4f}",
+                f"{recall:.4f}",
+                f"{f1_score:.4f}",
+                f"{accuracy:.4f}",
+                f"{total_speed:.1f}" if total_speed > 0 else "N/A",
             )
     
     console.print(comparison_table)
     console.print()
     
-    if best_model:
-        print_success(f"🏆 最高mAP@0.5: {best_model} ({best_map50:.4f})")
-    if best_f1_model:
-        print_success(f"🏆 最高F1分数: {best_f1_model} ({best_f1:.4f})")
+    # 显示最佳模型（显示路径以便区分）
+    if best_model_path:
+        print_success(f"🏆 最高mAP@0.5: {best_model_path} ({best_map50:.4f})")
+    if best_f1_model_path:
+        print_success(f"🏆 最高F1分数: {best_f1_model_path} ({best_f1:.4f})")
+    if best_accuracy_model_path:
+        print_success(f"🏆 最高准确率: {best_accuracy_model_path} ({best_accuracy:.4f})")
 
 
 if __name__ == "__main__":
