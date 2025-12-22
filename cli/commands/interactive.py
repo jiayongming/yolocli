@@ -8,7 +8,7 @@ from pathlib import Path
 from ..ui.prompts import (
     select_main_menu, select_model_operation, select_data_operation,
     select_train_operation, select_detect_operation, select_validate_operation,
-    select_validation_split,
+    select_validation_split, select_option,
     select_yolo_version, select_task_type, select_model_size, select_device,
     select_augmentation_preset, select_export_formats,
     build_training_config, input_text, input_path, input_number,
@@ -609,9 +609,36 @@ def run_validate_operations():
                 data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
                 split = select_validation_split()
                 
-                # 验证参数
-                conf = input_number("置信度阈值 (训练验证用0.001，部署验证用0.25):", default=0.001, min_value=0.0, max_value=1.0)
-                iou = input_number("IoU阈值:", default=0.6, min_value=0.0, max_value=1.0)
+                # 任务类型选择
+                task_choice = select_option(
+                    "任务类型:",
+                    choices=[
+                        "自动推断（从模型名称推断）",
+                        "检测 (detect)",
+                        "分割 (segment)",
+                        "分类 (classify)",
+                    ],
+                    default="自动推断（从模型名称推断）"
+                )
+                
+                if "自动推断" in task_choice:
+                    task = None  # 自动推断
+                elif "检测" in task_choice:
+                    task = "detect"
+                elif "分割" in task_choice:
+                    task = "segment"
+                else:  # 分类
+                    task = "classify"
+                
+                # 验证参数（分类任务不需要 conf 和 iou）
+                if task != "classify":
+                    conf = input_number("置信度阈值 (训练验证用0.001，部署验证用0.25):", default=0.001, min_value=0.0, max_value=1.0)
+                    iou = input_number("IoU阈值:", default=0.6, min_value=0.0, max_value=1.0)
+                else:
+                    # 分类任务使用默认值，但不显示
+                    conf = 0.001
+                    iou = 0.6
+                
                 batch = int(input_number("批次大小:", default=16, min_value=1))
                 
                 # 可选项
@@ -623,8 +650,13 @@ def run_validate_operations():
                 print_info(f"  模型: {model_path}")
                 print_info(f"  数据集: {data_path}")
                 print_info(f"  验证集: {split}")
-                print_info(f"  置信度阈值: {conf}")
-                print_info(f"  IoU阈值: {iou}")
+                print_info(f"  任务类型: {task if task else '自动推断'}")
+                
+                # 只有检测和分割任务才显示 conf 和 iou
+                if task != "classify":
+                    print_info(f"  置信度阈值: {conf}")
+                    print_info(f"  IoU阈值: {iou}")
+                
                 print_info(f"  批次大小: {batch}")
                 
                 if confirm_action("确认开始验证?"):
@@ -633,7 +665,7 @@ def run_validate_operations():
                         model=model_path,
                         data=data_path,
                         split=split,
-                        task=None,  # 自动推断
+                        task=task,
                         batch=batch,
                         imgsz=640,
                         conf=conf,
@@ -660,21 +692,63 @@ def run_validate_operations():
                     continue
                 
                 data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
-                conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
+                
+                # 任务类型选择
+                task_choice = select_option(
+                    "任务类型:",
+                    choices=[
+                        "自动推断（从第一个模型名称推断）",
+                        "检测 (detect)",
+                        "分割 (segment)",
+                        "分类 (classify)",
+                    ],
+                    default="自动推断（从第一个模型名称推断）"
+                )
+                
+                if "自动推断" in task_choice:
+                    task = None  # 自动推断
+                elif "检测" in task_choice:
+                    task = "detect"
+                elif "分割" in task_choice:
+                    task = "segment"
+                else:  # 分类
+                    task = "classify"
+                
+                # 验证参数
+                batch = int(input_number("批次大小:", default=16, min_value=1))
+                
+                # 分类任务不需要 conf 和 iou
+                if task != "classify":
+                    conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
+                    iou = input_number("IoU阈值:", default=0.6, min_value=0.0, max_value=1.0)
+                else:
+                    # 分类任务使用默认值
+                    conf = 0.001
+                    iou = 0.6
                 
                 console.print()
                 print_info(f"将比较以下模型:")
                 for i, model in enumerate(models_str.split(','), 1):
                     print_info(f"  {i}. {model.strip()}")
+                print_info(f"任务类型: {task if task else '自动推断'}")
+                print_info(f"批次大小: {batch}")
+                
+                # 只有检测和分割任务才显示阈值参数
+                if task != "classify":
+                    print_info(f"置信度阈值: {conf}")
+                    print_info(f"IoU阈值: {iou}")
                 
                 if confirm_action("确认开始对比?"):
                     from ..commands.validate import compare_models
                     compare_models(
                         models=models_str,
                         data=data_path,
+                        task=task,
                         split='val',
+                        batch=batch,
+                        imgsz=640,
                         conf=conf,
-                        iou=0.6,
+                        iou=iou,
                         device='auto',
                     )
             

@@ -176,8 +176,12 @@ def validate_model(
     config_table.add_row("任务类型", task.upper())
     config_table.add_row("批次大小", str(batch))
     config_table.add_row("图像尺寸", str(imgsz))
-    config_table.add_row("置信度阈值", str(conf))
-    config_table.add_row("IoU阈值", str(iou))
+    
+    # 只有检测和分割任务才显示 conf 和 iou 阈值
+    if task_type in [TaskType.DETECT, TaskType.SEGMENT]:
+        config_table.add_row("置信度阈值", str(conf))
+        config_table.add_row("IoU阈值", str(iou))
+    
     config_table.add_row("设备", device_name)
     config_table.add_row("保存目录", f"{project}/{name}")
     
@@ -217,8 +221,6 @@ def validate_model(
             'split': split,
             'batch': batch,
             'imgsz': imgsz,
-            'conf': conf,
-            'iou': iou,
             'device': device,
             'save_json': save_json,
             'save_hybrid': save_hybrid,
@@ -227,6 +229,12 @@ def validate_model(
             'project': project,
             'name': name,
         }
+        
+        # 只有检测和分割任务需要 conf 和 iou 参数
+        # 分类任务不使用这些参数，避免影响结果
+        if task_type in [TaskType.DETECT, TaskType.SEGMENT]:
+            validation_kwargs['conf'] = conf
+            validation_kwargs['iou'] = iou
         
         results = yolo_model.val(**validation_kwargs)
         
@@ -947,7 +955,10 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
 def compare_models(
     models: str = typer.Argument(..., help="模型路径，用逗号分隔"),
     data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型（自动从第一个模型推断）"),
     split: str = typer.Option("val", "--split", help="验证数据集"),
+    batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
+    imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),
     conf: float = typer.Option(0.001, "--conf", help="置信度阈值"),
     iou: float = typer.Option(0.6, "--iou", help="IoU阈值"),
     device: str = typer.Option("auto", "--device", help="设备"),
@@ -955,10 +966,18 @@ def compare_models(
     """
     比较多个模型的性能
     
+    支持检测(detect)、分割(segment)和分类(classify)三种任务类型。
+    任务类型可自动从第一个模型名称推断，或手动指定。
+    
     示例:
     
     \b
+      # 自动推断任务类型
       yolo-cli validate compare model1.pt,model2.pt,model3.pt --data data/dataset.yaml
+      
+    \b
+      # 手动指定任务类型
+      yolo-cli validate compare model1-cls.pt,model2-cls.pt --task classify --data data/images
     """
     
     print_section_header("模型性能比较")
@@ -972,11 +991,49 @@ def compare_models(
             print_error(f"模型不存在: {model_path}")
             raise typer.Exit(1)
     
-    # 验证数据集
+    # 推断或验证任务类型（从第一个模型推断）
+    if task is None:
+        _, task = parse_model_name(model_paths[0].name)
+        if task is None:
+            print_warning("无法从模型名称推断任务类型，使用默认值: detect")
+            task = "detect"
+    else:
+        task = validate_task_type(task)
+    
+    task_type = TaskType.from_string(task)
+    print_info(f"任务类型: {task.upper()}")
+    
+    # 处理数据集路径
     data_path = Path(data)
-    if not data_path.exists():
-        print_error(f"数据集配置文件不存在: {data}")
-        raise typer.Exit(1)
+    
+    if task_type == TaskType.CLASSIFY:
+        # 分类任务需要目录路径
+        if data_path.is_file() and data_path.suffix in ['.yaml', '.yml']:
+            with open(data_path, 'r', encoding='utf-8') as f:
+                yaml_content = yaml.safe_load(f)
+            
+            if 'path' not in yaml_content:
+                print_error("dataset.yaml 中缺少 'path' 字段")
+                raise typer.Exit(1)
+            
+            dataset_root = Path(yaml_content['path'])
+            images_dir = dataset_root / 'images'
+            if images_dir.exists():
+                data = str(images_dir)
+            else:
+                data = str(dataset_root)
+            print_info(f"分类任务使用数据集目录: {data}")
+            data_path = Path(data)
+        elif data_path.is_dir():
+            data = str(data_path)
+        else:
+            print_error(f"分类任务需要数据集目录或 dataset.yaml 文件")
+            raise typer.Exit(1)
+    else:
+        # 检测/分割任务需要 yaml 文件
+        if not data_path.exists():
+            print_error(f"数据集配置文件不存在: {data}")
+            raise typer.Exit(1)
     
     # 自动检测设备
     if device == 'auto':
@@ -996,15 +1053,24 @@ def compare_models(
         
         try:
             yolo_model = YOLO(str(model_path))
-            results = yolo_model.val(
-                data=str(data_path),
-                split=split,
-                conf=conf,
-                iou=iou,
-                device=device,
-                verbose=False,
-                plots=False,
-            )
+            
+            # 根据任务类型设置验证参数
+            val_kwargs = {
+                'data': data if task_type == TaskType.CLASSIFY else str(data_path),
+                'split': split,
+                'batch': batch,
+                'imgsz': imgsz,
+                'device': device,
+                'verbose': False,
+                'plots': False,
+            }
+            
+            # 只有检测和分割任务需要 conf 和 iou 参数
+            if task_type in [TaskType.DETECT, TaskType.SEGMENT]:
+                val_kwargs['conf'] = conf
+                val_kwargs['iou'] = iou
+            
+            results = yolo_model.val(**val_kwargs)
             
             # 尝试获取相对路径
             try:
@@ -1031,7 +1097,7 @@ def compare_models(
     
     # 显示比较表格
     console.print()
-    print_section_header("性能比较结果")
+    print_section_header(f"性能比较结果 - {task.upper()}")
     
     # 检查是否有重名模型
     model_names = [r['name'] for r in all_results]
@@ -1045,8 +1111,14 @@ def compare_models(
     else:
         comparison_table.add_column("模型", style="cyan", width=30)
     
-    comparison_table.add_column("mAP@0.5", style="green", justify="right", width=10)
-    comparison_table.add_column("mAP@0.5:0.95", style="green", justify="right", width=12)
+    # 根据任务类型设置不同的列标题
+    if task_type == TaskType.CLASSIFY:
+        comparison_table.add_column("Top-1", style="green", justify="right", width=10)
+        comparison_table.add_column("Top-5", style="green", justify="right", width=10)
+    else:
+        comparison_table.add_column("mAP@0.5", style="green", justify="right", width=10)
+        comparison_table.add_column("mAP@0.5:0.95", style="green", justify="right", width=12)
+    
     comparison_table.add_column("Precision", style="yellow", justify="right", width=10)
     comparison_table.add_column("Recall", style="yellow", justify="right", width=10)
     comparison_table.add_column("F1", style="blue", justify="right", width=10)
@@ -1193,10 +1265,11 @@ def compare_models(
                     cm = result['results'].confusion_matrix
                     if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
                         matrix = cm.matrix
-                        # 计算宏平均
-                        num_classes = matrix.shape[0] - 1  # 排除背景类
+                        # 计算宏平均（分类任务没有背景类，使用全部类别）
+                        num_classes = matrix.shape[0]
                         precisions = []
                         recalls = []
+                        f1_scores = []
                         
                         for i in range(num_classes):
                             tp = safe_float(matrix[i, i])
@@ -1205,13 +1278,16 @@ def compare_models(
                             
                             p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
                             r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                            f1 = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
                             
                             precisions.append(p)
                             recalls.append(r)
+                            f1_scores.append(f1)
                         
+                        # 宏平均：先计算每个类别的指标，再取平均
                         precision = np.mean(precisions) if precisions else 0.0
                         recall = np.mean(recalls) if recalls else 0.0
-                        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+                        f1_score = np.mean(f1_scores) if f1_scores else 0.0
             except:
                 pass
             
@@ -1245,13 +1321,19 @@ def compare_models(
     console.print(comparison_table)
     console.print()
     
-    # 显示最佳模型（显示路径以便区分）
+    # 显示最佳模型（显示路径以便区分，根据任务类型调整指标名称）
     if best_model_path:
-        print_success(f"🏆 最高mAP@0.5: {best_model_path} ({best_map50:.4f})")
+        if task_type == TaskType.CLASSIFY:
+            print_success(f"🏆 最高Top-1准确率: {best_model_path} ({best_map50:.4f})")
+        else:
+            print_success(f"🏆 最高mAP@0.5: {best_model_path} ({best_map50:.4f})")
     if best_f1_model_path:
         print_success(f"🏆 最高F1分数: {best_f1_model_path} ({best_f1:.4f})")
     if best_accuracy_model_path:
-        print_success(f"🏆 最高准确率: {best_accuracy_model_path} ({best_accuracy:.4f})")
+        if task_type == TaskType.CLASSIFY:
+            print_success(f"🏆 最高Top-1准确率: {best_accuracy_model_path} ({best_accuracy:.4f})")
+        else:
+            print_success(f"🏆 最高准确率: {best_accuracy_model_path} ({best_accuracy:.4f})")
 
 
 if __name__ == "__main__":

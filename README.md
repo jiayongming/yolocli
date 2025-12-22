@@ -38,16 +38,22 @@
 - ✅ **交互式引导**：每个参数都有详细说明和推荐范围
 
 ### 🆚 模型对比增强 🎯
+- ✅ **任务类型参数**：新增 `--task` 参数，支持手动指定或自动推断 🆕
 - ✅ **智能路径显示**：自动检测同名模型，显示完整路径以区分
 - ✅ **完整指标对比**：新增 Accuracy、F1 分数、推理速度
 - ✅ **多任务支持**：检测、分割、分类任务全面支持
+- ✅ **动态列标题**：根据任务类型显示相应指标（mAP/Top-1）
 - ✅ **最佳模型标注**：显示最高mAP、F1、Accuracy的模型路径
 
 ### 📊 验证指标全面增强
+- ✅ **任务类型智能识别**：支持 `--task` 参数，自动从模型名推断
+- ✅ **参数完全一致性**：单独验证和模型对比使用完全相同的参数（batch、imgsz、conf、iou）🆕
+- ✅ **参数智能过滤**：分类任务不使用 conf/iou 参数，确保结果准确性 🆕
 - ✅ 新增 **F1 分数**、**准确率 (Accuracy)** 指标
 - ✅ 每个类别的完整指标（Precision, Recall, F1, AP）
 - ✅ 推理速度详细统计
 - ✅ 增强的JSON输出，便于统计分析
+- ✅ 修复分类任务宏平均 F1 计算方法
 
 ### 📈 数据集划分新功能
 - ✅ 新增 **按样本数划分** 功能 (`--counts 100:30:10`)
@@ -252,6 +258,7 @@ python yolo_cli.py interactive-mode
 **交互式模式特色** 🆕：
 - ✅ 图形化菜单选择，无需记忆命令
 - ✅ 智能参数提示和默认值
+- ✅ **任务类型智能选择**：支持自动推断或手动指定（detect/segment/classify）🆕
 - ✅ **数据集划分支持两种方式**：按比例或按样本数
 - ✅ 每步操作前确认，避免误操作
 - ✅ 实时显示操作进度和结果
@@ -1209,10 +1216,23 @@ python yolo_cli.py train resume \
 
 #### 5.1 基本验证
 
+**命令行模式：**
 ```bash
 python yolo_cli.py validate run \
   results/training/best.pt \
   --data data/dataset.yaml
+```
+
+**交互式模式：** 🆕
+```bash
+python yolo_cli.py interactive-mode
+# 选择 "验证操作" → "验证单个模型"
+# 系统会引导你完成：
+#   1. 输入模型路径
+#   2. 输入数据集路径
+#   3. 选择验证集 (val/test/train)
+#   4. 选择任务类型（自动推断/手动指定）← 新增
+#   5. 配置其他参数
 ```
 
 #### 5.2 自定义验证参数
@@ -1340,11 +1360,24 @@ cat results/validation/*/validation_summary.json | jq -r '
 
 比较不同模型的性能，找出最佳模型：
 
+**命令行模式：**
 ```bash
 python yolo_cli.py validate compare \
   model1.pt,model2.pt,model3.pt \
   --data data/dataset.yaml \
+  --task detect \
   --conf 0.25
+```
+
+**交互式模式：** 🆕
+```bash
+python yolo_cli.py interactive-mode
+# 选择 "验证操作" → "比较多个模型"
+# 系统会引导你完成：
+#   1. 输入模型路径（逗号分隔）
+#   2. 输入数据集路径
+#   3. 选择任务类型（自动推断/手动指定）← 新增
+#   4. 配置其他参数
 ```
 
 会生成性能对比表格，自动标识最佳模型。
@@ -1696,9 +1729,21 @@ python yolo_cli.py validate run best.pt \
 同时验证多个模型，快速找出最佳模型：
 
 ```bash
-# 比较不同大小的模型
+# 比较不同大小的模型（自动推断任务类型）
 python yolo_cli.py validate compare \
   yolo11n.pt,yolo11s.pt,yolo11m.pt \
+  --data data/dataset.yaml
+
+# 比较分类模型（手动指定任务类型）
+python yolo_cli.py validate compare \
+  model1-cls.pt,model2-cls.pt \
+  --task classify \
+  --data data/images
+
+# 比较分割模型
+python yolo_cli.py validate compare \
+  model1-seg.pt,model2-seg.pt \
+  --task segment \
   --data data/dataset.yaml
 
 # 比较不同训练配置的checkpoint
@@ -1711,6 +1756,13 @@ python yolo_cli.py validate compare \
   results/exp1/best.pt,results/exp2/best.pt,results/exp3/best.pt \
   --data data/dataset.yaml
 ```
+
+**任务类型智能识别** 🤖
+
+- ✅ **自动推断**：从第一个模型文件名推断（如 `model-cls.pt` → classify）
+- ✅ **手动指定**：使用 `--task` 参数明确指定任务类型
+- ✅ **优先级**：手动指定 > 文件名推断 > 默认detect
+- 💡 **建议**：对于非标准命名的模型，建议使用 `--task` 参数
 
 **🆕 增强功能（v1.2.0）**：
 
@@ -2254,21 +2306,30 @@ python yolo_cli.py validate run MODEL [OPTIONS]
 
 # 比较多个模型
 python yolo_cli.py validate compare MODELS [OPTIONS]
-  --data TEXT            数据集配置文件
-  --split TEXT           验证数据集
-  --conf FLOAT           置信度阈值
-  --iou FLOAT            IoU阈值
-  --device TEXT          设备
+  --data TEXT            数据集配置文件 (默认: data/dataset.yaml)
+  --task TEXT            任务类型 (detect/segment/classify, 自动从第一个模型推断)
+  --split TEXT           验证数据集 (默认: val)
+  --batch INTEGER        批次大小 (默认: 16)
+  --imgsz INTEGER        图像尺寸 (默认: 640)
+  --conf FLOAT           置信度阈值 (默认: 0.001, 仅检测/分割)
+  --iou FLOAT            IoU阈值 (默认: 0.6, 仅检测/分割)
+  --device TEXT          设备 (默认: auto)
 
 示例:
-  # 基本验证
+  # 基本验证（自动推断任务类型）
   python yolo_cli.py validate run best.pt
+  
+  # 验证分类模型（手动指定任务类型）
+  python yolo_cli.py validate run model-cls.pt --task classify --data data/images
   
   # 在测试集上验证并保存详细结果
   python yolo_cli.py validate run best.pt --split test --conf 0.25 --save-json --plots
   
-  # 比较多个模型
+  # 比较多个检测模型
   python yolo_cli.py validate compare model1.pt,model2.pt,model3.pt --data data/dataset.yaml
+  
+  # 比较多个分类模型（手动指定任务类型）
+  python yolo_cli.py validate compare model1.pt,model2.pt --task classify --data data/images
 ```
 
 #### `detect` - 目标检测
