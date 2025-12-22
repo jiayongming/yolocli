@@ -1132,22 +1132,106 @@ python yolo_cli.py validate run \
 - `--save-json`: 保存JSON格式结果
 - `--plots`: 生成可视化图表
 
-#### 5.3 验证指标说明
+#### 5.3 验证指标说明 🆕 增强版
 
-对于**检测任务**，输出指标包括：
-- **mAP@0.5**: IoU阈值为0.5时的平均精度
-- **mAP@0.5:0.95**: IoU阈值从0.5到0.95的平均精度（主要指标）
-- **Precision（精确率）**: 预测为正样本中实际为正样本的比例
-- **Recall（召回率）**: 实际正样本中被正确预测的比例
-- **每类别AP**: 各个类别的单独性能指标
+**✨ 新增全面的评估指标**，满足统计分析需求！
 
-对于**分割任务**，额外输出：
-- **边界框指标**: 与检测任务相同
-- **掩码指标**: 针对分割掩码的mAP、Precision、Recall
+**核心指标速查表**
 
-对于**分类任务**，输出：
-- **Top-1准确率**: 最高概率类别正确的比例
-- **Top-5准确率**: 前5个最高概率中包含正确类别的比例
+| 指标 | 公式 | 含义 | 何时关注 |
+|------|------|------|----------|
+| **Precision (精确率)** | TP / (TP + FP) | 预测为正的样本中真正为正的比例 | 想减少误报时 |
+| **Recall (召回率)** | TP / (TP + FN) | 所有正样本中被正确预测的比例 | 想减少漏报时 |
+| **F1 Score** 🆕 | 2 × (P × R) / (P + R) | 精确率和召回率的调和平均 | 平衡精确率和召回率时 |
+| **Accuracy (准确率)** 🆕 | PR/(P+R-PR) | 检测准确性综合指标 | 评估整体性能 |
+| **mAP@0.5** | - | IoU=0.5时的平均精度 | 快速评估定位能力 |
+| **mAP@0.5:0.95** | - | COCO标准，更严格 | 严格评估定位精度 |
+
+> **TP** = True Positive（真阳性）, **FP** = False Positive（假阳性/误报）  
+> **TN** = True Negative（真阴性）, **FN** = False Negative（假阴性/漏报）
+
+**各任务类型支持的指标**
+
+对于**检测任务**：
+- ✅ mAP@0.5, mAP@0.5:0.95
+- ✅ 精确率、召回率、F1分数
+- ✅ **准确率** - 始终显示，自动使用最佳计算方法：
+  - 优先使用混淆矩阵（如果可用）
+  - 否则从Precision和Recall推导：`Accuracy = (P×R)/(P+R-P×R)`
+  - 最后使用mAP@0.5作为后备
+- ✅ 推理速度统计（预处理/推理/后处理）
+- ✅ 每类别详细指标（AP@0.5, AP@0.5:0.95, Precision, Recall, F1）
+
+对于**分割任务**：
+- ✅ 边界框指标：完整指标集
+- ✅ 掩码指标：Mask mAP, Precision, Recall, F1
+- ✅ 每类别分割指标：完整掩码级别指标
+
+对于**分类任务**：
+- ✅ Top-1准确率、Top-5准确率
+- ✅ 宏平均精确率、召回率、F1分数
+- ✅ 每类别详细指标（Accuracy, Precision, Recall, F1, Support）
+
+**📊 JSON输出格式**
+
+验证结果保存在 `validation_summary.json`，包含完整的统计数据：
+
+```json
+{
+  "metrics": {
+    "mAP50": 0.8542,
+    "mAP50_95": 0.6234,
+    "precision": 0.8123,
+    "recall": 0.7856,
+    "f1_score": 0.7987,      // 新增
+    "accuracy": 0.8234        // 新增（如果可用）
+  },
+  "per_class": {              // 各类别详细指标
+    "person": {
+      "ap50": 0.9012,
+      "precision": 0.8567,    // 新增
+      "recall": 0.8234,       // 新增
+      "f1_score": 0.8398      // 新增
+    }
+  },
+  "performance": {            // 性能统计
+    "speed_ms": {
+      "preprocess": 2.5,
+      "inference": 12.3,
+      "postprocess": 3.8
+    }
+  }
+}
+```
+
+**💡 使用技巧**
+
+```bash
+# 查看所有核心指标
+cat results/validation/*/validation_summary.json | jq '.metrics'
+
+# 查看F1分数
+cat results/validation/*/validation_summary.json | jq '.metrics.f1_score'
+
+# 查看各类别F1
+cat results/validation/*/validation_summary.json | jq '.per_class | to_entries[] | {class: .key, f1: .value.f1_score}'
+
+# 导出为CSV（导入Excel）
+cat results/validation/*/validation_summary.json | jq -r '
+  .per_class | to_entries[] | 
+  [.key, .value.ap50, .value.precision, .value.recall, .value.f1_score] | 
+  @csv
+' > metrics.csv
+```
+
+**🎯 应用场景指南**
+
+| 场景 | 优先指标 | 阈值建议 |
+|------|----------|----------|
+| 安全监控（减少漏报） | Recall | --conf 0.1 |
+| 质量检测（减少误报） | Precision | --conf 0.5 |
+| 平衡应用 | F1 Score | --conf 0.25 |
+| 类别不平衡 | 每类别指标 + Macro Avg | - |
 
 #### 5.4 比较多个模型
 
@@ -1643,16 +1727,20 @@ python yolo_cli.py validate run --help
 python yolo_cli.py validate compare --help
 ```
 
-### 示例脚本
+### 验证示例
 
-项目提供了完整的示例脚本，包含多个典型使用场景：
+运行验证并查看详细指标：
 
 ```bash
-# 运行交互式示例教程
-./examples/validate_examples.sh
+# 基本验证
+python yolo_cli.py validate run models/best.pt
 
-# 测试数据集拆分的负样本支持（新增）
-./examples/test_split_with_negative.sh
+# 完整验证（保存JSON和图表）
+python yolo_cli.py validate run models/best.pt \
+  --split test \
+  --conf 0.25 \
+  --save-json \
+  --plots
 ```
 
 ## 🎮 GPU配置指南

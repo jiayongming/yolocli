@@ -275,29 +275,133 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
         if hasattr(results, 'box') and results.box:
             box_metrics = results.box
             
-            # 创建指标表格
-            metrics_table = Table(title="🎯 检测指标", show_header=True, header_style="bold cyan")
-            metrics_table.add_column("指标", style="cyan", width=20)
+            # 计算F1分数（如果不存在）
+            precision = safe_float(box_metrics.mp)
+            recall = safe_float(box_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            # 创建综合指标表格
+            metrics_table = Table(title="🎯 检测指标 - 综合评估", show_header=True, header_style="bold cyan")
+            metrics_table.add_column("指标", style="cyan", width=25)
             metrics_table.add_column("值", style="green", justify="right", width=15)
+            metrics_table.add_column("说明", style="dim", width=40)
             
-            metrics_table.add_row("mAP@0.5", f"{safe_float(box_metrics.map50):.4f}")
-            metrics_table.add_row("mAP@0.5:0.95", f"{safe_float(box_metrics.map):.4f}")
-            metrics_table.add_row("精确率 (Precision)", f"{safe_float(box_metrics.mp):.4f}")
-            metrics_table.add_row("召回率 (Recall)", f"{safe_float(box_metrics.mr):.4f}")
+            # mAP指标
+            metrics_table.add_row(
+                "mAP@0.5", 
+                f"{safe_float(box_metrics.map50):.4f}",
+                "IoU=0.5时的平均精度"
+            )
+            metrics_table.add_row(
+                "mAP@0.5:0.95", 
+                f"{safe_float(box_metrics.map):.4f}",
+                "IoU从0.5到0.95的平均精度"
+            )
             
-            # F1分数（如果存在）
-            if hasattr(box_metrics, 'f1') and box_metrics.f1 is not None:
-                metrics_table.add_row("F1分数", f"{safe_float(box_metrics.f1):.4f}")
+            # 核心指标
+            metrics_table.add_row("", "", "")  # 分隔行
+            metrics_table.add_row(
+                "精确率 (Precision)", 
+                f"{precision:.4f}",
+                "预测为正的样本中真正为正的比例"
+            )
+            metrics_table.add_row(
+                "召回率 (Recall)", 
+                f"{recall:.4f}",
+                "所有正样本中被正确预测的比例"
+            )
+            metrics_table.add_row(
+                "F1 分数", 
+                f"{f1_score:.4f}",
+                "精确率和召回率的调和平均数"
+            )
+            
+            # 计算并显示准确率
+            # 准确率始终显示，确保统计需求得到满足
+            accuracy = None
+            accuracy_method = ""
+            
+            # 方法1: 尝试从混淆矩阵计算（最准确）
+            try:
+                if hasattr(box_metrics, 'confusion_matrix') and box_metrics.confusion_matrix is not None:
+                    cm = box_metrics.confusion_matrix
+                    if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
+                        matrix = cm.matrix
+                        total = safe_float(matrix.sum())
+                        correct = safe_float(np.trace(matrix))
+                        if total > 0:
+                            accuracy = correct / total
+                            accuracy_method = "基于混淆矩阵"
+            except:
+                pass
+            
+            # 方法2: 如果没有混淆矩阵，从precision和recall计算检测准确率
+            # 检测准确率定义为: TP / (TP + FP + FN)
+            # 从已知的precision和recall可以推导：
+            # 设TP为真正例数
+            # Precision = TP/(TP+FP) => FP = TP/Precision - TP = TP(1/Precision - 1)
+            # Recall = TP/(TP+FN) => FN = TP/Recall - TP = TP(1/Recall - 1)
+            # Accuracy = TP/(TP+FP+FN) = TP/(TP + TP(1/P-1) + TP(1/R-1))
+            #          = TP/(TP(1 + 1/P - 1 + 1/R - 1)) = 1/(1/P + 1/R - 1)
+            #          = 1/((R+P-PR)/(PR)) = PR/(P+R-PR)
+            if accuracy is None and precision > 0 and recall > 0:
+                accuracy = (precision * recall) / (precision + recall - precision * recall)
+                accuracy_method = "基于P&R推导"
+            
+            # 方法3: 如果仍无法计算，使用mAP作为综合性能指标
+            if accuracy is None:
+                accuracy = safe_float(box_metrics.map50)
+                accuracy_method = "使用mAP@0.5"
+            
+            # 显示准确率
+            if accuracy is not None:
+                metrics_table.add_row(
+                    "准确率 (Accuracy)",
+                    f"{accuracy:.4f}",
+                    f"检测准确性指标 [{accuracy_method}]"
+                )
             
             console.print(metrics_table)
             
-            # 显示每个类别的结果
+            # 显示详细统计信息
+            console.print()
+            stats_table = Table(title="📊 详细统计", show_header=True, header_style="bold yellow")
+            stats_table.add_column("统计项", style="cyan", width=25)
+            stats_table.add_column("值", style="green", justify="right", width=15)
+            
+            # 获取统计信息
+            if hasattr(results, 'speed'):
+                speed = results.speed
+                if isinstance(speed, dict):
+                    total_time = sum(speed.values())
+                    stats_table.add_row("总推理时间 (ms)", f"{total_time:.2f}")
+                    if 'preprocess' in speed:
+                        stats_table.add_row("  - 预处理", f"{speed['preprocess']:.2f}")
+                    if 'inference' in speed:
+                        stats_table.add_row("  - 推理", f"{speed['inference']:.2f}")
+                    if 'postprocess' in speed:
+                        stats_table.add_row("  - 后处理", f"{speed['postprocess']:.2f}")
+            
+            if hasattr(results, 'seen'):
+                stats_table.add_row("验证图像数", str(results.seen))
+            
+            console.print(stats_table)
+            
+            # 显示每个类别的详细结果
             if hasattr(box_metrics, 'ap50') and len(box_metrics.ap50) > 0:
                 console.print()
                 
-                class_table = Table(title="📋 各类别指标 (AP@0.5)", show_header=True, header_style="bold magenta")
-                class_table.add_column("类别", style="cyan")
-                class_table.add_column("AP@0.5", style="green", justify="right")
+                class_table = Table(
+                    title="📋 各类别详细指标", 
+                    show_header=True, 
+                    header_style="bold magenta"
+                )
+                class_table.add_column("类别", style="cyan", width=20)
+                class_table.add_column("AP@0.5", style="green", justify="right", width=12)
+                class_table.add_column("AP@0.5:0.95", style="green", justify="right", width=14)
+                class_table.add_column("Precision", style="yellow", justify="right", width=12)
+                class_table.add_column("Recall", style="yellow", justify="right", width=12)
+                class_table.add_column("F1", style="blue", justify="right", width=10)
                 
                 # 获取类别名称
                 if hasattr(results, 'names'):
@@ -305,9 +409,33 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                 else:
                     class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
                 
-                for class_name, ap50 in zip(class_names, box_metrics.ap50):
-                    # 使用safe_float确保正确转换
-                    class_table.add_row(class_name, f"{safe_float(ap50):.4f}")
+                # 获取每个类别的指标
+                for idx, class_name in enumerate(class_names):
+                    ap50_val = safe_float(box_metrics.ap50[idx]) if idx < len(box_metrics.ap50) else 0.0
+                    ap_val = safe_float(box_metrics.ap[idx]) if hasattr(box_metrics, 'ap') and idx < len(box_metrics.ap) else 0.0
+                    
+                    # 获取每个类别的精确率和召回率（如果有）
+                    if hasattr(box_metrics, 'p') and idx < len(box_metrics.p):
+                        class_precision = safe_float(box_metrics.p[idx])
+                    else:
+                        class_precision = precision
+                    
+                    if hasattr(box_metrics, 'r') and idx < len(box_metrics.r):
+                        class_recall = safe_float(box_metrics.r[idx])
+                    else:
+                        class_recall = recall
+                    
+                    # 计算类别F1
+                    class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall) if (class_precision + class_recall) > 0 else 0.0
+                    
+                    class_table.add_row(
+                        class_name,
+                        f"{ap50_val:.4f}",
+                        f"{ap_val:.4f}",
+                        f"{class_precision:.4f}",
+                        f"{class_recall:.4f}",
+                        f"{class_f1:.4f}"
+                    )
                 
                 console.print(class_table)
     
@@ -316,8 +444,13 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             box_metrics = results.box
             mask_metrics = results.seg if hasattr(results, 'seg') else None
             
+            # 计算边界框的F1分数
+            box_precision = safe_float(box_metrics.mp)
+            box_recall = safe_float(box_metrics.mr)
+            box_f1 = 2 * (box_precision * box_recall) / (box_precision + box_recall) if (box_precision + box_recall) > 0 else 0.0
+            
             # 创建指标表格
-            metrics_table = Table(title="🎯 分割指标", show_header=True, header_style="bold cyan")
+            metrics_table = Table(title="🎯 分割指标 - 综合评估", show_header=True, header_style="bold cyan")
             metrics_table.add_column("指标类型", style="cyan", width=15)
             metrics_table.add_column("指标", style="yellow", width=20)
             metrics_table.add_column("值", style="green", justify="right", width=15)
@@ -325,30 +458,234 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             # 边界框指标
             metrics_table.add_row("边界框", "mAP@0.5", f"{safe_float(box_metrics.map50):.4f}")
             metrics_table.add_row("", "mAP@0.5:0.95", f"{safe_float(box_metrics.map):.4f}")
-            metrics_table.add_row("", "Precision", f"{safe_float(box_metrics.mp):.4f}")
-            metrics_table.add_row("", "Recall", f"{safe_float(box_metrics.mr):.4f}")
+            metrics_table.add_row("", "Precision", f"{box_precision:.4f}")
+            metrics_table.add_row("", "Recall", f"{box_recall:.4f}")
+            metrics_table.add_row("", "F1 Score", f"{box_f1:.4f}")
             
             # 掩码指标
             if mask_metrics:
+                mask_precision = safe_float(mask_metrics.mp)
+                mask_recall = safe_float(mask_metrics.mr)
+                mask_f1 = 2 * (mask_precision * mask_recall) / (mask_precision + mask_recall) if (mask_precision + mask_recall) > 0 else 0.0
+                
                 metrics_table.add_row("", "", "")
                 metrics_table.add_row("掩码", "mAP@0.5", f"{safe_float(mask_metrics.map50):.4f}")
                 metrics_table.add_row("", "mAP@0.5:0.95", f"{safe_float(mask_metrics.map):.4f}")
-                metrics_table.add_row("", "Precision", f"{safe_float(mask_metrics.mp):.4f}")
-                metrics_table.add_row("", "Recall", f"{safe_float(mask_metrics.mr):.4f}")
+                metrics_table.add_row("", "Precision", f"{mask_precision:.4f}")
+                metrics_table.add_row("", "Recall", f"{mask_recall:.4f}")
+                metrics_table.add_row("", "F1 Score", f"{mask_f1:.4f}")
             
             console.print(metrics_table)
+            
+            # 显示详细统计信息
+            console.print()
+            stats_table = Table(title="📊 详细统计", show_header=True, header_style="bold yellow")
+            stats_table.add_column("统计项", style="cyan", width=25)
+            stats_table.add_column("值", style="green", justify="right", width=15)
+            
+            if hasattr(results, 'speed'):
+                speed = results.speed
+                if isinstance(speed, dict):
+                    total_time = sum(speed.values())
+                    stats_table.add_row("总推理时间 (ms)", f"{total_time:.2f}")
+                    if 'preprocess' in speed:
+                        stats_table.add_row("  - 预处理", f"{speed['preprocess']:.2f}")
+                    if 'inference' in speed:
+                        stats_table.add_row("  - 推理", f"{speed['inference']:.2f}")
+                    if 'postprocess' in speed:
+                        stats_table.add_row("  - 后处理", f"{speed['postprocess']:.2f}")
+            
+            if hasattr(results, 'seen'):
+                stats_table.add_row("验证图像数", str(results.seen))
+            
+            console.print(stats_table)
+            
+            # 显示每个类别的详细结果
+            if mask_metrics and hasattr(mask_metrics, 'ap50') and len(mask_metrics.ap50) > 0:
+                console.print()
+                
+                class_table = Table(
+                    title="📋 各类别分割指标", 
+                    show_header=True, 
+                    header_style="bold magenta"
+                )
+                class_table.add_column("类别", style="cyan", width=20)
+                class_table.add_column("Mask AP@0.5", style="green", justify="right", width=14)
+                class_table.add_column("Mask AP@0.5:0.95", style="green", justify="right", width=16)
+                class_table.add_column("Precision", style="yellow", justify="right", width=12)
+                class_table.add_column("Recall", style="yellow", justify="right", width=12)
+                class_table.add_column("F1", style="blue", justify="right", width=10)
+                
+                # 获取类别名称
+                if hasattr(results, 'names'):
+                    class_names = [results.names[i] for i in range(len(mask_metrics.ap50))]
+                else:
+                    class_names = [f"class_{i}" for i in range(len(mask_metrics.ap50))]
+                
+                for idx, class_name in enumerate(class_names):
+                    ap50_val = safe_float(mask_metrics.ap50[idx]) if idx < len(mask_metrics.ap50) else 0.0
+                    ap_val = safe_float(mask_metrics.ap[idx]) if hasattr(mask_metrics, 'ap') and idx < len(mask_metrics.ap) else 0.0
+                    
+                    if hasattr(mask_metrics, 'p') and idx < len(mask_metrics.p):
+                        class_precision = safe_float(mask_metrics.p[idx])
+                    else:
+                        class_precision = mask_precision
+                    
+                    if hasattr(mask_metrics, 'r') and idx < len(mask_metrics.r):
+                        class_recall = safe_float(mask_metrics.r[idx])
+                    else:
+                        class_recall = mask_recall
+                    
+                    class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall) if (class_precision + class_recall) > 0 else 0.0
+                    
+                    class_table.add_row(
+                        class_name,
+                        f"{ap50_val:.4f}",
+                        f"{ap_val:.4f}",
+                        f"{class_precision:.4f}",
+                        f"{class_recall:.4f}",
+                        f"{class_f1:.4f}"
+                    )
+                
+                console.print(class_table)
     
     elif task_type == TaskType.CLASSIFY:
         if hasattr(results, 'top1') and hasattr(results, 'top5'):
             # 分类指标
-            metrics_table = Table(title="🎯 分类指标", show_header=True, header_style="bold cyan")
-            metrics_table.add_column("指标", style="cyan", width=20)
+            metrics_table = Table(title="🎯 分类指标 - 综合评估", show_header=True, header_style="bold cyan")
+            metrics_table.add_column("指标", style="cyan", width=25)
             metrics_table.add_column("值", style="green", justify="right", width=15)
+            metrics_table.add_column("说明", style="dim", width=40)
             
-            metrics_table.add_row("Top-1 准确率", f"{safe_float(results.top1):.4f}")
-            metrics_table.add_row("Top-5 准确率", f"{safe_float(results.top5):.4f}")
+            top1_acc = safe_float(results.top1)
+            top5_acc = safe_float(results.top5)
+            
+            metrics_table.add_row(
+                "Top-1 准确率", 
+                f"{top1_acc:.4f}",
+                "预测概率最高的类别正确的比例"
+            )
+            metrics_table.add_row(
+                "Top-5 准确率", 
+                f"{top5_acc:.4f}",
+                "正确类别在前5个预测中的比例"
+            )
+            
+            # 如果有混淆矩阵，显示更多指标
+            if hasattr(results, 'confusion_matrix') and results.confusion_matrix is not None:
+                cm = results.confusion_matrix
+                if hasattr(cm, 'matrix') and cm.matrix is not None:
+                    matrix = cm.matrix
+                    # 计算宏平均精确率、召回率、F1
+                    n_classes = matrix.shape[0] if len(matrix.shape) > 1 else 1
+                    
+                    precisions = []
+                    recalls = []
+                    f1_scores = []
+                    
+                    for i in range(n_classes):
+                        tp = safe_float(matrix[i, i]) if i < matrix.shape[0] and i < matrix.shape[1] else 0
+                        fp = safe_float(matrix[:, i].sum() - matrix[i, i]) if i < matrix.shape[1] else 0
+                        fn = safe_float(matrix[i, :].sum() - matrix[i, i]) if i < matrix.shape[0] else 0
+                        
+                        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+                        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+                        
+                        precisions.append(precision)
+                        recalls.append(recall)
+                        f1_scores.append(f1)
+                    
+                    if precisions:
+                        metrics_table.add_row("", "", "")
+                        metrics_table.add_row(
+                            "宏平均精确率", 
+                            f"{np.mean(precisions):.4f}",
+                            "各类别精确率的平均值"
+                        )
+                        metrics_table.add_row(
+                            "宏平均召回率", 
+                            f"{np.mean(recalls):.4f}",
+                            "各类别召回率的平均值"
+                        )
+                        metrics_table.add_row(
+                            "宏平均F1分数", 
+                            f"{np.mean(f1_scores):.4f}",
+                            "各类别F1分数的平均值"
+                        )
             
             console.print(metrics_table)
+            
+            # 显示详细统计信息
+            console.print()
+            stats_table = Table(title="📊 详细统计", show_header=True, header_style="bold yellow")
+            stats_table.add_column("统计项", style="cyan", width=25)
+            stats_table.add_column("值", style="green", justify="right", width=15)
+            
+            if hasattr(results, 'speed'):
+                speed = results.speed
+                if isinstance(speed, dict):
+                    total_time = sum(speed.values())
+                    stats_table.add_row("总推理时间 (ms)", f"{total_time:.2f}")
+                    if 'preprocess' in speed:
+                        stats_table.add_row("  - 预处理", f"{speed['preprocess']:.2f}")
+                    if 'inference' in speed:
+                        stats_table.add_row("  - 推理", f"{speed['inference']:.2f}")
+                    if 'postprocess' in speed:
+                        stats_table.add_row("  - 后处理", f"{speed['postprocess']:.2f}")
+            
+            if hasattr(results, 'seen'):
+                stats_table.add_row("验证图像数", str(results.seen))
+            
+            console.print(stats_table)
+            
+            # 如果有每个类别的详细信息，显示出来
+            if hasattr(results, 'names') and hasattr(results, 'confusion_matrix'):
+                cm = results.confusion_matrix
+                if hasattr(cm, 'matrix') and cm.matrix is not None:
+                    console.print()
+                    
+                    class_table = Table(
+                        title="📋 各类别详细指标", 
+                        show_header=True, 
+                        header_style="bold magenta"
+                    )
+                    class_table.add_column("类别", style="cyan", width=20)
+                    class_table.add_column("Accuracy", style="green", justify="right", width=12)
+                    class_table.add_column("Precision", style="yellow", justify="right", width=12)
+                    class_table.add_column("Recall", style="yellow", justify="right", width=12)
+                    class_table.add_column("F1 Score", style="blue", justify="right", width=12)
+                    class_table.add_column("Support", style="dim", justify="right", width=10)
+                    
+                    matrix = cm.matrix
+                    n_classes = matrix.shape[0] if len(matrix.shape) > 1 else 1
+                    class_names = [results.names[i] if hasattr(results, 'names') else f"Class {i}" for i in range(n_classes)]
+                    
+                    for i, class_name in enumerate(class_names):
+                        if i >= matrix.shape[0] or i >= matrix.shape[1]:
+                            continue
+                            
+                        tp = safe_float(matrix[i, i])
+                        fp = safe_float(matrix[:, i].sum() - matrix[i, i])
+                        fn = safe_float(matrix[i, :].sum() - matrix[i, i])
+                        tn = safe_float(matrix.sum() - tp - fp - fn)
+                        
+                        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+                        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+                        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+                        support = int(tp + fn)
+                        
+                        class_table.add_row(
+                            class_name,
+                            f"{accuracy:.4f}",
+                            f"{precision:.4f}",
+                            f"{recall:.4f}",
+                            f"{f1:.4f}",
+                            str(support)
+                        )
+                    
+                    console.print(class_table)
 
 
 def _generate_results_summary(results, task_type: TaskType, model_path: Path, 
@@ -373,45 +710,168 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
     if task_type == TaskType.DETECT:
         if hasattr(results, 'box') and results.box:
             box_metrics = results.box
+            
+            # 计算F1分数
+            precision = safe_float(box_metrics.mp)
+            recall = safe_float(box_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            # 计算准确率（使用多种方法）
+            accuracy = None
+            accuracy_method = ""
+            
+            # 方法1: 从混淆矩阵计算
+            try:
+                if hasattr(box_metrics, 'confusion_matrix') and box_metrics.confusion_matrix is not None:
+                    cm = box_metrics.confusion_matrix
+                    if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
+                        matrix = cm.matrix
+                        total = safe_float(matrix.sum())
+                        correct = safe_float(np.trace(matrix))
+                        if total > 0:
+                            accuracy = correct / total
+                            accuracy_method = "confusion_matrix"
+            except:
+                pass
+            
+            # 方法2: 从precision和recall推导
+            if accuracy is None and precision > 0 and recall > 0:
+                accuracy = (precision * recall) / (precision + recall - precision * recall)
+                accuracy_method = "derived_from_pr"
+            
+            # 方法3: 使用mAP@0.5作为后备
+            if accuracy is None:
+                accuracy = safe_float(box_metrics.map50)
+                accuracy_method = "map50"
+            
             summary['metrics'] = {
                 'mAP50': safe_float(box_metrics.map50),
                 'mAP50_95': safe_float(box_metrics.map),
-                'precision': safe_float(box_metrics.mp),
-                'recall': safe_float(box_metrics.mr),
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1_score,
+                'accuracy': accuracy,
+                'accuracy_method': accuracy_method,
             }
             
+            # 添加性能统计
+            if hasattr(results, 'speed'):
+                summary['performance'] = {
+                    'speed_ms': results.speed if isinstance(results.speed, dict) else {},
+                }
+            
+            if hasattr(results, 'seen'):
+                summary['statistics'] = {
+                    'images_validated': int(results.seen),
+                }
+            
+            # 每个类别的详细指标
             if hasattr(box_metrics, 'ap50') and len(box_metrics.ap50) > 0:
                 if hasattr(results, 'names'):
                     class_names = [results.names[i] for i in range(len(box_metrics.ap50))]
                 else:
                     class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
                 
-                # 确保AP值被正确转换为Python float
-                summary['per_class'] = {
-                    name: safe_float(ap) 
-                    for name, ap in zip(class_names, box_metrics.ap50)
-                }
+                per_class = {}
+                for idx, name in enumerate(class_names):
+                    class_metrics = {
+                        'ap50': safe_float(box_metrics.ap50[idx]) if idx < len(box_metrics.ap50) else 0.0,
+                        'ap50_95': safe_float(box_metrics.ap[idx]) if hasattr(box_metrics, 'ap') and idx < len(box_metrics.ap) else 0.0,
+                    }
+                    
+                    # 添加每个类别的精确率和召回率
+                    if hasattr(box_metrics, 'p') and idx < len(box_metrics.p):
+                        class_precision = safe_float(box_metrics.p[idx])
+                        class_metrics['precision'] = class_precision
+                    
+                    if hasattr(box_metrics, 'r') and idx < len(box_metrics.r):
+                        class_recall = safe_float(box_metrics.r[idx])
+                        class_metrics['recall'] = class_recall
+                    
+                    # 计算类别F1
+                    if 'precision' in class_metrics and 'recall' in class_metrics:
+                        p = class_metrics['precision']
+                        r = class_metrics['recall']
+                        class_metrics['f1_score'] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
+                    
+                    per_class[name] = class_metrics
+                
+                summary['per_class'] = per_class
     
     elif task_type == TaskType.SEGMENT:
         if hasattr(results, 'box') and results.box:
             box_metrics = results.box
             mask_metrics = results.seg if hasattr(results, 'seg') else None
             
+            # 边界框F1
+            box_precision = safe_float(box_metrics.mp)
+            box_recall = safe_float(box_metrics.mr)
+            box_f1 = 2 * (box_precision * box_recall) / (box_precision + box_recall) if (box_precision + box_recall) > 0 else 0.0
+            
             summary['metrics'] = {
                 'box': {
                     'mAP50': safe_float(box_metrics.map50),
                     'mAP50_95': safe_float(box_metrics.map),
-                    'precision': safe_float(box_metrics.mp),
-                    'recall': safe_float(box_metrics.mr),
+                    'precision': box_precision,
+                    'recall': box_recall,
+                    'f1_score': box_f1,
                 }
             }
             
             if mask_metrics:
+                # 掩码F1
+                mask_precision = safe_float(mask_metrics.mp)
+                mask_recall = safe_float(mask_metrics.mr)
+                mask_f1 = 2 * (mask_precision * mask_recall) / (mask_precision + mask_recall) if (mask_precision + mask_recall) > 0 else 0.0
+                
                 summary['metrics']['mask'] = {
                     'mAP50': safe_float(mask_metrics.map50),
                     'mAP50_95': safe_float(mask_metrics.map),
-                    'precision': safe_float(mask_metrics.mp),
-                    'recall': safe_float(mask_metrics.mr),
+                    'precision': mask_precision,
+                    'recall': mask_recall,
+                    'f1_score': mask_f1,
+                }
+                
+                # 每个类别的掩码指标
+                if hasattr(mask_metrics, 'ap50') and len(mask_metrics.ap50) > 0:
+                    if hasattr(results, 'names'):
+                        class_names = [results.names[i] for i in range(len(mask_metrics.ap50))]
+                    else:
+                        class_names = [f"class_{i}" for i in range(len(mask_metrics.ap50))]
+                    
+                    per_class = {}
+                    for idx, name in enumerate(class_names):
+                        class_metrics = {
+                            'mask_ap50': safe_float(mask_metrics.ap50[idx]) if idx < len(mask_metrics.ap50) else 0.0,
+                            'mask_ap50_95': safe_float(mask_metrics.ap[idx]) if hasattr(mask_metrics, 'ap') and idx < len(mask_metrics.ap) else 0.0,
+                        }
+                        
+                        if hasattr(mask_metrics, 'p') and idx < len(mask_metrics.p):
+                            class_precision = safe_float(mask_metrics.p[idx])
+                            class_metrics['precision'] = class_precision
+                        
+                        if hasattr(mask_metrics, 'r') and idx < len(mask_metrics.r):
+                            class_recall = safe_float(mask_metrics.r[idx])
+                            class_metrics['recall'] = class_recall
+                        
+                        if 'precision' in class_metrics and 'recall' in class_metrics:
+                            p = class_metrics['precision']
+                            r = class_metrics['recall']
+                            class_metrics['f1_score'] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
+                        
+                        per_class[name] = class_metrics
+                    
+                    summary['per_class'] = per_class
+            
+            # 添加性能统计
+            if hasattr(results, 'speed'):
+                summary['performance'] = {
+                    'speed_ms': results.speed if isinstance(results.speed, dict) else {},
+                }
+            
+            if hasattr(results, 'seen'):
+                summary['statistics'] = {
+                    'images_validated': int(results.seen),
                 }
     
     elif task_type == TaskType.CLASSIFY:
@@ -420,6 +880,65 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
                 'top1_accuracy': safe_float(results.top1),
                 'top5_accuracy': safe_float(results.top5),
             }
+            
+            # 如果有混淆矩阵，添加宏平均指标
+            if hasattr(results, 'confusion_matrix') and results.confusion_matrix is not None:
+                cm = results.confusion_matrix
+                if hasattr(cm, 'matrix') and cm.matrix is not None:
+                    matrix = cm.matrix
+                    n_classes = matrix.shape[0] if len(matrix.shape) > 1 else 1
+                    
+                    precisions = []
+                    recalls = []
+                    f1_scores = []
+                    
+                    per_class = {}
+                    class_names = [results.names[i] if hasattr(results, 'names') else f"class_{i}" for i in range(n_classes)]
+                    
+                    for i, class_name in enumerate(class_names):
+                        if i >= matrix.shape[0] or i >= matrix.shape[1]:
+                            continue
+                            
+                        tp = safe_float(matrix[i, i])
+                        fp = safe_float(matrix[:, i].sum() - matrix[i, i])
+                        fn = safe_float(matrix[i, :].sum() - matrix[i, i])
+                        tn = safe_float(matrix.sum() - tp - fp - fn)
+                        
+                        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+                        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+                        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+                        support = int(tp + fn)
+                        
+                        precisions.append(precision)
+                        recalls.append(recall)
+                        f1_scores.append(f1)
+                        
+                        per_class[class_name] = {
+                            'accuracy': accuracy,
+                            'precision': precision,
+                            'recall': recall,
+                            'f1_score': f1,
+                            'support': support,
+                        }
+                    
+                    if precisions:
+                        summary['metrics']['macro_avg_precision'] = float(np.mean(precisions))
+                        summary['metrics']['macro_avg_recall'] = float(np.mean(recalls))
+                        summary['metrics']['macro_avg_f1'] = float(np.mean(f1_scores))
+                    
+                    summary['per_class'] = per_class
+            
+            # 添加性能统计
+            if hasattr(results, 'speed'):
+                summary['performance'] = {
+                    'speed_ms': results.speed if isinstance(results.speed, dict) else {},
+                }
+            
+            if hasattr(results, 'seen'):
+                summary['statistics'] = {
+                    'images_validated': int(results.seen),
+                }
     
     return summary
 
@@ -508,37 +1027,50 @@ def compare_models(
     print_section_header("性能比较结果")
     
     comparison_table = Table(show_header=True, header_style="bold cyan")
-    comparison_table.add_column("模型", style="cyan")
-    comparison_table.add_column("mAP@0.5", style="green", justify="right")
-    comparison_table.add_column("mAP@0.5:0.95", style="green", justify="right")
-    comparison_table.add_column("Precision", style="yellow", justify="right")
-    comparison_table.add_column("Recall", style="yellow", justify="right")
+    comparison_table.add_column("模型", style="cyan", width=30)
+    comparison_table.add_column("mAP@0.5", style="green", justify="right", width=10)
+    comparison_table.add_column("mAP@0.5:0.95", style="green", justify="right", width=12)
+    comparison_table.add_column("Precision", style="yellow", justify="right", width=10)
+    comparison_table.add_column("Recall", style="yellow", justify="right", width=10)
+    comparison_table.add_column("F1", style="blue", justify="right", width=10)
     
     best_map50 = -1
     best_model = None
+    best_f1 = -1
+    best_f1_model = None
     
     for result in all_results:
         if hasattr(result['results'], 'box') and result['results'].box:
             box_metrics = result['results'].box
             map50 = safe_float(box_metrics.map50)
+            precision = safe_float(box_metrics.mp)
+            recall = safe_float(box_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
             
             if map50 > best_map50:
                 best_map50 = map50
                 best_model = result['name']
             
+            if f1_score > best_f1:
+                best_f1 = f1_score
+                best_f1_model = result['name']
+            
             comparison_table.add_row(
                 result['name'],
-                f"{safe_float(box_metrics.map50):.4f}",
+                f"{map50:.4f}",
                 f"{safe_float(box_metrics.map):.4f}",
-                f"{safe_float(box_metrics.mp):.4f}",
-                f"{safe_float(box_metrics.mr):.4f}",
+                f"{precision:.4f}",
+                f"{recall:.4f}",
+                f"{f1_score:.4f}",
             )
     
     console.print(comparison_table)
     console.print()
     
     if best_model:
-        print_success(f"🏆 最佳模型: {best_model} (mAP@0.5: {best_map50:.4f})")
+        print_success(f"🏆 最高mAP@0.5: {best_model} ({best_map50:.4f})")
+    if best_f1_model:
+        print_success(f"🏆 最高F1分数: {best_f1_model} ({best_f1:.4f})")
 
 
 if __name__ == "__main__":
