@@ -496,25 +496,38 @@ def run_quick_train():
         # 执行一键训练
         from ..commands.quick import quick_train
         
-        quick_train(
-            images_dir=images_dir,
-            labels_dir=labels_dir,
-            classes_file=None,
-            task=task_type,
-            model_version=config['version'],
-            model_size=config['model_size'],
-            epochs=config['epochs'],
-            batch=config['batch'],
-            imgsz=config['imgsz'],
-            device=config['device'],
-            augmentation=config['augmentation'],
-            ratios=ratios,
-            counts=counts,
-            skip_verify=skip_verify,
-            skip_stats=skip_stats,
-            project=None,
-            name=None,
-        )
+        # 准备训练参数
+        train_kwargs = {
+            'images_dir': images_dir,
+            'labels_dir': labels_dir,
+            'classes_file': None,
+            'task': task_type,
+            'model_version': config['version'],
+            'model_size': config['model_size'],
+            'epochs': config['epochs'],
+            'batch': config['batch'],
+            'imgsz': config['imgsz'],
+            'device': config['device'],
+            'augmentation': config['augmentation'],
+            'ratios': ratios,
+            'counts': counts,
+            'skip_verify': skip_verify,
+            'skip_stats': skip_stats,
+            'project': None,
+            'name': None,
+            'patience': config.get('patience', 50),
+            'save_period': config.get('save_period', 10),
+        }
+        
+        # 添加高级配置（如果有）
+        if config.get('augmentation_custom'):
+            train_kwargs['augmentation_custom'] = config['augmentation_custom']
+        if config.get('optimizer'):
+            train_kwargs['optimizer_config'] = config['optimizer']
+        if config.get('loss_weights'):
+            train_kwargs['loss_weights'] = config['loss_weights']
+        
+        quick_train(**train_kwargs)
         
     except Exception as e:
         print_error(f"一键训练失败: {e}")

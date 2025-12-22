@@ -45,6 +45,12 @@ def quick_train(
     skip_stats: bool = typer.Option(False, "--skip-stats", help="跳过数据统计"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="项目目录"),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="实验名称"),
+    patience: int = typer.Option(50, "--patience", help="早停耐心值"),
+    save_period: int = typer.Option(10, "--save-period", help="保存周期"),
+    # 从交互模式传递的高级配置（非CLI参数）
+    augmentation_custom: Optional[dict] = None,
+    optimizer_config: Optional[dict] = None,
+    loss_weights: Optional[dict] = None,
 ):
     """
     一键训练：自动完成数据处理、模型下载和训练的完整流程
@@ -411,26 +417,41 @@ def quick_train(
         else:
             actual_name = name
         
-        start_training(
-            model=full_model_path,
-            data=dataset_yaml,
-            task=task,
-            epochs=epochs,
-            batch=batch,
-            imgsz=imgsz,
-            device=device,
-            project=project,
-            name=name,
-            augmentation=augmentation,
-            patience=50,
-            save_period=10,
-            resume=False,
-            pretrained=True,
-            # 任务特定参数 - 显式传递 None
-            overlap_mask=None,
-            mask_ratio=None,
-            dropout=None,
-        )
+        # 构建训练参数
+        train_params = {
+            'model': full_model_path,
+            'data': dataset_yaml,
+            'task': task,
+            'epochs': epochs,
+            'batch': batch,
+            'imgsz': imgsz,
+            'device': device,
+            'project': project,
+            'name': name,
+            'augmentation': augmentation,
+            'patience': patience,
+            'save_period': save_period,
+            'resume': False,
+            'pretrained': True,
+            # 任务特定参数
+            'overlap_mask': None,
+            'mask_ratio': None,
+            'dropout': None,
+        }
+        
+        # 如果有自定义增强配置，合并到训练参数中
+        if augmentation_custom:
+            train_params['augmentation_custom'] = augmentation_custom
+        
+        # 如果有优化器配置
+        if optimizer_config:
+            train_params['optimizer_config'] = optimizer_config
+        
+        # 如果有损失权重配置
+        if loss_weights:
+            train_params['loss_weights'] = loss_weights
+        
+        start_training(**train_params)
         
         # 训练完成
         console.print()

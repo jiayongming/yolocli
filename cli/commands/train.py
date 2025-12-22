@@ -139,6 +139,10 @@ def start_training(
     mask_ratio: Optional[int] = typer.Option(None, "--mask-ratio", help="[分割] 掩码下采样比例"),
     # 分类任务特定参数
     dropout: Optional[float] = typer.Option(None, "--dropout", help="[分类] Dropout比例"),
+    # 从交互模式或quick_train传递的高级配置（非CLI参数）
+    augmentation_custom: Optional[dict] = None,
+    optimizer_config: Optional[dict] = None,
+    loss_weights: Optional[dict] = None,
 ):
     """开始训练YOLO模型"""
     
@@ -218,6 +222,17 @@ def start_training(
         augmentation = 'balanced'
     
     aug_config = AUGMENTATION_PRESETS[augmentation].copy()
+    
+    # 如果有自定义增强参数，覆盖预设值
+    if augmentation_custom:
+        print_info("应用自定义数据增强配置...")
+        aug_config.update(augmentation_custom)
+        # 显示自定义的参数
+        console.print()
+        print_info("自定义增强参数:")
+        for key, value in augmentation_custom.items():
+            print_info(f"  {key}: {value}")
+        console.print()
     
     # 添加任务特定配置
     task_specific_config = {}
@@ -308,6 +323,26 @@ def start_training(
             **aug_config,
             **task_specific_config,
         }
+        
+        # 添加优化器配置
+        if optimizer_config:
+            print_info("应用自定义优化器配置...")
+            training_kwargs.update(optimizer_config)
+            console.print()
+            print_info("自定义优化器参数:")
+            for key, value in optimizer_config.items():
+                print_info(f"  {key}: {value}")
+            console.print()
+        
+        # 添加损失权重配置
+        if loss_weights:
+            print_info("应用自定义损失权重配置...")
+            training_kwargs.update(loss_weights)
+            console.print()
+            print_info("自定义损失权重:")
+            for key, value in loss_weights.items():
+                print_info(f"  {key}: {value}")
+            console.print()
         
         results = yolo_model.train(**training_kwargs)
         

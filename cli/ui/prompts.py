@@ -320,11 +320,250 @@ def build_training_config() -> Dict[str, Any]:
     
     # 高级选项
     if confirm_action("配置高级选项?", default=False):
-        config['patience'] = int(input_number("早停耐心值:", default=50, min_value=0))
-        config['save_period'] = int(input_number("保存周期 (epoch):", default=10, min_value=1))
+        from ..ui.display import console, print_info, print_section_header
+        
+        console.print()
+        print_section_header("⚙️ 高级选项配置")
+        
+        # 1. 训练控制参数
+        console.print()
+        print_info("📊 训练控制参数：")
+        config['patience'] = int(input_number(
+            "早停耐心值 (连续多少轮无改善后停止):", 
+            default=50, 
+            min_value=0
+        ))
+        config['save_period'] = int(input_number(
+            "保存周期 (每隔多少轮保存一次模型):", 
+            default=10, 
+            min_value=1
+        ))
+        
+        # 2. 数据增强配置
+        console.print()
+        print_info("🎨 数据增强配置：")
+        print_info("   当前使用预设: " + config['augmentation'])
+        print_info("   您可以选择微调各项增强参数，或使用预设默认值")
+        console.print()
+        
+        if confirm_action("自定义数据增强参数?", default=False):
+            console.print()
+            print_section_header("🎨 数据增强详细配置")
+            
+            # 获取当前预设的默认值
+            from ..commands.train import AUGMENTATION_PRESETS
+            preset = AUGMENTATION_PRESETS.get(config['augmentation'], AUGMENTATION_PRESETS['balanced'])
+            
+            config['augmentation_custom'] = {}
+            
+            # 颜色空间增强
+            console.print()
+            print_info("📐 颜色空间增强 (HSV调整)：")
+            config['augmentation_custom']['hsv_h'] = float(input_number(
+                "  HSV-Hue增益 (色调偏移，0.0-1.0，推荐0.01-0.02):",
+                default=preset['hsv_h'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['hsv_s'] = float(input_number(
+                "  HSV-Saturation增益 (饱和度，0.0-1.0，推荐0.5-0.8):",
+                default=preset['hsv_s'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['hsv_v'] = float(input_number(
+                "  HSV-Value增益 (明度，0.0-1.0，推荐0.3-0.5):",
+                default=preset['hsv_v'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            
+            # 几何变换
+            console.print()
+            print_info("🔄 几何变换：")
+            config['augmentation_custom']['degrees'] = float(input_number(
+                "  旋转角度 (度数，0.0表示不旋转):",
+                default=preset['degrees'],
+                min_value=0.0,
+                max_value=180.0
+            ))
+            config['augmentation_custom']['translate'] = float(input_number(
+                "  平移比例 (图像宽高比例，0.0-0.5，推荐0.05-0.15):",
+                default=preset['translate'],
+                min_value=0.0,
+                max_value=0.5
+            ))
+            config['augmentation_custom']['scale'] = float(input_number(
+                "  缩放比例 (0.0-1.0，推荐0.3-0.6):",
+                default=preset['scale'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['shear'] = float(input_number(
+                "  剪切角度 (度数，0.0表示不剪切):",
+                default=preset['shear'],
+                min_value=0.0,
+                max_value=45.0
+            ))
+            config['augmentation_custom']['perspective'] = float(input_number(
+                "  透视变换 (0.0-0.001，推荐0.0或极小值):",
+                default=preset['perspective'],
+                min_value=0.0,
+                max_value=0.001
+            ))
+            
+            # 翻转
+            console.print()
+            print_info("🔃 翻转增强：")
+            config['augmentation_custom']['flipud'] = float(input_number(
+                "  上下翻转概率 (0.0-1.0，0.0=不翻转):",
+                default=preset['flipud'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['fliplr'] = float(input_number(
+                "  左右翻转概率 (0.0-1.0，推荐0.5):",
+                default=preset['fliplr'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            
+            # 高级增强
+            console.print()
+            print_info("🚀 高级增强技术：")
+            config['augmentation_custom']['mosaic'] = float(input_number(
+                "  Mosaic增强概率 (0.0-1.0，4图拼接，推荐1.0):",
+                default=preset['mosaic'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['mixup'] = float(input_number(
+                "  MixUp增强概率 (0.0-1.0，图像混合，推荐0.0-0.15):",
+                default=preset['mixup'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            config['augmentation_custom']['erasing'] = float(input_number(
+                "  随机擦除概率 (0.0-1.0，推荐0.1-0.4):",
+                default=preset['erasing'],
+                min_value=0.0,
+                max_value=1.0
+            ))
+            
+            # AutoAugment
+            console.print()
+            print_info("🤖 自动增强策略：")
+            if confirm_action("  启用AutoAugment (RandAugment策略)?", default=(preset.get('auto_augment') is not None)):
+                config['augmentation_custom']['auto_augment'] = 'randaugment'
+            else:
+                config['augmentation_custom']['auto_augment'] = None
+            
+            console.print()
+            print_info("✓ 数据增强自定义配置完成")
+        else:
+            config['augmentation_custom'] = None
+        
+        # 3. 优化器配置
+        console.print()
+        print_info("⚡ 优化器配置：")
+        if confirm_action("自定义优化器参数?", default=False):
+            config['optimizer'] = {}
+            
+            # 学习率
+            config['optimizer']['lr0'] = float(input_number(
+                "  初始学习率 (推荐: 检测0.01, 分类0.001):",
+                default=0.01,
+                min_value=0.0001,
+                max_value=1.0
+            ))
+            config['optimizer']['lrf'] = float(input_number(
+                "  最终学习率比例 (lr_final = lr0 * lrf，推荐0.01):",
+                default=0.01,
+                min_value=0.0001,
+                max_value=1.0
+            ))
+            
+            # 动量和权重衰减
+            config['optimizer']['momentum'] = float(input_number(
+                "  SGD动量 (推荐0.937):",
+                default=0.937,
+                min_value=0.0,
+                max_value=0.999
+            ))
+            config['optimizer']['weight_decay'] = float(input_number(
+                "  权重衰减 (L2正则化，推荐0.0005):",
+                default=0.0005,
+                min_value=0.0,
+                max_value=0.01
+            ))
+            
+            # Warmup
+            config['optimizer']['warmup_epochs'] = float(input_number(
+                "  Warmup轮数 (推荐3.0):",
+                default=3.0,
+                min_value=0.0,
+                max_value=10.0
+            ))
+            config['optimizer']['warmup_momentum'] = float(input_number(
+                "  Warmup初始动量 (推荐0.8):",
+                default=0.8,
+                min_value=0.0,
+                max_value=0.999
+            ))
+            config['optimizer']['warmup_bias_lr'] = float(input_number(
+                "  Warmup偏置学习率 (推荐0.1):",
+                default=0.1,
+                min_value=0.0,
+                max_value=1.0
+            ))
+        else:
+            config['optimizer'] = None
+        
+        # 4. 损失函数权重
+        console.print()
+        print_info("⚖️ 损失函数权重：")
+        if confirm_action("自定义损失函数权重?", default=False):
+            config['loss_weights'] = {}
+            
+            if config['task'] == 'detect' or config['task'] == 'segment':
+                config['loss_weights']['box'] = float(input_number(
+                    "  边界框损失权重 (推荐7.5):",
+                    default=7.5,
+                    min_value=0.1,
+                    max_value=20.0
+                ))
+                config['loss_weights']['cls'] = float(input_number(
+                    "  分类损失权重 (推荐0.5):",
+                    default=0.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+                config['loss_weights']['dfl'] = float(input_number(
+                    "  DFL损失权重 (推荐1.5):",
+                    default=1.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+            
+            if config['task'] == 'classify':
+                config['loss_weights']['label_smoothing'] = float(input_number(
+                    "  标签平滑 (0.0-0.1，推荐0.0):",
+                    default=0.0,
+                    min_value=0.0,
+                    max_value=0.1
+                ))
+        else:
+            config['loss_weights'] = None
+        
+        console.print()
+        print_info("✓ 高级选项配置完成")
+        
     else:
         config['patience'] = 50
         config['save_period'] = 10
+        config['augmentation_custom'] = None
+        config['optimizer'] = None
+        config['loss_weights'] = None
     
     return config
 
