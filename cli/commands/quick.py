@@ -39,7 +39,8 @@ def quick_train(
     imgsz: Optional[int] = typer.Option(None, "--imgsz", help="图像尺寸 (检测/分割默认640，分类默认224)"),
     device: str = typer.Option("auto", "--device", "-d", help="设备"),
     augmentation: str = typer.Option("balanced", "--augmentation", "-a", help="数据增强策略"),
-    ratios: str = typer.Option("0.7:0.2:0.1", "--ratios", "-r", help="数据集划分比例"),
+    ratios: Optional[str] = typer.Option(None, "--ratios", "-r", help="数据集划分比例 (如: 0.7:0.2:0.1)"),
+    counts: Optional[str] = typer.Option(None, "--counts", help="数据集划分样本数 (如: 100:30:10)"),
     skip_verify: bool = typer.Option(False, "--skip-verify", help="跳过数据验证"),
     skip_stats: bool = typer.Option(False, "--skip-stats", help="跳过数据统计"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="项目目录"),
@@ -72,6 +73,25 @@ def quick_train(
     task = validate_task_type(task)
     task_type = TaskType.from_string(task)
     print_info(f"任务类型: {task.upper()}")
+    
+    # 验证数据集划分参数
+    if ratios is not None and counts is not None:
+        print_error("❌ 错误: --ratios 和 --counts 不能同时使用")
+        print_info("请选择一种划分方式:")
+        print_info("  • --ratios 0.7:0.2:0.1  (按比例划分)")
+        print_info("  • --counts 100:30:10    (按样本数划分)")
+        raise typer.Exit(1)
+    
+    # 如果都没提供，默认使用比例划分
+    if ratios is None and counts is None:
+        ratios = "0.7:0.2:0.1"
+        print_info(f"使用默认划分比例: {ratios}")
+    
+    # 显示划分方式
+    if ratios:
+        print_info(f"📊 数据集划分: 按比例 ({ratios})")
+    else:
+        print_info(f"📊 数据集划分: 按样本数 ({counts})")
     
     # 根据任务类型设置默认参数（仅当用户未指定时）
     if task_type == TaskType.CLASSIFY:
@@ -216,6 +236,7 @@ def quick_train(
                         source_dir=images_dir,
                         output_dir=str(output_dir),
                         ratios=ratios,
+                        counts=counts,
                         seed=42,
                         task='classify'
                     )
@@ -246,6 +267,7 @@ def quick_train(
                     source_dir=None,
                     output_dir=str(output_dir),
                     ratios=ratios,
+                    counts=counts,
                     seed=42,
                     task=task
                 )

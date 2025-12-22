@@ -346,6 +346,7 @@ def run_train_operations():
                 
                 print_info(f"训练配置:")
                 print_info(f"  模型: {model_name}")
+                print_info(f"  任务类型: {config['task']}")
                 print_info(f"  数据集: {data_path}")
                 print_info(f"  训练轮数: {config['epochs']}")
                 print_info(f"  批次大小: {config['batch']}")
@@ -358,6 +359,7 @@ def run_train_operations():
                     start_training(
                         model=model_name,
                         data=data_path,
+                        task=config['task'],
                         epochs=config['epochs'],
                         batch=config['batch'],
                         imgsz=config['imgsz'],
@@ -414,11 +416,48 @@ def run_quick_train():
         print_info("  6. 开始训练")
         console.print()
         
-        # 选择任务类型
-        task_type = select_task_type()
+        # 步骤1: 选择数据集划分方式 (前移到第一步)
+        from ..ui.prompts import select_option
+        console.print()
+        print_section_header("步骤1: 数据集划分配置")
+        print_info("📊 数据集划分方式：")
+        print_info("   • 按比例划分：使用全部数据，按比例自动计算样本数")
+        print_info("   • 按样本数划分：从数据集中抽取固定数量的样本")
+        console.print()
         
+        split_mode = select_option(
+            "选择划分方式:",
+            choices=[
+                "按比例划分 (推荐用于常规训练)",
+                "按样本数划分 (推荐用于快速实验)",
+            ]
+        )
+        
+        use_counts = "样本数" in split_mode
+        
+        if use_counts:
+            console.print()
+            print_info("💡 按样本数划分说明：")
+            print_info("   - 输入格式：train:val:test (如: 100:30:10)")
+            print_info("   - 从所有样本中随机抽取指定数量")
+            print_info("   - 适合快速原型验证和数据增量实验")
+            console.print()
+            counts = input_text("样本数 (train:val:test):", default="100:30:10")
+            ratios = None
+        else:
+            ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
+            counts = None
+        
+        # 步骤2: 训练配置 (包含任务类型选择)
+        console.print()
+        print_section_header("步骤2: 训练参数配置")
+        config = build_training_config()
+        task_type = config['task']
+        
+        # 步骤3: 数据路径配置
+        console.print()
+        print_section_header("步骤3: 数据路径配置")
         # 根据任务类型获取不同的数据路径
-        # 一键训练从原始数据开始，自动完成划分
         if task_type == 'classify':
             images_dir = input_path("图像目录 (按类别组织):", default="data/raw/images", must_exist=False)
             labels_dir = images_dir  # 分类任务图像和标签目录相同
@@ -426,10 +465,9 @@ def run_quick_train():
             images_dir = input_path("图像目录:", default="data/raw/images", must_exist=False)
             labels_dir = input_path("标签目录:", default="data/raw/labels", must_exist=False)
         
-        # 训练配置
-        config = build_training_config()
-        
-        # 高级选项
+        # 步骤4: 高级选项
+        console.print()
+        print_section_header("步骤4: 高级选项")
         skip_verify = not confirm_action("验证数据集?", default=True)
         skip_stats = not confirm_action("统计数据分布?", default=True)
         
@@ -442,7 +480,13 @@ def run_quick_train():
         print_info(f"  模型大小: {config['model_size']}")
         print_info(f"  训练轮数: {config['epochs']}")
         print_info(f"  批次大小: {config['batch']}")
+        print_info(f"  图像尺寸: {config['imgsz']}")
         print_info(f"  设备: {config['device']}")
+        print_info(f"  数据增强: {config['augmentation']}")
+        if use_counts:
+            print_info(f"  📊 数据集划分: 按样本数 ({counts})")
+        else:
+            print_info(f"  📊 数据集划分: 按比例 ({ratios})")
         
         console.print()
         if not confirm_action("确认开始一键训练?", default=True):
@@ -464,7 +508,8 @@ def run_quick_train():
             imgsz=config['imgsz'],
             device=config['device'],
             augmentation=config['augmentation'],
-            ratios="0.7:0.2:0.1",
+            ratios=ratios,
+            counts=counts,
             skip_verify=skip_verify,
             skip_stats=skip_stats,
             project=None,

@@ -301,6 +301,9 @@ def build_training_config() -> Dict[str, Any]:
     # YOLO版本
     config['version'] = select_yolo_version()
     
+    # 任务类型
+    config['task'] = select_task_type()
+    
     # 模型大小
     config['model_size'] = select_model_size()
     

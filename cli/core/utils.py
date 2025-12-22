@@ -27,7 +27,15 @@ class TaskType(Enum):
             
         Raises:
             ValueError: 如果任务类型无效
+            TypeError: 如果task不是字符串类型
         """
+        # 类型检查，防止传入OptionInfo等非字符串对象
+        if not isinstance(task, str):
+            raise TypeError(
+                f"task参数必须是字符串类型，但收到了 {type(task).__name__} 类型。"
+                f"如果在交互模式中遇到此错误，请确保正确传递了task参数。"
+            )
+        
         task = task.lower().strip()
         for task_type in cls:
             if task_type.value == task:
