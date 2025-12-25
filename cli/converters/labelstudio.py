@@ -495,7 +495,7 @@ class LabelStudioConverter:
                         value = result.get('value', {})
                         
                         if result_type == 'rectanglelabels':
-                            # 目标检测标注
+                            # 目标检测标注（矩形框）
                             annotation_item = {
                                 'type': 'rectangle',
                                 'x': value.get('x', 0),
@@ -503,6 +503,63 @@ class LabelStudioConverter:
                                 'width': value.get('width', 0),
                                 'height': value.get('height', 0),
                                 'labels': value.get('rectanglelabels', []),
+                            }
+                            
+                            # 获取原始图像尺寸
+                            if 'original_width' in result:
+                                item['image_width'] = result['original_width']
+                                item['image_height'] = result['original_height']
+                            
+                            item['annotations'].append(annotation_item)
+                        
+                        elif result_type == 'polygonlabels':
+                            # 分割标注（多边形）- 转换为边界框用于检测任务
+                            points = value.get('points', [])
+                            if points:
+                                # 计算多边形的边界框
+                                x_coords = [p[0] for p in points]
+                                y_coords = [p[1] for p in points]
+                                
+                                x_min = min(x_coords)
+                                x_max = max(x_coords)
+                                y_min = min(y_coords)
+                                y_max = max(y_coords)
+                                
+                                annotation_item = {
+                                    'type': 'polygon',  # 标记为多边形转换的
+                                    'x': x_min,
+                                    'y': y_min,
+                                    'width': x_max - x_min,
+                                    'height': y_max - y_min,
+                                    'labels': value.get('polygonlabels', []),
+                                    'points': points,  # 保留原始多边形点
+                                }
+                                
+                                # 获取原始图像尺寸
+                                if 'original_width' in result:
+                                    item['image_width'] = result['original_width']
+                                    item['image_height'] = result['original_height']
+                                
+                                item['annotations'].append(annotation_item)
+                        
+                        elif result_type == 'keypointlabels':
+                            # 关键点标注 - 转换为小边界框用于检测任务
+                            x = value.get('x', 0)
+                            y = value.get('y', 0)
+                            # width 是关键点的大小（通常很小，如 0.5%）
+                            kp_width = value.get('width', 1.0)
+                            kp_height = kp_width  # 假设是正方形
+                            
+                            # 将关键点中心转换为边界框（左上角 + 宽高）
+                            # x, y 是中心点坐标，需要转换为左上角
+                            annotation_item = {
+                                'type': 'keypoint',  # 标记为关键点转换的
+                                'x': x - kp_width / 2,  # 左上角 x
+                                'y': y - kp_height / 2,  # 左上角 y
+                                'width': kp_width,
+                                'height': kp_height,
+                                'labels': value.get('keypointlabels', []),
+                                'keypoint_center': (x, y),  # 保留原始关键点中心
                             }
                             
                             # 获取原始图像尺寸
