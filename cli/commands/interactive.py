@@ -1012,15 +1012,18 @@ def run_labelstudio_operations():
                                 
                                 available, error = fo_mgr.ensure_fiftyone()
                                 if available:
+                                    print_info("正在将数据集复制到 datasets 目录...")
                                     print_info("正在加载数据集到FiftyOne...")
                                     success, ds_name, error = fo_mgr.load_yolo_dataset(
                                         data_yaml_path=str(dataset_yaml),
                                         dataset_name=f"ls_project_{project_id}",
-                                        persistent=True
+                                        persistent=True,
+                                        copy_to_datasets=True
                                     )
                                     
                                     if success:
                                         print_success(f"✓ 数据集已加载: {ds_name}")
+                                        print_info(f"  数据集位置: datasets/{ds_name}/")
                                         
                                         if confirm_action("启动FiftyOne可视化?", default=True):
                                             print_info("正在启动FiftyOne App...")
@@ -1074,19 +1077,25 @@ def run_fiftyone_operations():
                 
                 yaml_path = input_path("dataset.yaml路径:", default="data/processed/dataset.yaml", must_exist=True)
                 dataset_name = input_text("数据集名称 (留空自动生成):", default="")
+                copy_dataset = confirm_action("是否将数据集复制到 datasets 目录统一管理?", default=True)
                 
                 if not dataset_name:
                     dataset_name = None
                 
+                if copy_dataset:
+                    print_info("正在将数据集复制到 datasets 目录...")
                 print_info("正在加载数据集...")
                 success, ds_name, error = fo_mgr.load_yolo_dataset(
                     data_yaml_path=yaml_path,
                     dataset_name=dataset_name,
-                    persistent=True
+                    persistent=True,
+                    copy_to_datasets=copy_dataset
                 )
                 
                 if success:
                     print_success(f"✓ 数据集已加载: {ds_name}")
+                    if copy_dataset:
+                        print_info(f"  数据集位置: datasets/{ds_name}/")
                     
                     if confirm_action("立即启动可视化?", default=True):
                         print_info("正在启动FiftyOne App...")

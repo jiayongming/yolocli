@@ -3,6 +3,7 @@
 """FiftyOne数据集管理器"""
 
 import yaml
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 import importlib.util
@@ -47,7 +48,9 @@ class FiftyOneManager:
         data_yaml_path: str,
         dataset_name: Optional[str] = None,
         splits: Optional[List[str]] = None,
-        persistent: bool = True
+        persistent: bool = True,
+        copy_to_datasets: bool = True,
+        datasets_base_dir: Optional[str] = None
     ) -> Tuple[bool, Optional[str], str]:
         """从YOLO格式加载数据集到FiftyOne
         
@@ -56,6 +59,8 @@ class FiftyOneManager:
             dataset_name: 数据集名称，如果为None则从yaml文件生成
             splits: 要加载的划分，默认['train', 'val', 'test']
             persistent: 是否持久化数据集
+            copy_to_datasets: 是否先将数据集复制到datasets目录，默认True
+            datasets_base_dir: datasets基础目录，默认为当前目录下的datasets
             
         Returns:
             Tuple[bool, Optional[str], str]: (是否成功, 数据集名称, 错误信息)
@@ -71,12 +76,81 @@ class FiftyOneManager:
             if not yaml_path.exists():
                 return (False, None, f"数据集配置文件不存在: {data_yaml_path}")
             
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                dataset_config = yaml.safe_load(f)
-            
             # 提取配置信息
             # 优先使用 yaml 文件所在目录作为根目录
             dataset_root = yaml_path.parent.resolve()
+            
+            # 生成数据集名称（在复制前确定）
+            if dataset_name is None:
+                dataset_name = f"yolo_{dataset_root.name}"
+            
+            # 如果需要复制数据集
+            if copy_to_datasets:
+                # 确定datasets目录
+                if datasets_base_dir is None:
+                    datasets_base_dir = Path.cwd() / 'datasets'
+                else:
+                    datasets_base_dir = Path(datasets_base_dir)
+                
+                # 创建datasets目录
+                datasets_base_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 目标目录：datasets/{dataset_name}/
+                target_dataset_dir = datasets_base_dir / dataset_name
+                
+                # 如果目标目录已存在，询问是否覆盖（这里直接覆盖，可以后续改进）
+                if target_dataset_dir.exists():
+                    # 删除旧的目录
+                    shutil.rmtree(target_dataset_dir)
+                
+                # 复制整个数据集目录
+                shutil.copytree(dataset_root, target_dataset_dir)
+                
+                # 更新 yaml_path 和 dataset_root 指向复制后的位置
+                yaml_path = target_dataset_dir / yaml_path.name
+                dataset_root = target_dataset_dir
+                
+                # 修改复制后的 dataset.yaml 文件，更新路径
+                # 读取复制后的 yaml 文件
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    dataset_config = yaml.safe_load(f)
+                
+                # 保存原始的 path 值（用于路径转换）
+                original_path = dataset_config.get('path', '.')
+                
+                # 更新 path 字段为相对路径（'.' 表示当前目录）
+                # 这样数据集可以被移动而不影响使用
+                dataset_config['path'] = '.'
+                
+                # 如果 train/val/test 路径是绝对路径，转换为相对路径
+                for split_key in ['train', 'val', 'test']:
+                    if split_key in dataset_config:
+                        split_path_str = dataset_config[split_key]
+                        split_path = Path(split_path_str)
+                        
+                        if split_path.is_absolute():
+                            # 尝试转换为相对于新 dataset_root 的相对路径
+                            try:
+                                rel_path = split_path.relative_to(dataset_root)
+                                dataset_config[split_key] = str(rel_path).replace('\\', '/')
+                            except ValueError:
+                                # 如果无法转换（路径不在 dataset_root 下）
+                                # 尝试在新目录下查找对应的目录
+                                dir_name = split_path.name
+                                potential_path = dataset_root / dir_name
+                                if potential_path.exists():
+                                    dataset_config[split_key] = dir_name
+                                else:
+                                    # 保持使用目录名作为相对路径
+                                    dataset_config[split_key] = split_path.name
+                
+                # 保存修改后的 yaml 文件
+                with open(yaml_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(dataset_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            else:
+                # 如果不复制，直接读取原始 yaml
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    dataset_config = yaml.safe_load(f)
             
             # 如果配置中有 path 字段，检查是否需要使用它
             if 'path' in dataset_config:
@@ -110,10 +184,6 @@ class FiftyOneManager:
             # 确定要加载的划分
             if splits is None:
                 splits = ['train', 'val', 'test']
-            
-            # 生成数据集名称
-            if dataset_name is None:
-                dataset_name = f"yolo_{dataset_root.name}"
             
             # 检查数据集是否已存在
             if dataset_name in self.fo.list_datasets():

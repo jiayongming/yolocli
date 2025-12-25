@@ -60,6 +60,9 @@ data/processed/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# FiftyOne 管理的数据集目录
+datasets/
+
 # Label Studio 导出的大文件
 labelstudioexport/*.json
 !labelstudioexport/.gitkeep
