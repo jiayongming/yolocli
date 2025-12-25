@@ -63,3 +63,15 @@ tasks:
     default_model_size: s
     dropout: 0.0
     top_k: 5
+
+# Label Studio配置
+labelstudio:
+  url: http://localhost:8080
+  token: ""  # 可选，留空时在交互模式输入
+  auto_refresh: true  # 自动刷新refresh token
+  token_type: auto  # auto/legacy/bearer
+
+# FiftyOne配置
+fiftyone:
+  default_port: 5151
+  auto_launch_browser: true

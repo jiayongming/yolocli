@@ -129,6 +129,166 @@ class LabelStudioClient:
         except Exception as e:
             return (False, f"未知错误：{str(e)}")
     
+    def list_projects(self) -> Tuple[bool, List[Dict], str]:
+        """获取所有项目列表
+        
+        Returns:
+            Tuple[bool, List[Dict], str]: (是否成功, 项目列表, 错误信息)
+                项目列表格式: [{"id": int, "title": str, "description": str, "task_number": int, "created_at": str}, ...]
+        """
+        try:
+            response = self.session.get(f"{self.url}/api/projects/", timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Label Studio API 返回的是一个包含results的字典，或者直接是列表
+                if isinstance(data, dict) and 'results' in data:
+                    projects = data['results']
+                elif isinstance(data, list):
+                    projects = data
+                else:
+                    return (False, [], "返回数据格式不正确")
+                
+                # 提取关键信息
+                project_list = []
+                for proj in projects:
+                    project_list.append({
+                        'id': proj.get('id'),
+                        'title': proj.get('title', '未命名项目'),
+                        'description': proj.get('description', ''),
+                        'task_number': proj.get('task_number', 0),
+                        'created_at': proj.get('created_at', ''),
+                    })
+                
+                return (True, project_list, "")
+            elif response.status_code == 401:
+                return (False, [], "认证失败：Token无效")
+            elif response.status_code == 403:
+                return (False, [], "认证失败：权限不足")
+            else:
+                return (False, [], f"获取项目列表失败：HTTP {response.status_code}")
+                
+        except requests.exceptions.ConnectionError:
+            return (False, [], f"无法连接到服务器：{self.url}")
+        except requests.exceptions.Timeout:
+            return (False, [], "连接超时")
+        except Exception as e:
+            return (False, [], f"获取项目列表失败：{str(e)}")
+    
+    def get_project_details(self, project_id: int) -> Tuple[bool, Optional[Dict], str]:
+        """获取单个项目详情
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            Tuple[bool, Optional[Dict], str]: (是否成功, 项目详情, 错误信息)
+        """
+        try:
+            response = self.session.get(f"{self.url}/api/projects/{project_id}/", timeout=10)
+            
+            if response.status_code == 200:
+                project = response.json()
+                return (True, project, "")
+            elif response.status_code == 404:
+                return (False, None, f"项目 {project_id} 不存在")
+            elif response.status_code in [401, 403]:
+                return (False, None, "认证失败")
+            else:
+                return (False, None, f"获取项目详情失败：HTTP {response.status_code}")
+                
+        except requests.exceptions.ConnectionError:
+            return (False, None, f"无法连接到服务器：{self.url}")
+        except requests.exceptions.Timeout:
+            return (False, None, "连接超时")
+        except Exception as e:
+            return (False, None, f"获取项目详情失败：{str(e)}")
+    
+    def export_project(self, project_id: int, export_format: str = 'JSON') -> Tuple[bool, Optional[List[Dict]], str]:
+        """导出项目标注数据
+        
+        Args:
+            project_id: 项目ID
+            export_format: 导出格式，默认JSON
+            
+        Returns:
+            Tuple[bool, Optional[List[Dict]], str]: (是否成功, 标注数据, 错误信息)
+        """
+        try:
+            # Label Studio export API endpoint
+            response = self.session.get(
+                f"{self.url}/api/projects/{project_id}/export",
+                params={'exportType': export_format},
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return (True, data, "")
+            elif response.status_code == 404:
+                return (False, None, f"项目 {project_id} 不存在")
+            elif response.status_code in [401, 403]:
+                return (False, None, "认证失败")
+            else:
+                return (False, None, f"导出失败：HTTP {response.status_code}")
+                
+        except requests.exceptions.ConnectionError:
+            return (False, None, f"无法连接到服务器：{self.url}")
+        except requests.exceptions.Timeout:
+            return (False, None, "导出超时（数据量可能较大）")
+        except Exception as e:
+            return (False, None, f"导出失败：{str(e)}")
+    
+    def download_project_images(
+        self,
+        project_id: int,
+        output_dir: Path,
+        skip_existing: bool = True,
+        max_workers: int = 4,
+        progress_callback: Optional[Callable] = None
+    ) -> Tuple[bool, Dict[str, int], str]:
+        """下载项目的所有图片
+        
+        Args:
+            project_id: 项目ID
+            output_dir: 输出目录
+            skip_existing: 是否跳过已存在的文件
+            max_workers: 最大并发数
+            progress_callback: 进度回调函数
+            
+        Returns:
+            Tuple[bool, Dict[str, int], str]: (是否成功, 统计信息, 错误信息)
+        """
+        # 首先导出项目获取所有任务
+        success, data, error = self.export_project(project_id)
+        if not success:
+            return (False, {}, f"无法导出项目数据：{error}")
+        
+        if not data:
+            return (True, {"downloaded": 0, "skipped": 0, "failed": 0}, "项目中没有数据")
+        
+        # 提取所有图片路径
+        image_list = []
+        for task in data:
+            image_path = task.get('data', {}).get('image', '')
+            if image_path:
+                filename = Path(image_path).name
+                local_path = output_dir / filename
+                image_list.append((image_path, local_path))
+        
+        if not image_list:
+            return (True, {"downloaded": 0, "skipped": 0, "failed": 0}, "项目中没有图片")
+        
+        # 批量下载
+        stats = self.download_images_batch(
+            image_list=image_list,
+            skip_existing=skip_existing,
+            max_workers=max_workers,
+            progress_callback=progress_callback
+        )
+        
+        return (True, stats, "")
+    
     def download_image(
         self, 
         image_path: str, 

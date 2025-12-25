@@ -12,7 +12,9 @@ from ..ui.prompts import (
     select_yolo_version, select_task_type, select_model_size, select_device,
     select_augmentation_preset, select_export_formats,
     build_training_config, input_text, input_path, input_number,
-    confirm_action
+    confirm_action,
+    select_labelstudio_operation, select_labelstudio_project, input_labelstudio_config,
+    select_fiftyone_operation, select_fiftyone_dataset
 )
 from ..ui.display import (
     print_logo, clear_screen, print_section_header,
@@ -592,6 +594,575 @@ def run_detect_operations():
                 break
 
 
+def run_labelstudio_operations():
+    """Label Studio数据管理操作"""
+    from ..converters.labelstudio import LabelStudioClient
+    from ..core.config import ConfigManager
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    
+    # 获取配置管理器
+    config_mgr = ConfigManager()
+    
+    # 读取Label Studio配置
+    ls_config = config_mgr.config.get('labelstudio', {})
+    default_url = ls_config.get('url', 'http://localhost:8080')
+    default_token = ls_config.get('token', '')
+    
+    # 初始化客户端（稍后配置）
+    client = None
+    
+    while True:
+        operation = select_labelstudio_operation()
+        
+        if operation == 'back':
+            break
+        
+        try:
+            if operation == 'config':
+                # 配置Label Studio连接
+                print_section_header("配置Label Studio连接")
+                
+                ls_user_config = input_labelstudio_config()
+                default_url = ls_user_config['url']
+                default_token = ls_user_config['token']
+                
+                # 测试连接
+                print_info("正在测试连接...")
+                test_client = LabelStudioClient(url=default_url, token=default_token)
+                success, msg = test_client.test_connection()
+                
+                if success:
+                    print_success(f"✓ {msg}")
+                    client = test_client
+                    
+                    # 询问是否保存到配置文件
+                    if confirm_action("是否保存到配置文件?", default=False):
+                        config_mgr.config['labelstudio'] = {
+                            'url': default_url,
+                            'token': default_token,
+                            'auto_refresh': True,
+                            'token_type': 'auto'
+                        }
+                        config_mgr.save()
+                        print_success("✓ 配置已保存")
+                else:
+                    print_error(f"✗ {msg}")
+                    continue
+            
+            elif operation == 'list':
+                # 列出所有项目
+                print_section_header("Label Studio项目列表")
+                
+                # 确保有客户端
+                if client is None:
+                    if not default_url or not default_token:
+                        print_warning("请先配置Label Studio连接")
+                        continue
+                    
+                    client = LabelStudioClient(url=default_url, token=default_token)
+                    success, msg = client.test_connection()
+                    if not success:
+                        print_error(f"连接失败: {msg}")
+                        print_info("请先使用 'config' 命令配置连接")
+                        continue
+                
+                # 获取项目列表
+                print_info("正在获取项目列表...")
+                success, projects, error = client.list_projects()
+                
+                if not success:
+                    print_error(f"获取失败: {error}")
+                    continue
+                
+                if not projects:
+                    print_warning("没有找到任何项目")
+                    continue
+                
+                # 显示项目列表
+                from ..ui.display import print_table
+                table_data = []
+                for proj in projects:
+                    table_data.append([
+                        str(proj['id']),
+                        proj['title'],
+                        str(proj['task_number']),
+                        proj.get('description', '')[:50]
+                    ])
+                
+                print_table(
+                    "Label Studio项目",
+                    ["ID", "项目名称", "任务数", "描述"],
+                    table_data
+                )
+            
+            elif operation == 'fetch':
+                # 获取项目数据
+                print_section_header("获取Label Studio项目数据")
+                
+                # 确保有客户端
+                if client is None:
+                    if not default_url or not default_token:
+                        print_warning("请先配置Label Studio连接")
+                        continue
+                    
+                    client = LabelStudioClient(url=default_url, token=default_token)
+                    success, msg = client.test_connection()
+                    if not success:
+                        print_error(f"连接失败: {msg}")
+                        continue
+                
+                # 获取项目列表供选择
+                print_info("正在获取项目列表...")
+                success, projects, error = client.list_projects()
+                
+                if not success:
+                    print_error(f"获取失败: {error}")
+                    continue
+                
+                if not projects:
+                    print_warning("没有找到任何项目")
+                    continue
+                
+                # 选择项目
+                selected_project = select_labelstudio_project(projects)
+                if selected_project is None:
+                    continue
+                
+                project_id = selected_project['id']
+                project_title = selected_project['title']
+                
+                print_info(f"已选择项目: {project_title} (ID: {project_id})")
+                print_info(f"任务数: {selected_project['task_number']}")
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
+                # 配置输出路径
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                default_export_dir = f"labelstudioexport/project_{project_id}_{timestamp}"
+                output_dir = input_path("输出目录:", default=default_export_dir, must_exist=False)
+                
+                # 配置下载参数
+                max_workers = input_number("并发下载线程数:", default=4, min_value=1, max_value=16)
+                
+                # 对于检测任务，询问是否包含负样本
+                include_negative = True
+                if task_type == 'detect':
+                    console.print()
+                    print_info("💡 负样本说明：")
+                    print_info("   - 无标注的图片可作为负样本训练")
+                    print_info("   - 有助于减少误报，提高模型鲁棒性")
+                    print_info("   - 推荐包含10-20%的负样本")
+                    console.print()
+                    include_negative = confirm_action("包含无标注图片作为负样本?", default=True)
+                
+                console.print()
+                print_info("将执行以下操作:")
+                print_info(f"  1. 导出项目 {project_id} 的标注数据")
+                print_info(f"  2. 下载所有图片 (并发数: {int(max_workers)})")
+                print_info(f"  3. 转换为YOLO {task_type} 格式")
+                print_info(f"  4. 保存到: {output_dir}")
+                console.print()
+                
+                if not confirm_action("确认开始?", default=True):
+                    continue
+                
+                # 创建输出目录
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+                
+                # 1. 导出标注数据
+                print_section_header("步骤1: 导出标注数据")
+                print_info("正在导出...")
+                success, data, error = client.export_project(project_id, 'JSON')
+                
+                if not success:
+                    print_error(f"导出失败: {error}")
+                    continue
+                
+                # 保存导出的JSON
+                export_json_path = output_path / f"project_{project_id}_export.json"
+                with open(export_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                
+                print_success(f"✓ 导出完成: {len(data)} 个任务")
+                print_info(f"  JSON已保存: {export_json_path}")
+                
+                # 2. 下载图片
+                print_section_header("步骤2: 下载图片")
+                images_dir = output_path / "images"
+                images_dir.mkdir(parents=True, exist_ok=True)
+                
+                print_info(f"正在下载图片到: {images_dir}")
+                
+                # 准备下载列表
+                from ..converters.labelstudio import LabelStudioConverter
+                converter = LabelStudioConverter()
+                parsed_data = converter.parse_json(export_json_path, include_negative=True)
+                download_list = converter.prepare_download_list(parsed_data, images_dir)
+                
+                print_info(f"共 {len(download_list)} 张图片需要下载")
+                
+                # 批量下载（使用进度条）
+                from ..ui.display import create_progress_bar
+                
+                with create_progress_bar() as progress:
+                    task_id = progress.add_task("下载图片", total=len(download_list))
+                    
+                    def progress_callback(current, total, status, filename):
+                        progress.update(task_id, advance=1)
+                    
+                    # 批量下载
+                    stats = client.download_images_batch(
+                        image_list=download_list,
+                        skip_existing=True,
+                        max_workers=int(max_workers),
+                        progress_callback=progress_callback
+                    )
+                
+                print_success(f"✓ 下载完成")
+                print_info(f"  新下载: {stats['downloaded']}")
+                print_info(f"  已跳过: {stats['skipped']}")
+                if stats['failed'] > 0:
+                    print_warning(f"  失败: {stats['failed']}")
+                
+                # 3. 转换为YOLO格式
+                print_section_header("步骤3: 转换为YOLO格式")
+                
+                # 调用现有的转换命令
+                from ..commands.data import convert_labelstudio
+                
+                try:
+                    convert_labelstudio(
+                        input_file=str(export_json_path),
+                        url=default_url,
+                        token=default_token,
+                        output_dir=str(output_path),
+                        task=task_type,
+                        format_type='json',
+                        skip_existing=True,
+                        max_workers=int(max_workers),
+                        include_negative=include_negative
+                    )
+                    
+                    print_success("✓ 转换完成")
+                    
+                    # 询问是否进行数据处理
+                    console.print()
+                    if confirm_action("是否进行数据处理 (划分、验证、统计)?", default=True):
+                        print_section_header("数据处理")
+                        
+                        import shutil
+                        import os
+                        
+                        # 目标目录
+                        raw_data_dir = Path("data/raw")
+                        raw_data_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # 检查 data/raw 目录是否为空
+                        raw_contents = list(raw_data_dir.iterdir())
+                        # 过滤掉 .gitkeep 等隐藏文件
+                        raw_contents = [f for f in raw_contents if not f.name.startswith('.')]
+                        
+                        if raw_contents:
+                            console.print()
+                            print_warning(f"data/raw 目录不为空，包含以下内容:")
+                            for item in raw_contents[:10]:  # 最多显示10个
+                                print_info(f"  • {item.name}")
+                            if len(raw_contents) > 10:
+                                print_info(f"  ... 还有 {len(raw_contents) - 10} 个文件/目录")
+                            
+                            console.print()
+                            if not confirm_action("是否清空 data/raw 目录并移动新数据?", default=False):
+                                print_warning("取消数据处理")
+                                continue
+                            
+                            # 清空目录（保留 .gitkeep）
+                            print_info("正在清空 data/raw 目录...")
+                            for item in raw_contents:
+                                if item.is_dir():
+                                    shutil.rmtree(item)
+                                else:
+                                    item.unlink()
+                            print_success("✓ 目录已清空")
+                        
+                        # 移动所有内容到 data/raw
+                        print_info(f"正在将数据移动到 data/raw 目录...")
+                        
+                        moved_count = 0
+                        for item in output_path.iterdir():
+                            # 跳过非数据文件
+                            if item.name.startswith('.') or item.name.endswith('.json') or item.name.endswith('.yaml'):
+                                continue
+                            
+                            dest_path = raw_data_dir / item.name
+                            
+                            # 如果目标已存在，先删除
+                            if dest_path.exists():
+                                if dest_path.is_dir():
+                                    shutil.rmtree(dest_path)
+                                else:
+                                    dest_path.unlink()
+                            
+                            # 移动文件/目录
+                            shutil.move(str(item), str(dest_path))
+                            moved_count += 1
+                            print_info(f"  ✓ {item.name} → data/raw/{item.name}")
+                        
+                        if moved_count > 0:
+                            print_success(f"✓ 已移动 {moved_count} 个文件/目录到 data/raw")
+                            
+                            console.print()
+                            print_info("即将进入数据处理菜单...")
+                            console.print()
+                            
+                            # 跳转到数据处理操作
+                            run_data_operations()
+                        else:
+                            print_warning("没有找到可移动的数据文件")
+                    
+                    else:
+                        # 询问是否使用FiftyOne查看
+                        console.print()
+                        if confirm_action("是否使用FiftyOne查看数据集?", default=True):
+                            # 查找生成的dataset.yaml
+                            dataset_yaml = output_path / "dataset.yaml"
+                            if dataset_yaml.exists():
+                                # 加载到FiftyOne
+                                from ..integrations.fiftyone_manager import FiftyOneManager
+                                fo_mgr = FiftyOneManager()
+                                
+                                available, error = fo_mgr.ensure_fiftyone()
+                                if available:
+                                    print_info("正在加载数据集到FiftyOne...")
+                                    success, ds_name, error = fo_mgr.load_yolo_dataset(
+                                        data_yaml_path=str(dataset_yaml),
+                                        dataset_name=f"ls_project_{project_id}",
+                                        persistent=True
+                                    )
+                                    
+                                    if success:
+                                        print_success(f"✓ 数据集已加载: {ds_name}")
+                                        
+                                        if confirm_action("启动FiftyOne可视化?", default=True):
+                                            print_info("正在启动FiftyOne App...")
+                                            print_info("提示: 按 Ctrl+C 可以关闭可视化并继续")
+                                            fo_mgr.launch_app(dataset_name=ds_name, auto_open=True)
+                                    else:
+                                        print_error(f"加载数据集失败: {error}")
+                                else:
+                                    print_warning(f"FiftyOne不可用: {error}")
+                            else:
+                                print_warning("未找到dataset.yaml文件")
+                    
+                except Exception as e:
+                    print_error(f"转换失败: {e}")
+            
+            console.print()
+            if not confirm_action("继续Label Studio操作?", default=False):
+                break
+                
+        except Exception as e:
+            print_error(f"操作失败: {e}")
+            import traceback
+            traceback.print_exc()
+            if not confirm_action("继续?", default=True):
+                break
+
+
+def run_fiftyone_operations():
+    """FiftyOne数据集可视化和管理操作"""
+    from ..integrations.fiftyone_manager import FiftyOneManager
+    
+    fo_mgr = FiftyOneManager()
+    
+    # 检查FiftyOne是否可用
+    available, error = fo_mgr.ensure_fiftyone()
+    if not available:
+        print_error(error)
+        print_info("安装FiftyOne: pip install fiftyone")
+        return
+    
+    while True:
+        operation = select_fiftyone_operation()
+        
+        if operation == 'back':
+            break
+        
+        try:
+            if operation == 'load':
+                # 加载数据集
+                print_section_header("加载YOLO数据集到FiftyOne")
+                
+                yaml_path = input_path("dataset.yaml路径:", default="data/dataset.yaml", must_exist=True)
+                dataset_name = input_text("数据集名称 (留空自动生成):", default="")
+                
+                if not dataset_name:
+                    dataset_name = None
+                
+                print_info("正在加载数据集...")
+                success, ds_name, error = fo_mgr.load_yolo_dataset(
+                    data_yaml_path=yaml_path,
+                    dataset_name=dataset_name,
+                    persistent=True
+                )
+                
+                if success:
+                    print_success(f"✓ 数据集已加载: {ds_name}")
+                    
+                    if confirm_action("立即启动可视化?", default=True):
+                        print_info("正在启动FiftyOne App...")
+                        fo_mgr.launch_app(dataset_name=ds_name, auto_open=True)
+                else:
+                    print_error(f"加载失败: {error}")
+            
+            elif operation == 'launch':
+                # 启动可视化
+                print_section_header("启动FiftyOne可视化")
+                
+                # 获取数据集列表
+                success, datasets, error = fo_mgr.list_datasets()
+                
+                if not success:
+                    print_error(f"获取数据集列表失败: {error}")
+                    continue
+                
+                if not datasets:
+                    print_warning("没有可用的数据集")
+                    print_info("请先使用 'load' 命令加载数据集")
+                    continue
+                
+                # 选择数据集
+                dataset_name = select_fiftyone_dataset(list(datasets))
+                if dataset_name is None:
+                    continue
+                
+                print_info(f"正在启动FiftyOne App (数据集: {dataset_name})...")
+                print_info("提示: 浏览器会自动打开，按 Ctrl+C 可以关闭")
+                
+                success, error = fo_mgr.launch_app(dataset_name=dataset_name, auto_open=True)
+                
+                if not success:
+                    print_error(f"启动失败: {error}")
+            
+            elif operation == 'list':
+                # 列出所有数据集
+                print_section_header("FiftyOne数据集列表")
+                
+                success, datasets, error = fo_mgr.list_datasets()
+                
+                if not success:
+                    print_error(f"获取失败: {error}")
+                    continue
+                
+                if not datasets:
+                    print_warning("没有找到任何数据集")
+                    continue
+                
+                print_info(f"共 {len(datasets)} 个数据集:")
+                for ds in datasets:
+                    console.print(f"  • {ds}")
+            
+            elif operation == 'info':
+                # 查看数据集信息
+                print_section_header("数据集详细信息")
+                
+                # 获取数据集列表
+                success, datasets, error = fo_mgr.list_datasets()
+                
+                if not success:
+                    print_error(f"获取数据集列表失败: {error}")
+                    continue
+                
+                if not datasets:
+                    print_warning("没有可用的数据集")
+                    continue
+                
+                # 选择数据集
+                dataset_name = select_fiftyone_dataset(list(datasets))
+                if dataset_name is None:
+                    continue
+                
+                print_info(f"正在获取数据集信息: {dataset_name}")
+                success, info, error = fo_mgr.get_dataset_info(dataset_name)
+                
+                if not success:
+                    print_error(f"获取失败: {error}")
+                    continue
+                
+                # 显示信息
+                from ..ui.display import print_key_value
+                
+                console.print()
+                print_key_value("数据集名称", info['name'])
+                print_key_value("样本总数", info['total_samples'])
+                print_key_value("媒体类型", info['media_type'])
+                print_key_value("持久化", "是" if info['persistent'] else "否")
+                
+                if 'splits' in info:
+                    console.print()
+                    print_info("数据集划分:")
+                    for split, count in info['splits'].items():
+                        print_key_value(f"  {split}", count)
+                
+                if 'classes' in info:
+                    console.print()
+                    print_key_value("类别数", info['num_classes'])
+                    print_info("类别列表:")
+                    for cls in info['classes']:
+                        console.print(f"  • {cls}")
+                    
+                    if 'class_counts' in info:
+                        console.print()
+                        print_info("类别分布:")
+                        for cls, count in info['class_counts'].items():
+                            print_key_value(f"  {cls}", count)
+            
+            elif operation == 'delete':
+                # 删除数据集
+                print_section_header("删除数据集")
+                
+                # 获取数据集列表
+                success, datasets, error = fo_mgr.list_datasets()
+                
+                if not success:
+                    print_error(f"获取数据集列表失败: {error}")
+                    continue
+                
+                if not datasets:
+                    print_warning("没有可用的数据集")
+                    continue
+                
+                # 选择数据集
+                dataset_name = select_fiftyone_dataset(list(datasets))
+                if dataset_name is None:
+                    continue
+                
+                print_warning(f"即将删除数据集: {dataset_name}")
+                print_info("注意: 这不会删除原始图片和标签文件")
+                
+                if confirm_action("确认删除?", default=False):
+                    success, error = fo_mgr.delete_dataset(dataset_name)
+                    
+                    if success:
+                        print_success(f"✓ 数据集已删除: {dataset_name}")
+                    else:
+                        print_error(f"删除失败: {error}")
+            
+            console.print()
+            if not confirm_action("继续FiftyOne操作?", default=False):
+                break
+                
+        except Exception as e:
+            print_error(f"操作失败: {e}")
+            import traceback
+            traceback.print_exc()
+            if not confirm_action("继续?", default=True):
+                break
+
+
 def run_validate_operations():
     """验证操作"""
     while True:
@@ -800,6 +1371,14 @@ def start():
                 
                 elif choice == 'detect':
                     run_detect_operations()
+                
+                elif choice == 'labelstudio':
+                    # Label Studio管理
+                    run_labelstudio_operations()
+                
+                elif choice == 'fiftyone':
+                    # FiftyOne可视化
+                    run_fiftyone_operations()
                 
             except KeyboardInterrupt:
                 console.print()

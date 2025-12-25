@@ -27,5 +27,8 @@ pandas>=2.0.0
 # HTTP requests (for Label Studio API)
 requests>=2.31.0
 
+# FiftyOne for dataset visualization (optional)
+fiftyone>=0.23.0
+
 # Optional: for better performance
 # torch>=2.0.0  # Usually installed with ultralytics

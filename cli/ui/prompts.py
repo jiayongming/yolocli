@@ -580,8 +580,10 @@ def select_main_menu() -> str:
         "model - 模型管理 (下载、导出、列表)",
         "data - 数据处理 (划分、验证、统计)",
         "train - 模型训练 (训练、恢复)",
-        "validate - 模型验证 (性能评估、模型对比) 🆕",
+        "validate - 模型验证 (性能评估、模型对比)",
         "detect - 图像检测 (单图、批量)",
+        "labelstudio - Label Studio管理 (获取项目、下载数据) 🆕",
+        "fiftyone - FiftyOne可视化 (数据集查看、管理) 🆕",
         "exit - 退出",
     ]
     
@@ -697,3 +699,117 @@ def select_validation_split() -> str:
     
     result = select_option("选择验证数据集:", choices, default=choices[0])
     return result.split(' ')[0]
+
+
+def select_labelstudio_operation() -> str:
+    """
+    选择Label Studio操作
+    
+    Returns:
+        str: 选中的操作
+    """
+    choices = [
+        "list - 列出所有项目",
+        "fetch - 获取项目数据",
+        "config - 配置Label Studio连接",
+        "back - 返回主菜单",
+    ]
+    
+    result = select_option("选择Label Studio操作:", choices)
+    return result.split(' ')[0]
+
+
+def select_labelstudio_project(projects: List[Dict]) -> Optional[Dict]:
+    """
+    从项目列表中选择项目
+    
+    Args:
+        projects: 项目列表
+    
+    Returns:
+        Optional[Dict]: 选中的项目，或None表示返回
+    """
+    if not projects:
+        return None
+    
+    # 构建选项列表
+    choices = []
+    for proj in projects:
+        title = proj.get('title', '未命名项目')
+        task_num = proj.get('task_number', 0)
+        proj_id = proj.get('id', 0)
+        choices.append(f"{proj_id} - {title} ({task_num} 任务)")
+    
+    choices.append("返回")
+    
+    result = select_option("选择项目:", choices)
+    
+    if result == "返回":
+        return None
+    
+    # 提取项目ID
+    proj_id = int(result.split(' - ')[0])
+    
+    # 找到对应项目
+    for proj in projects:
+        if proj.get('id') == proj_id:
+            return proj
+    
+    return None
+
+
+def input_labelstudio_config() -> Dict[str, str]:
+    """
+    输入Label Studio配置
+    
+    Returns:
+        Dict[str, str]: 配置字典 {'url': str, 'token': str}
+    """
+    url = input_text("Label Studio URL:", default="http://localhost:8080")
+    token = input_text("访问令牌 (支持Refresh Token):")
+    
+    return {'url': url, 'token': token}
+
+
+def select_fiftyone_operation() -> str:
+    """
+    选择FiftyOne操作
+    
+    Returns:
+        str: 选中的操作
+    """
+    choices = [
+        "load - 加载数据集",
+        "launch - 启动可视化",
+        "list - 列出所有数据集",
+        "info - 查看数据集信息",
+        "delete - 删除数据集",
+        "back - 返回主菜单",
+    ]
+    
+    result = select_option("选择FiftyOne操作:", choices)
+    return result.split(' ')[0]
+
+
+def select_fiftyone_dataset(datasets: List[str]) -> Optional[str]:
+    """
+    从数据集列表中选择
+    
+    Args:
+        datasets: 数据集名称列表
+    
+    Returns:
+        Optional[str]: 选中的数据集名称，或None表示返回
+    """
+    if not datasets:
+        return None
+    
+    choices = list(datasets)
+    choices.append("返回")
+    
+    result = select_option("选择数据集:", choices)
+    
+    if result == "返回":
+        return None
+    
+    return result
