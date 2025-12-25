@@ -1103,6 +1103,91 @@ def run_fiftyone_operations():
                 else:
                     print_error(f"加载失败: {error}")
             
+            elif operation == 'load_predictions':
+                # 加载预测结果创建数据集
+                print_section_header("加载YOLO预测结果")
+                
+                images_dir = input_path("图片目录:", must_exist=True)
+                predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
+                dataset_name = input_text("数据集名称:", default="predictions")
+                classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
+                conf_threshold = float(input_text("置信度阈值:", default="0.25"))
+                
+                # 解析类别列表
+                classes = [c.strip() for c in classes_str.split(',')]
+                
+                print_info("正在创建预测数据集...")
+                success, ds_name, error = fo_mgr.load_predictions_dataset(
+                    images_dir=images_dir,
+                    predictions_dir=predictions_dir,
+                    classes=classes,
+                    dataset_name=dataset_name,
+                    conf_threshold=conf_threshold,
+                    persistent=True
+                )
+                
+                if success:
+                    print_success(f"✓ 预测数据集已创建: {ds_name}")
+                    
+                    if confirm_action("立即启动可视化?", default=True):
+                        print_info("正在启动FiftyOne App...")
+                        fo_mgr.launch_app(dataset_name=ds_name, auto_open=True)
+                else:
+                    print_error(f"创建失败: {error}")
+            
+            elif operation == 'add_predictions':
+                # 添加预测结果到现有数据集
+                print_section_header("添加预测结果到数据集")
+                
+                # 获取数据集列表
+                success, datasets, error = fo_mgr.list_datasets()
+                
+                if not success:
+                    print_error(f"获取数据集列表失败: {error}")
+                    continue
+                
+                if not datasets:
+                    print_warning("没有可用的数据集")
+                    print_info("请先使用 'load' 命令加载数据集")
+                    continue
+                
+                # 选择数据集
+                dataset_name = select_fiftyone_dataset(list(datasets))
+                if dataset_name is None:
+                    continue
+                
+                predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
+                classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
+                field_name = input_text("预测结果字段名:", default="predictions")
+                conf_threshold = float(input_text("置信度阈值:", default="0.0"))
+                
+                # 解析类别列表
+                classes = [c.strip() for c in classes_str.split(',')]
+                
+                print_info(f"正在添加预测结果到数据集 '{dataset_name}'...")
+                success, stats, error = fo_mgr.add_predictions_to_dataset(
+                    dataset_name=dataset_name,
+                    predictions_dir=predictions_dir,
+                    classes=classes,
+                    field_name=field_name,
+                    conf_threshold=conf_threshold
+                )
+                
+                if success:
+                    print_success(f"✓ 预测结果已添加")
+                    print_info(f"  总样本数: {stats['total_samples']}")
+                    print_info(f"  更新样本数: {stats['updated_samples']}")
+                    print_info(f"  总预测数: {stats['total_predictions']}")
+                    if stats['skipped_low_conf'] > 0:
+                        print_info(f"  跳过低置信度: {stats['skipped_low_conf']}")
+                    
+                    if confirm_action("立即启动可视化查看?", default=True):
+                        print_info("正在启动FiftyOne App...")
+                        print_info(f"💡 提示: 在App中可以对比 'ground_truth' 和 '{field_name}'")
+                        fo_mgr.launch_app(dataset_name=dataset_name, auto_open=True)
+                else:
+                    print_error(f"添加失败: {error}")
+            
             elif operation == 'launch':
                 # 启动可视化
                 print_section_header("启动FiftyOne可视化")

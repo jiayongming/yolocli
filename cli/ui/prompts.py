@@ -779,7 +779,9 @@ def select_fiftyone_operation() -> str:
         str: 选中的操作
     """
     choices = [
-        "load - 加载数据集",
+        "load - 加载数据集（Ground Truth）",
+        "load_predictions - 加载预测结果",
+        "add_predictions - 添加预测到现有数据集",
         "launch - 启动可视化",
         "list - 列出所有数据集",
         "info - 查看数据集信息",

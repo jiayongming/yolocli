@@ -14,6 +14,7 @@
 - 📊 **模型验证增强**: 全面的性能评估，包含准确率、精确率、召回率、F1值等完整指标 🆕
 - 📈 **灵活数据划分**: 支持按比例或按样本数划分数据集，适合不同实验需求 🆕
 - 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传
+- 🎨 **FiftyOne 可视化**: 数据集管理、预测结果展示、Ground Truth vs Predictions 对比分析 🆕
 - 🎮 **交互式模式**: 友好的交互式界面，引导式操作，支持所有新功能 🆕
 - 🔄 **多版本支持**: 同时支持YOLOv8和YOLO11，自动版本管理
 - 🎯 **多任务支持**: 支持检测、分割、分类三种任务类型
@@ -73,6 +74,7 @@
   - [实例分割快速开始](#实例分割快速开始)
   - [图像分类快速开始](#图像分类快速开始)
 - [Label Studio 数据转换](#-label-studio-数据转换)
+- [FiftyOne 可视化与预测分析](#-fiftyone-可视化与预测分析) 🆕
 - [数据准备](#-数据准备)
 - [完整工作流程](#-完整工作流程)
 - [模型验证](#-模型验证) 🆕
@@ -509,6 +511,261 @@ python yolo_cli.py train \
 在 Label Studio 界面：**Account & Settings** → **Personal Access Token**
 
 💡 **提示**: 命令支持 Refresh Token 和 Access Token，会自动识别和转换
+
+---
+
+## 🎨 FiftyOne 可视化与预测分析
+
+使用 FiftyOne 可视化数据集、模型预测结果，并进行深度分析！
+
+### 核心功能
+
+- ✅ **数据集可视化**: 查看标注数据（Ground Truth）
+- ✅ **预测结果展示**: 可视化模型的检测/分割/分类结果
+- ✅ **性能对比**: Ground Truth vs Predictions 对比分析
+- ✅ **错误诊断**: 快速找出误检、漏检等问题
+- ✅ **数据集管理**: 统一管理所有数据集到 `datasets/` 目录
+
+### 安装 FiftyOne
+
+```bash
+pip install fiftyone
+```
+
+### 快速开始
+
+#### 1. 加载数据集到 FiftyOne
+
+```bash
+python yolo_cli.py interactive
+# 选择 "FiftyOne 可视化"
+# 选择 "load - 加载数据集（Ground Truth）"
+# 输入 dataset.yaml 路径: data/processed/dataset.yaml
+# 数据集会自动复制到 datasets/ 目录并修改路径配置
+```
+
+#### 2. 启动可视化
+
+```bash
+python yolo_cli.py interactive
+# 选择 "FiftyOne 可视化"
+# 选择 "launch - 启动可视化"
+# 选择要查看的数据集
+# 浏览器会自动打开 FiftyOne App
+```
+
+### 预测结果可视化
+
+#### 场景 1: 只查看预测结果（无标注）
+
+适用于新图片推理，没有 ground truth 标注的情况。
+
+```bash
+# 1. 对图片进行推理（确保使用 --save-txt）
+python yolo_cli.py predict batch \
+    models/weights/best.pt \
+    new_images/ \
+    --conf 0.25 \
+    --save-txt \
+    --output results/new_predictions
+
+# 2. 加载预测结果到 FiftyOne
+python yolo_cli.py interactive
+# 选择 "FiftyOne 可视化"
+# 选择 "load_predictions - 加载预测结果"
+# 图片目录: new_images/
+# 预测目录: results/new_predictions/batch_predict
+# 类别列表: person,car,dog,cat  (根据你的模型)
+```
+
+#### 场景 2: 对比 Ground Truth 和 Predictions（推荐）
+
+适用于在验证集/测试集上评估模型性能。
+
+```bash
+# 1. 加载数据集（包含 ground truth）
+python yolo_cli.py interactive
+# → FiftyOne 可视化 → load
+# 输入: data/processed/dataset.yaml
+
+# 2. 在验证集上运行推理
+python yolo_cli.py predict batch \
+    models/weights/best.pt \
+    data/processed/images/val \
+    --conf 0.25 \
+    --save-txt \
+    --output results/val_predictions
+
+# 3. 添加预测结果到数据集
+python yolo_cli.py interactive
+# → FiftyOne 可视化 → add_predictions
+# 选择数据集: yolo_processed
+# 预测目录: results/val_predictions/batch_predict/labels
+# 类别列表: person,car,dog  (与数据集类别一致)
+# 字段名: predictions
+
+# 4. 启动可视化对比
+# → FiftyOne 可视化 → launch
+# 在 App 中可以看到：
+#   - ground_truth (绿色框) - 真实标注
+#   - predictions (蓝色框) - 模型预测
+```
+
+### FiftyOne App 功能
+
+启动 FiftyOne App 后，你可以：
+
+**基础功能：**
+- 📊 查看数据集统计信息（样本数、类别分布）
+- 🔍 按类别、置信度、Split（train/val/test）筛选
+- 📷 并排查看图片和标注
+- 🎯 点击样本查看详细信息
+
+**预测分析功能：**
+- 🆚 对比 Ground Truth 和 Predictions
+- 📈 查看混淆矩阵
+- 🎚️ 调整置信度阈值实时过滤
+- ❌ 找出误检（False Positives）
+- ⚠️ 找出漏检（False Negatives）
+- 📉 按置信度排序查看低质量预测
+
+### 对比多个模型
+
+可以添加多个预测字段来对比不同模型的性能：
+
+```bash
+# 模型 A 的预测
+python yolo_cli.py predict batch modelA.pt data/val/images --save-txt
+python yolo_cli.py interactive
+# → add_predictions → 字段名: predictions_modelA
+
+# 模型 B 的预测
+python yolo_cli.py predict batch modelB.pt data/val/images --save-txt
+python yolo_cli.py interactive
+# → add_predictions → 字段名: predictions_modelB
+
+# 在 FiftyOne 中对比三个字段：
+# - ground_truth (真实标注)
+# - predictions_modelA (模型A)
+# - predictions_modelB (模型B)
+```
+
+### 数据集管理
+
+FiftyOne 会自动将数据集复制到 `datasets/` 目录进行统一管理：
+
+```
+datasets/
+├── ls_project_8/          # Label Studio 项目 8
+│   ├── dataset.yaml       # 自动修改为相对路径
+│   ├── images/
+│   └── labels/
+├── my_custom_dataset/     # 手动加载的数据集
+│   ├── dataset.yaml
+│   ├── images/
+│   └── labels/
+└── predictions_20251225/  # 预测结果数据集
+    ├── images/
+    └── labels/
+```
+
+**好处：**
+- ✅ 统一管理所有数据集
+- ✅ `dataset.yaml` 路径自动修正为相对路径
+- ✅ 数据集可移动和分享
+- ✅ 已添加到 `.gitignore`，不占用版本控制空间
+
+### YOLO 预测结果格式
+
+预测命令必须使用 `--save-txt` 参数保存标签文件：
+
+```
+results/predictions/detect/batch_predict/
+├── labels/               # ← FiftyOne 读取此目录
+│   ├── image1.txt       # 每行: class_id x y w h confidence
+│   ├── image2.txt
+│   └── image3.txt
+└── predictions/          # 可视化结果（可选）
+    ├── image1.jpg
+    └── image2.jpg
+```
+
+**txt 文件格式（YOLO 格式）：**
+```
+# class_id x_center y_center width height confidence
+0 0.512 0.345 0.234 0.456 0.95
+1 0.678 0.234 0.123 0.234 0.87
+```
+
+### 完整工作流示例
+
+```bash
+# === 步骤 1: 训练模型 ===
+python yolo_cli.py quick-train data/dataset.yaml --model yolo11n.pt --epochs 50
+
+# === 步骤 2: 加载数据集到 FiftyOne ===
+python yolo_cli.py interactive
+# → FiftyOne 可视化 → load
+# 路径: data/processed/dataset.yaml
+
+# === 步骤 3: 在验证集上推理 ===
+python yolo_cli.py predict batch \
+    runs/detect/train/weights/best.pt \
+    data/processed/images/val \
+    --conf 0.25 \
+    --save-txt
+
+# === 步骤 4: 添加预测结果 ===
+python yolo_cli.py interactive
+# → FiftyOne 可视化 → add_predictions
+# 选择数据集、输入预测目录和类别
+
+# === 步骤 5: 分析和改进 ===
+# → launch → 在 App 中分析误检和漏检
+# → 导出问题样本
+# → 改进数据标注或增强
+# → 重新训练
+```
+
+### FiftyOne 操作菜单
+
+```
+FiftyOne 可视化:
+├── load - 加载数据集（Ground Truth）
+├── load_predictions - 加载预测结果
+├── add_predictions - 添加预测到现有数据集
+├── launch - 启动可视化
+├── list - 列出所有数据集
+├── info - 查看数据集信息
+└── delete - 删除数据集
+```
+
+### 使用技巧
+
+**技巧 1: 快速找出模型弱点**
+```
+1. 在 FiftyOne 中按类别分组
+2. 按置信度排序
+3. 找出低置信度但正确的预测（模型不确定）
+4. 找出高置信度但错误的预测（过度自信）
+```
+
+**技巧 2: 置信度阈值调优**
+```
+在 FiftyOne 中实时调整置信度滑块：
+- 低阈值 (0.1): 更多预测，可能有误检
+- 中等阈值 (0.25): 平衡
+- 高阈值 (0.5): 只保留高置信度预测
+找到最佳平衡点
+```
+
+**技巧 3: 导出问题样本**
+```
+1. 在 FiftyOne 中筛选出误检/漏检的样本
+2. 导出这些样本
+3. 重新标注或增强数据
+4. 添加到训练集重新训练
+```
 
 ---
 

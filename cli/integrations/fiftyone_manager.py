@@ -466,4 +466,229 @@ class FiftyOneManager:
             return (True, "")
         except Exception as e:
             return (False, f"关闭应用失败: {str(e)}")
+    
+    def add_predictions_to_dataset(
+        self,
+        dataset_name: str,
+        predictions_dir: str,
+        classes: List[str],
+        field_name: str = "predictions",
+        conf_threshold: float = 0.0
+    ) -> Tuple[bool, Dict[str, int], str]:
+        """将 YOLO 预测结果添加到 FiftyOne 数据集
+        
+        Args:
+            dataset_name: 数据集名称
+            predictions_dir: 预测结果目录（包含txt标签文件）
+            classes: 类别列表
+            field_name: 预测结果字段名，默认"predictions"
+            conf_threshold: 置信度阈值，过滤低置信度预测
+            
+        Returns:
+            Tuple[bool, Dict[str, int], str]: (是否成功, 统计信息, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, {}, error)
+        
+        try:
+            # 加载数据集
+            if dataset_name not in self.fo.list_datasets():
+                return (False, {}, f"数据集 '{dataset_name}' 不存在")
+            
+            dataset = self.fo.load_dataset(dataset_name)
+            
+            predictions_path = Path(predictions_dir)
+            if not predictions_path.exists():
+                return (False, {}, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 查找labels目录（YOLO预测结果通常保存在labels子目录）
+            labels_dir = predictions_path / 'labels'
+            if not labels_dir.exists():
+                # 如果没有labels子目录，尝试直接使用predictions_dir
+                labels_dir = predictions_path
+            
+            stats = {
+                'total_samples': len(dataset),
+                'updated_samples': 0,
+                'total_predictions': 0,
+                'skipped_low_conf': 0
+            }
+            
+            # 为每个样本添加预测结果
+            for sample in dataset:
+                # 获取图片文件名
+                image_filename = Path(sample.filepath).stem
+                label_file = labels_dir / f"{image_filename}.txt"
+                
+                if not label_file.exists():
+                    continue
+                
+                # 读取预测结果
+                detections = []
+                with open(label_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            # YOLO格式: class_id x_center y_center width height [confidence]
+                            class_id = int(parts[0])
+                            x_center = float(parts[1])
+                            y_center = float(parts[2])
+                            width = float(parts[3])
+                            height = float(parts[4])
+                            confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                            
+                            # 过滤低置信度预测
+                            if confidence < conf_threshold:
+                                stats['skipped_low_conf'] += 1
+                                continue
+                            
+                            # 转换为FiftyOne格式 [x, y, width, height]，左上角坐标
+                            bbox = [
+                                x_center - width / 2,
+                                y_center - height / 2,
+                                width,
+                                height
+                            ]
+                            
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            
+                            detection = self.fo.Detection(
+                                label=label,
+                                bounding_box=bbox,
+                                confidence=confidence
+                            )
+                            detections.append(detection)
+                            stats['total_predictions'] += 1
+                
+                # 添加预测结果到样本
+                if detections:
+                    sample[field_name] = self.fo.Detections(detections=detections)
+                    sample.save()
+                    stats['updated_samples'] += 1
+            
+            return (True, stats, "")
+            
+        except Exception as e:
+            return (False, {}, f"添加预测结果失败: {str(e)}")
+    
+    def load_predictions_dataset(
+        self,
+        images_dir: str,
+        predictions_dir: str,
+        classes: List[str],
+        dataset_name: Optional[str] = None,
+        conf_threshold: float = 0.0,
+        persistent: bool = True
+    ) -> Tuple[bool, Optional[str], str]:
+        """从图片和预测结果创建FiftyOne数据集（纯预测，无ground truth）
+        
+        Args:
+            images_dir: 图片目录
+            predictions_dir: 预测结果目录（txt标签文件）
+            classes: 类别列表
+            dataset_name: 数据集名称
+            conf_threshold: 置信度阈值
+            persistent: 是否持久化
+            
+        Returns:
+            Tuple[bool, Optional[str], str]: (是否成功, 数据集名称, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, None, error)
+        
+        try:
+            images_path = Path(images_dir)
+            predictions_path = Path(predictions_dir)
+            
+            if not images_path.exists():
+                return (False, None, f"图片目录不存在: {images_dir}")
+            
+            if not predictions_path.exists():
+                return (False, None, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 生成数据集名称
+            if dataset_name is None:
+                dataset_name = f"predictions_{images_path.name}"
+            
+            # 检查数据集是否已存在
+            if dataset_name in self.fo.list_datasets():
+                self.fo.delete_dataset(dataset_name)
+            
+            # 创建数据集
+            dataset = self.fo.Dataset(dataset_name, persistent=persistent)
+            
+            # 查找labels目录
+            labels_dir = predictions_path / 'labels'
+            if not labels_dir.exists():
+                labels_dir = predictions_path
+            
+            # 遍历图片文件
+            image_files = []
+            for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.JPG', '.JPEG', '.PNG', '.BMP']:
+                image_files.extend(list(images_path.glob(f'*{ext}')))
+                image_files.extend(list(images_path.glob(f'**/*{ext}')))
+            
+            sample_count = 0
+            for image_path in image_files:
+                # 读取对应的预测结果
+                label_file = labels_dir / f"{image_path.stem}.txt"
+                
+                # 创建样本
+                sample = self.fo.Sample(filepath=str(image_path))
+                
+                # 读取预测
+                detections = []
+                if label_file.exists():
+                    with open(label_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            parts = line.split()
+                            if len(parts) >= 5:
+                                class_id = int(parts[0])
+                                x_center = float(parts[1])
+                                y_center = float(parts[2])
+                                width = float(parts[3])
+                                height = float(parts[4])
+                                confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                                
+                                if confidence < conf_threshold:
+                                    continue
+                                
+                                bbox = [
+                                    x_center - width / 2,
+                                    y_center - height / 2,
+                                    width,
+                                    height
+                                ]
+                                
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                
+                                detection = self.fo.Detection(
+                                    label=label,
+                                    bounding_box=bbox,
+                                    confidence=confidence
+                                )
+                                detections.append(detection)
+                
+                # 添加预测结果
+                sample['predictions'] = self.fo.Detections(detections=detections)
+                dataset.add_sample(sample)
+                sample_count += 1
+            
+            if sample_count == 0:
+                return (False, None, "未找到任何图片文件")
+            
+            return (True, dataset_name, "")
+            
+        except Exception as e:
+            return (False, None, f"创建预测数据集失败: {str(e)}")
 
