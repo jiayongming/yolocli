@@ -80,6 +80,58 @@ def run_model_operations():
                 break
 
 
+def check_and_clear_directory(directory: str) -> bool:
+    """检查目录是否为空，如果不为空询问是否清空
+    
+    Args:
+        directory: 目录路径
+        
+    Returns:
+        bool: True 表示可以继续（目录为空或已清空），False 表示用户取消
+    """
+    from pathlib import Path
+    import shutil
+    
+    dir_path = Path(directory)
+    if not dir_path.exists():
+        return True
+    
+    # 检查目录内容（忽略隐藏文件）
+    contents = [f for f in dir_path.iterdir() if not f.name.startswith('.')]
+    
+    if not contents:
+        return True
+    
+    # 目录不为空，询问用户
+    console.print()
+    print_warning(f"{directory} 目录不为空，包含以下内容:")
+    for item in contents[:10]:
+        print_info(f"  • {item.name}")
+    if len(contents) > 10:
+        print_info(f"  ... 还有 {len(contents) - 10} 个文件/目录")
+    
+    console.print()
+    if not confirm_action("是否清空该目录并继续?", default=False):
+        print_warning("已取消操作")
+        return False
+    
+    # 清空目录
+    print_info("正在清空目录...")
+    for item in contents:
+        try:
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        except Exception as e:
+            print_error(f"删除 {item.name} 失败: {e}")
+            return False
+    
+    print_success("✓ 目录已清空")
+    console.print()
+    return True
+
+
 def run_data_operations():
     """数据处理操作"""
     while True:
@@ -130,6 +182,9 @@ def run_data_operations():
                 
                 task_type = select_task_type()
                 
+                # 配置输出目录
+                output_dir = input_path("输出目录:", default="data/processed", must_exist=False)
+                
                 # 选择划分方式
                 from ..ui.prompts import select_option
                 console.print()
@@ -160,13 +215,20 @@ def run_data_operations():
                         console.print()
                         counts = input_text("样本数 (train:val:test):", default="100:30:10")
                         
+                        console.print()
+                        print_info(f"将划分数据到: {output_dir}")
+                        
+                        # 检查输出目录
+                        if not check_and_clear_directory(output_dir):
+                            continue
+                        
                         if confirm_action("确认划分分类数据集?"):
                             from ..commands.data import split_dataset
                             split_dataset(
                                 images_dir=None,
                                 labels_dir=None,
                                 source_dir=source_dir,
-                                output_dir=None,
+                                output_dir=output_dir,
                                 ratios=None,
                                 counts=counts,
                                 seed=42,
@@ -175,13 +237,20 @@ def run_data_operations():
                     else:
                         ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
                         
+                        console.print()
+                        print_info(f"将划分数据到: {output_dir}")
+                        
+                        # 检查输出目录
+                        if not check_and_clear_directory(output_dir):
+                            continue
+                        
                         if confirm_action("确认划分分类数据集?"):
                             from ..commands.data import split_dataset
                             split_dataset(
                                 images_dir=None,
                                 labels_dir=None,
                                 source_dir=source_dir,
-                                output_dir=None,
+                                output_dir=output_dir,
                                 ratios=ratios,
                                 counts=None,
                                 seed=42,
@@ -211,13 +280,20 @@ def run_data_operations():
                     console.print()
                     create_empty = confirm_action("为缺失标签的图片创建空标签文件?", default=False)
                     
+                    console.print()
+                    print_info(f"将划分数据到: {output_dir}")
+                    
+                    # 检查输出目录
+                    if not check_and_clear_directory(output_dir):
+                        continue
+                    
                     if confirm_action("确认划分数据集?"):
                         from ..commands.data import split_dataset
                         split_dataset(
                             images_dir=images_dir,
                             labels_dir=labels_dir,
                             source_dir=None,
-                            output_dir=None,
+                            output_dir=output_dir,
                             ratios=ratios if not use_counts else None,
                             counts=counts if use_counts else None,
                             seed=42,
@@ -231,7 +307,7 @@ def run_data_operations():
                 
                 task_type = select_task_type()
                 data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
-                output = input_text("输出文件:", default="data/dataset.yaml")
+                output = input_text("输出文件:", default="data/processed/dataset.yaml")
                 
                 if confirm_action("确认生成配置文件?"):
                     from ..commands.data import generate_yaml
@@ -341,7 +417,7 @@ def run_train_operations():
                 config = build_training_config()
                 
                 # 数据集路径
-                data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=True)
+                data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=True)
                 
                 # 模型名称
                 model_name = YOLOVersionManager.get_model_name(config['version'], config['model_size'])
@@ -996,7 +1072,7 @@ def run_fiftyone_operations():
                 # 加载数据集
                 print_section_header("加载YOLO数据集到FiftyOne")
                 
-                yaml_path = input_path("dataset.yaml路径:", default="data/dataset.yaml", must_exist=True)
+                yaml_path = input_path("dataset.yaml路径:", default="data/processed/dataset.yaml", must_exist=True)
                 dataset_name = input_text("数据集名称 (留空自动生成):", default="")
                 
                 if not dataset_name:
@@ -1177,7 +1253,7 @@ def run_validate_operations():
                 print_section_header("验证模型性能")
                 
                 model_path = input_path("模型路径:", default="results/training/best.pt", must_exist=False)
-                data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
+                data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=False)
                 split = select_validation_split()
                 
                 # 任务类型选择
@@ -1262,7 +1338,7 @@ def run_validate_operations():
                     print_warning("未输入模型路径")
                     continue
                 
-                data_path = input_path("数据集配置文件:", default="data/dataset.yaml", must_exist=False)
+                data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=False)
                 
                 # 任务类型选择
                 task_choice = select_option(
