@@ -8,6 +8,8 @@ from typing import Optional, List
 import json
 from ultralytics import YOLO
 import numpy as np
+from datetime import datetime
+import shutil
 
 from ..core.config import ConfigManager
 from ..core.utils import (
@@ -21,6 +23,62 @@ from ..ui.display import (
 )
 
 app = typer.Typer(help="预测/推理命令（检测、分割、分类）")
+
+
+def generate_run_id() -> str:
+    """生成唯一的运行ID（时间戳格式）
+    
+    Returns:
+        str: 格式为 YYYYMMDD_HHMMSS 的唯一ID
+    """
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def save_classes_file(model, output_dir: Path):
+    """保存类别列表到文件
+    
+    Args:
+        model: YOLO模型对象
+        output_dir: 输出目录
+    """
+    classes_file = output_dir / 'classes.txt'
+    with open(classes_file, 'w', encoding='utf-8') as f:
+        for idx in sorted(model.names.keys()):
+            f.write(f"{model.names[idx]}\n")
+
+
+def organize_prediction_results(yolo_output_dir: Path, organized_dir: Path):
+    """整理YOLO预测结果到规范的目录结构
+    
+    Args:
+        yolo_output_dir: YOLO原始输出目录
+        organized_dir: 整理后的目标目录（包含images和labels子目录）
+    """
+    # 创建目标目录结构
+    images_dir = organized_dir / 'images'
+    labels_dir = organized_dir / 'labels'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 移动图片文件（检测结果图片）
+    for img_file in yolo_output_dir.glob('*.jpg'):
+        shutil.move(str(img_file), str(images_dir / img_file.name))
+    for img_file in yolo_output_dir.glob('*.jpeg'):
+        shutil.move(str(img_file), str(images_dir / img_file.name))
+    for img_file in yolo_output_dir.glob('*.png'):
+        shutil.move(str(img_file), str(images_dir / img_file.name))
+    
+    # 移动labels目录
+    yolo_labels_dir = yolo_output_dir / 'labels'
+    if yolo_labels_dir.exists():
+        for label_file in yolo_labels_dir.glob('*.txt'):
+            shutil.move(str(label_file), str(labels_dir / label_file.name))
+        # 删除空的labels目录
+        yolo_labels_dir.rmdir()
+    
+    # 如果YOLO输出目录为空，删除它
+    if not any(yolo_output_dir.iterdir()):
+        yolo_output_dir.rmdir()
 
 
 @app.command("image")
@@ -60,14 +118,19 @@ def predict_image(
     
     task_type = TaskType.from_string(task)
     
-    # 确定输出目录
+    # 确定输出目录（使用唯一ID）
     if output is None:
         config = ConfigManager()
-        output_dir = config.get_path('results', absolute=True) / 'predictions' / task
+        run_id = generate_run_id()
+        output_base = config.get_path('results', absolute=True) / 'predictions'
+        output_dir = output_base / run_id
     else:
         output_dir = Path(output)
     
     ensure_dir(output_dir)
+    
+    # 创建临时YOLO输出目录
+    yolo_temp_dir = output_dir / '_yolo_temp'
     
     # 自动检测设备
     if device == 'auto':
@@ -91,10 +154,11 @@ def predict_image(
         predict_kwargs = {
             'source': str(image_path),
             'save': True,
-            'project': str(output_dir),
-            'name': 'single_image',
+            'project': str(yolo_temp_dir),
+            'name': 'run',
             'device': device,
             'show': show,
+            'exist_ok': True,
         }
         
         # 根据任务类型添加特定参数
@@ -154,12 +218,20 @@ def predict_image(
                         }
                         predictions.append(prediction)
         
+        # 整理YOLO输出结果到规范目录结构
+        yolo_run_dir = yolo_temp_dir / 'run'
+        if yolo_run_dir.exists():
+            organize_prediction_results(yolo_run_dir, output_dir)
+            # 清理临时目录
+            if yolo_temp_dir.exists():
+                shutil.rmtree(yolo_temp_dir)
+        
+        # 保存类别列表
+        save_classes_file(yolo_model, output_dir)
+        
         # 保存JSON结果
         if save_json:
-            output_path = output_dir / 'single_image'
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            json_file = output_path / f"{image_path.stem}_results.json"
+            json_file = output_dir / f"{image_path.stem}_results.json"
             result_data = {
                 'task': task,
                 'image': str(image_path),
@@ -185,7 +257,10 @@ def predict_image(
         else:
             print_warning(f"未{task}到结果")
         
-        print_info(f"结果保存在: {output_dir / 'single_image'}")
+        print_info(f"结果保存在: {output_dir}")
+        print_info(f"  - 图片: {output_dir / 'images'}")
+        if save_txt:
+            print_info(f"  - 标签: {output_dir / 'labels'}")
         
     except Exception as e:
         print_error(f"检测失败: {e}")
@@ -220,14 +295,19 @@ def detect_batch(
         print_error(f"源路径不存在: {source}")
         raise typer.Exit(1)
     
-    # 确定输出目录
+    # 确定输出目录（使用唯一ID）
     if output is None:
         config = ConfigManager()
-        output_dir = config.get_path('results', absolute=True) / 'predictions'
+        run_id = generate_run_id()
+        output_base = config.get_path('results', absolute=True) / 'predictions'
+        output_dir = output_base / run_id
     else:
         output_dir = Path(output)
     
     ensure_dir(output_dir)
+    
+    # 创建临时YOLO输出目录
+    yolo_temp_dir = output_dir / '_yolo_temp'
     
     # 自动检测设备
     if device == 'auto':
@@ -259,11 +339,12 @@ def detect_batch(
             save=True,
             save_txt=save_txt,
             save_conf=True,
-            project=str(output_dir),
-            name='batch',
+            project=str(yolo_temp_dir),
+            name='run',
             device=device,
             stream=True,
             batch=batch,
+            exist_ok=True,
         )
         
         # 处理结果
@@ -292,10 +373,20 @@ def detect_batch(
                 
                 progress.update(task, advance=1, description=f"已处理 {i+1} 张")
         
+        # 整理YOLO输出结果到规范目录结构
+        yolo_run_dir = yolo_temp_dir / 'run'
+        if yolo_run_dir.exists():
+            organize_prediction_results(yolo_run_dir, output_dir)
+            # 清理临时目录
+            if yolo_temp_dir.exists():
+                shutil.rmtree(yolo_temp_dir)
+        
+        # 保存类别列表
+        save_classes_file(yolo_model, output_dir)
+        
         # 保存JSON结果
         if save_json:
-            json_file = output_dir / 'batch' / 'detections.json'
-            ensure_dir(json_file.parent)
+            json_file = output_dir / 'detections.json'
             
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(all_detections, f, indent=2, ensure_ascii=False)
@@ -308,7 +399,10 @@ def detect_batch(
         print_key_value("处理图片数", len(all_detections))
         print_key_value("检测目标总数", total_objects)
         print_key_value("平均每张", f"{total_objects / len(all_detections):.2f}" if all_detections else "0")
-        print_info(f"结果保存在: {output_dir / 'batch'}")
+        print_info(f"结果保存在: {output_dir}")
+        print_info(f"  - 图片: {output_dir / 'images'}")
+        if save_txt:
+            print_info(f"  - 标签: {output_dir / 'labels'}")
         
     except Exception as e:
         print_error(f"批量检测失败: {e}")
@@ -342,10 +436,12 @@ def detect_video(
         print_error(f"视频不存在: {video}")
         raise typer.Exit(1)
     
-    # 确定输出目录
+    # 确定输出目录（使用唯一ID）
     if output is None:
         config = ConfigManager()
-        output_dir = config.get_path('results', absolute=True) / 'predictions'
+        run_id = generate_run_id()
+        output_base = config.get_path('results', absolute=True) / 'predictions'
+        output_dir = output_base / run_id
     else:
         output_dir = Path(output)
     

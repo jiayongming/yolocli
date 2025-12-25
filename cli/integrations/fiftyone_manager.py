@@ -471,7 +471,7 @@ class FiftyOneManager:
         self,
         dataset_name: str,
         predictions_dir: str,
-        classes: List[str],
+        classes: Optional[List[str]] = None,
         field_name: str = "predictions",
         conf_threshold: float = 0.0
     ) -> Tuple[bool, Dict[str, int], str]:
@@ -480,7 +480,7 @@ class FiftyOneManager:
         Args:
             dataset_name: 数据集名称
             predictions_dir: 预测结果目录（包含txt标签文件）
-            classes: 类别列表
+            classes: 类别列表（可选，不提供则自动读取）
             field_name: 预测结果字段名，默认"predictions"
             conf_threshold: 置信度阈值，过滤低置信度预测
             
@@ -501,6 +501,23 @@ class FiftyOneManager:
             predictions_path = Path(predictions_dir)
             if not predictions_path.exists():
                 return (False, {}, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 如果没有提供类别列表，尝试自动读取
+            if classes is None:
+                # 方式1: 从预测目录读取 classes.txt
+                classes_file = predictions_path / 'classes.txt'
+                if classes_file.exists():
+                    with open(classes_file, 'r', encoding='utf-8') as f:
+                        classes = [line.strip() for line in f if line.strip()]
+                
+                # 方式2: 从数据集的 ground_truth 中提取类别
+                if not classes and 'ground_truth' in dataset.get_field_schema():
+                    classes = dataset.distinct('ground_truth.detections.label')
+                    classes = sorted(classes)
+                
+                # 如果还是找不到，返回错误
+                if not classes:
+                    return (False, {}, "无法自动获取类别信息。请确保预测目录中有 classes.txt 文件，或手动指定 classes 参数")
             
             # 查找labels目录（YOLO预测结果通常保存在labels子目录）
             labels_dir = predictions_path / 'labels'
@@ -580,7 +597,7 @@ class FiftyOneManager:
         self,
         images_dir: str,
         predictions_dir: str,
-        classes: List[str],
+        classes: Optional[List[str]] = None,
         dataset_name: Optional[str] = None,
         conf_threshold: float = 0.0,
         persistent: bool = True
@@ -590,7 +607,7 @@ class FiftyOneManager:
         Args:
             images_dir: 图片目录
             predictions_dir: 预测结果目录（txt标签文件）
-            classes: 类别列表
+            classes: 类别列表（可选，不提供则自动读取）
             dataset_name: 数据集名称
             conf_threshold: 置信度阈值
             persistent: 是否持久化
@@ -611,6 +628,18 @@ class FiftyOneManager:
             
             if not predictions_path.exists():
                 return (False, None, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 如果没有提供类别列表，尝试自动读取
+            if classes is None:
+                # 从预测目录读取 classes.txt
+                classes_file = predictions_path / 'classes.txt'
+                if classes_file.exists():
+                    with open(classes_file, 'r', encoding='utf-8') as f:
+                        classes = [line.strip() for line in f if line.strip()]
+                
+                # 如果还是找不到，返回错误
+                if not classes:
+                    return (False, None, "无法自动获取类别信息。请确保预测目录中有 classes.txt 文件，或手动指定 classes 参数")
             
             # 生成数据集名称
             if dataset_name is None:

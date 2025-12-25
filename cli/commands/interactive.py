@@ -1110,11 +1110,20 @@ def run_fiftyone_operations():
                 images_dir = input_path("图片目录:", must_exist=True)
                 predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
                 dataset_name = input_text("数据集名称:", default="predictions")
-                classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
-                conf_threshold = float(input_text("置信度阈值:", default="0.25"))
                 
-                # 解析类别列表
-                classes = [c.strip() for c in classes_str.split(',')]
+                # 检查是否有 classes.txt
+                from pathlib import Path
+                classes_file = Path(predictions_dir) / 'classes.txt'
+                if classes_file.exists():
+                    print_success(f"✓ 找到类别文件: {classes_file}")
+                    classes = None  # 自动从文件读取
+                    classes_str = ""
+                else:
+                    print_warning("未找到 classes.txt，请手动输入类别列表")
+                    classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
+                    classes = [c.strip() for c in classes_str.split(',') if c.strip()]
+                
+                conf_threshold = float(input_text("置信度阈值:", default="0.25"))
                 
                 print_info("正在创建预测数据集...")
                 success, ds_name, error = fo_mgr.load_predictions_dataset(
@@ -1157,12 +1166,23 @@ def run_fiftyone_operations():
                     continue
                 
                 predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
-                classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
+                
+                # 检查是否有 classes.txt
+                from pathlib import Path
+                classes_file = Path(predictions_dir) / 'classes.txt'
+                if classes_file.exists():
+                    print_success(f"✓ 找到类别文件: {classes_file}")
+                    classes = None  # 自动从文件读取
+                else:
+                    print_warning("未找到 classes.txt，将尝试从数据集的 ground_truth 中获取类别")
+                    if not confirm_action("是否手动输入类别列表?", default=False):
+                        classes = None  # 自动从数据集获取
+                    else:
+                        classes_str = input_text("类别列表（逗号分隔）:", default="class1,class2")
+                        classes = [c.strip() for c in classes_str.split(',') if c.strip()]
+                
                 field_name = input_text("预测结果字段名:", default="predictions")
                 conf_threshold = float(input_text("置信度阈值:", default="0.0"))
-                
-                # 解析类别列表
-                classes = [c.strip() for c in classes_str.split(',')]
                 
                 print_info(f"正在添加预测结果到数据集 '{dataset_name}'...")
                 success, stats, error = fo_mgr.add_predictions_to_dataset(
