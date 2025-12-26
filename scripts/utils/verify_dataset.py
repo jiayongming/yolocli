@@ -38,5 +38,5 @@ def verify_dataset_config(yaml_file):
 
 if __name__ == "__main__":
     import sys
-    yaml_file = sys.argv[1] if len(sys.argv) > 1 else "data/dataset.yaml"
+    yaml_file = sys.argv[1] if len(sys.argv) > 1 else "data/processed/dataset.yaml"
     verify_dataset_config(yaml_file)

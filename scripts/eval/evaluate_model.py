@@ -8,7 +8,7 @@ from pathlib import Path
 
 def evaluate_model(
     model_path,
-    data_yaml='data/dataset.yaml',
+    data_yaml='data/processed/dataset.yaml',
     conf_threshold=0.25,
     iou_threshold=0.45,
     split='val',
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='评估YOLO模型')
     parser.add_argument('--model', type=str, required=True,
                         help='模型路径')
-    parser.add_argument('--data', type=str, default='data/dataset.yaml',
+    parser.add_argument('--data', type=str, default='data/processed/dataset.yaml',
                         help='数据集配置文件')
     parser.add_argument('--conf', type=float, default=0.25,
                         help='置信度阈值')

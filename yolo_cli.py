@@ -80,7 +80,7 @@ def main(
     
       - 交互式模式:  yolo-cli interactive-mode
       - 下载模型:    yolo-cli model download --version yolo11 --size s --task segment
-      - 训练模型:    yolo-cli train start --model yolo11s.pt --data data/dataset.yaml --task detect
+      - 训练模型:    yolo-cli train start --model yolo11s.pt --data data/processed/dataset.yaml --task detect
       - 预测图片:    yolo-cli predict image <model> <image>
     """
     if version_flag:
@@ -113,10 +113,10 @@ def main(
         console.print("  python yolo_cli.py interactive-mode")
         console.print()
         console.print("  [dim]# 训练模型[/dim]")
-        console.print("  python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml")
+        console.print("  python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml")
         console.print()
         console.print("  [dim]# 验证模型[/dim]")
-        console.print("  python yolo_cli.py validate run results/training/best.pt --data data/dataset.yaml")
+        console.print("  python yolo_cli.py validate run results/training/best.pt --data data/processed/dataset.yaml")
         console.print()
         console.print("  [dim]# 检测图片[/dim]")
         console.print("  python yolo_cli.py detect image results/training/best.pt test.jpg")

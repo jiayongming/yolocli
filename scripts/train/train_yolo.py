@@ -153,7 +153,7 @@ def print_augmentation_config(config):
 
 def train_model(
     model_name='yolo11s.pt',
-    data_yaml='data/dataset.yaml',
+    data_yaml='data/processed/dataset.yaml',
     epochs=200,
     imgsz=640,
     batch=16,
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     # 基本训练参数
     parser.add_argument('--model', type=str, default='yolo11s.pt',
                         help='模型名称 (yolo11n.pt, yolo11s.pt, yolo11m.pt等)')
-    parser.add_argument('--data', type=str, default='data/dataset.yaml',
+    parser.add_argument('--data', type=str, default='data/processed/dataset.yaml',
                         help='数据集配置文件路径')
     parser.add_argument('--epochs', type=int, default=200,
                         help='训练轮数')

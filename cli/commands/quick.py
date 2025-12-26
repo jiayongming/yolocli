@@ -293,7 +293,7 @@ def quick_train(
                 classes_file = str(generated_classes)
                 print_info(f"使用划分后生成的类别文件: {classes_file}")
         
-        dataset_yaml = "data/dataset.yaml"
+        dataset_yaml = "data/processed/dataset.yaml"
         generate_yaml(
             data_path=str(output_dir),
             classes_file=classes_file,

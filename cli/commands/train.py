@@ -121,7 +121,7 @@ AUGMENTATION_PRESETS = {
 @app.command("start")
 def start_training(
     model: str = typer.Option("yolo11s.pt", "--model", "-m", help="模型名称或路径"),
-    data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    data: str = typer.Option("data/processed/dataset.yaml", "--data", "-d", help="数据集配置文件"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
     epochs: int = typer.Option(200, "--epochs", "-e", help="训练轮数"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
@@ -464,7 +464,7 @@ def generate_config(
     # 生成训练配置
     train_config = {
         'model': config.get('model.default_version', 'yolo11s.pt'),
-        'data': 'data/dataset.yaml',
+        'data': 'data/processed/dataset.yaml',
         'epochs': config.get('training.epochs', 200),
         'batch': config.get('training.batch', 16),
         'imgsz': config.get('training.imgsz', 640),
@@ -491,7 +491,7 @@ def generate_config(
 @app.command("validate")
 def validate_model(
     model: str = typer.Argument(..., help="模型路径"),
-    data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    data: str = typer.Option("data/processed/dataset.yaml", "--data", "-d", help="数据集配置文件"),
     task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型（自动从模型推断）"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
     imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),

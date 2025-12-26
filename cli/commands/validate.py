@@ -56,7 +56,7 @@ def safe_float(value):
 @app.command("run")
 def validate_model(
     model: str = typer.Argument(..., help="模型路径"),
-    data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    data: str = typer.Option("data/processed/dataset.yaml", "--data", "-d", help="数据集配置文件"),
     split: str = typer.Option("val", "--split", help="验证数据集 (val/test/train)"),
     task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型（自动从模型推断）"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
@@ -85,7 +85,7 @@ def validate_model(
       
     \b
       # 指定数据集和置信度阈值
-      yolo-cli validate run models/best.pt --data data/dataset.yaml --conf 0.25
+      yolo-cli validate run models/best.pt --data data/processed/dataset.yaml --conf 0.25
       
     \b
       # 在测试集上验证
@@ -954,7 +954,7 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
 @app.command("compare")
 def compare_models(
     models: str = typer.Argument(..., help="模型路径，用逗号分隔"),
-    data: str = typer.Option("data/dataset.yaml", "--data", "-d", help="数据集配置文件"),
+    data: str = typer.Option("data/processed/dataset.yaml", "--data", "-d", help="数据集配置文件"),
     task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型（自动从第一个模型推断）"),
     split: str = typer.Option("val", "--split", help="验证数据集"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
@@ -973,7 +973,7 @@ def compare_models(
     
     \b
       # 自动推断任务类型
-      yolo-cli validate compare model1.pt,model2.pt,model3.pt --data data/dataset.yaml
+      yolo-cli validate compare model1.pt,model2.pt,model3.pt --data data/processed/dataset.yaml
       
     \b
       # 手动指定任务类型

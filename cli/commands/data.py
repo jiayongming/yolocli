@@ -646,7 +646,7 @@ def _split_classify_dataset(
 def generate_yaml(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
     classes_file: Optional[str] = typer.Option(None, "--classes", "-c", help="类别文件路径"),
-    output: str = typer.Option("data/dataset.yaml", "--output", "-o", help="输出文件路径"),
+    output: str = typer.Option("data/processed/dataset.yaml", "--output", "-o", help="输出文件路径"),
     train_dir: Optional[str] = typer.Option(None, "--train", help="训练集目录 (默认根据任务类型自动设置)"),
     val_dir: Optional[str] = typer.Option(None, "--val", help="验证集目录 (默认根据任务类型自动设置)"),
     test_dir: Optional[str] = typer.Option(None, "--test", help="测试集目录 (默认根据任务类型自动设置)"),
@@ -1763,7 +1763,7 @@ def convert_labelstudio(
     
     console.print()
     console.print("  [bold cyan]3. 开始训练:[/bold cyan]")
-    console.print(f"     python yolo_cli.py train --data data/dataset.yaml")
+    console.print(f"     python yolo_cli.py train --data data/processed/dataset.yaml")
     
     console.print()
     print_success("转换完成！")

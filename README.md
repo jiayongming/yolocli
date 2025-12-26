@@ -300,7 +300,7 @@ python yolo_cli.py data split \
 # 生成dataset.yaml
 python yolo_cli.py data generate-yaml \
   --path data/processed \
-  --output data/dataset.yaml
+  --output data/processed/dataset.yaml
 
 # 验证数据集
 python yolo_cli.py data verify --path data/processed
@@ -324,7 +324,7 @@ python yolo_cli.py data split \
 python yolo_cli.py data generate-yaml \
   --path data/processed \
   --task classify \
-  --output data/dataset.yaml
+  --output data/processed/dataset.yaml
 ```
 
 #### 3. 训练模型
@@ -334,7 +334,7 @@ python yolo_cli.py data generate-yaml \
 python yolo_cli.py train start \
   --model yolo11s.pt \
   --task detect \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16
 
@@ -342,7 +342,7 @@ python yolo_cli.py train start \
 python yolo_cli.py train start \
   --model yolo11s-seg.pt \
   --task segment \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16
 
@@ -350,7 +350,7 @@ python yolo_cli.py train start \
 python yolo_cli.py train start \
   --model yolo11s-cls.pt \
   --task classify \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 100 \
   --batch 32 \
   --imgsz 224
@@ -359,14 +359,14 @@ python yolo_cli.py train start \
 python yolo_cli.py train start \
   --model yolo11s.pt \
   --task detect \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --augmentation aggressive
 
 # 使用特定的优化器
 python yolo_cli.py train start \
   --model yolo11s.pt \
   --task detect \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --optimizer AdamW
 ```
 
@@ -494,7 +494,7 @@ python yolo_cli.py data generate-yaml \
   --classes data/raw/classes.txt
 
 # 4. 训练
-python yolo_cli.py train --data data/dataset.yaml
+python yolo_cli.py train --data data/processed/dataset.yaml
 ```
 
 **分类任务**:
@@ -712,7 +712,7 @@ results/predictions/detect/batch_predict/
 
 ```bash
 # === 步骤 1: 训练模型 ===
-python yolo_cli.py quick-train data/dataset.yaml --model yolo11n.pt --epochs 50
+python yolo_cli.py quick-train data/processed/dataset.yaml --model yolo11n.pt --epochs 50
 
 # === 步骤 2: 加载数据集到 FiftyOne ===
 python yolo_cli.py interactive
@@ -1151,10 +1151,10 @@ python yolo_cli.py data split \
 python yolo_cli.py data generate-yaml \
   --path data/processed \
   --classes data/raw/classes.txt \
-  --output data/dataset.yaml
+  --output data/processed/dataset.yaml
 ```
 
-生成的 `data/dataset.yaml` 内容示例：
+生成的 `data/processed/dataset.yaml` 内容示例：
 
 ```yaml
 path: data/processed
@@ -1348,7 +1348,7 @@ python yolo_cli.py model list
 ```bash
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16 \
   --imgsz 640
@@ -1360,7 +1360,7 @@ python yolo_cli.py train start \
 ```bash
 python yolo_cli.py train start \
   --model yolo11n.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 150 \
   --batch 8 \
   --augmentation conservative \
@@ -1371,7 +1371,7 @@ python yolo_cli.py train start \
 ```bash
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16 \
   --augmentation balanced \
@@ -1382,7 +1382,7 @@ python yolo_cli.py train start \
 ```bash
 python yolo_cli.py train start \
   --model yolo11m.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 300 \
   --batch 32 \
   --augmentation aggressive \
@@ -1421,10 +1421,10 @@ python yolo_cli.py train start --device cpu ...
 ```bash
 # 使用单个GPU (ID: 4)
 export CUDA_VISIBLE_DEVICES=4
-python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 
 # 或者一行命令
-CUDA_VISIBLE_DEVICES=4 python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+CUDA_VISIBLE_DEVICES=4 python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 
 # 使用多个GPU (ID: 0,1,2)
 CUDA_VISIBLE_DEVICES=0,1,2 python yolo_cli.py quick train \
@@ -1447,7 +1447,7 @@ python yolo_cli.py interactive-mode
 ```bash
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --project results/my_project \
   --name exp_001 \
   --epochs 200
@@ -1488,7 +1488,7 @@ python yolo_cli.py train resume \
 ```bash
 python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml
+  --data data/processed/dataset.yaml
 ```
 
 **交互式模式：** 🆕
@@ -1508,7 +1508,7 @@ python yolo_cli.py interactive-mode
 ```bash
 python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --split test \
   --conf 0.25 \
   --iou 0.6 \
@@ -1632,7 +1632,7 @@ cat results/validation/*/validation_summary.json | jq -r '
 ```bash
 python yolo_cli.py validate compare \
   model1.pt,model2.pt,model3.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --task detect \
   --conf 0.25
 ```
@@ -1799,7 +1799,7 @@ python yolo_cli.py quick train \
 # 3. 验证模型
 python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --plots
 
 # 4. 测试推理
@@ -1839,7 +1839,7 @@ python yolo_cli.py data split \
 python yolo_cli.py data generate-yaml \
   --path data/processed \
   --classes data/raw/classes.txt \
-  --output data/dataset.yaml
+  --output data/processed/dataset.yaml
 
 # 5. 验证数据集
 python yolo_cli.py data verify --path data/processed
@@ -1851,7 +1851,7 @@ python yolo_cli.py model download --version yolo11 --size s
 # 7. 训练模型
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16 \
   --augmentation balanced \
@@ -1860,7 +1860,7 @@ python yolo_cli.py train start \
 # 8. 验证模型
 python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --conf 0.25 \
   --save-json \
   --plots
@@ -2000,7 +2000,7 @@ python yolo_cli.py validate run best.pt \
 # 比较不同大小的模型（自动推断任务类型）
 python yolo_cli.py validate compare \
   yolo11n.pt,yolo11s.pt,yolo11m.pt \
-  --data data/dataset.yaml
+  --data data/processed/dataset.yaml
 
 # 比较分类模型（手动指定任务类型）
 python yolo_cli.py validate compare \
@@ -2012,7 +2012,7 @@ python yolo_cli.py validate compare \
 python yolo_cli.py validate compare \
   model1-seg.pt,model2-seg.pt \
   --task segment \
-  --data data/dataset.yaml
+  --data data/processed/dataset.yaml
 
 # 比较不同训练配置的checkpoint
 python yolo_cli.py validate compare \
@@ -2022,7 +2022,7 @@ python yolo_cli.py validate compare \
 # 比较不同路径下的同名模型 🆕
 python yolo_cli.py validate compare \
   results/exp1/best.pt,results/exp2/best.pt,results/exp3/best.pt \
-  --data data/dataset.yaml
+  --data data/processed/dataset.yaml
 ```
 
 **任务类型智能识别** 🤖
@@ -2183,7 +2183,7 @@ results/validation/
 
 ```bash
 # 训练完成后立即验证
-python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 python yolo_cli.py validate run results/training/best.pt --plots
 ```
 
@@ -2193,7 +2193,7 @@ python yolo_cli.py validate run results/training/best.pt --plots
 # 比较不同大小的模型
 python yolo_cli.py validate compare \
   yolo11n.pt,yolo11s.pt,yolo11m.pt \
-  --data data/dataset.yaml
+  --data data/processed/dataset.yaml
 ```
 
 #### 3. 部署前最终验证
@@ -2299,7 +2299,7 @@ python yolo_cli.py train start --device cpu ...     # CPU
 ```bash
 # 方式A: 导出环境变量
 export CUDA_VISIBLE_DEVICES=4
-python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 python yolo_cli.py detect image best.pt test.jpg
 # 所有命令都会使用GPU 4
 
@@ -2559,7 +2559,7 @@ python yolo_cli.py train validate MODEL [OPTIONS]
 ```bash
 # 运行验证
 python yolo_cli.py validate run MODEL [OPTIONS]
-  --data TEXT            数据集配置文件 (默认: data/dataset.yaml)
+  --data TEXT            数据集配置文件 (默认: data/processed/dataset.yaml)
   --split TEXT           验证数据集 (val/test/train, 默认: val)
   --task TEXT            任务类型 (detect/segment/classify, 自动推断)
   --batch INTEGER        批次大小 (默认: 16)
@@ -2576,7 +2576,7 @@ python yolo_cli.py validate run MODEL [OPTIONS]
 
 # 比较多个模型
 python yolo_cli.py validate compare MODELS [OPTIONS]
-  --data TEXT            数据集配置文件 (默认: data/dataset.yaml)
+  --data TEXT            数据集配置文件 (默认: data/processed/dataset.yaml)
   --task TEXT            任务类型 (detect/segment/classify, 自动从第一个模型推断)
   --split TEXT           验证数据集 (默认: val)
   --batch INTEGER        批次大小 (默认: 16)
@@ -2596,7 +2596,7 @@ python yolo_cli.py validate compare MODELS [OPTIONS]
   python yolo_cli.py validate run best.pt --split test --conf 0.25 --save-json --plots
   
   # 比较多个检测模型
-  python yolo_cli.py validate compare model1.pt,model2.pt,model3.pt --data data/dataset.yaml
+  python yolo_cli.py validate compare model1.pt,model2.pt,model3.pt --data data/processed/dataset.yaml
   
   # 比较多个分类模型（手动指定任务类型）
   python yolo_cli.py validate compare model1.pt,model2.pt --task classify --data data/images
@@ -2702,7 +2702,7 @@ python yolo_cli.py data split \
 
 # 2. 生成配置和训练（后续步骤相同）
 python yolo_cli.py data generate-yaml --path data/processed
-python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 ```
 
 **交互式方式** 🎮：
@@ -2778,7 +2778,7 @@ python yolo_cli.py data verify --path data/processed
 # 5. 训练模型
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16 \
   --augmentation balanced
@@ -2786,7 +2786,7 @@ python yolo_cli.py train start \
 # 6. 验证模型
 python yolo_cli.py validate run \
   results/training/best.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --conf 0.25 \
   --plots
 
@@ -2909,7 +2909,7 @@ python yolo_cli.py model export \
 # 小数据集 (<500张)
 python yolo_cli.py train start \
   --model yolo11n.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 150 \
   --batch 8 \
   --augmentation conservative
@@ -2917,7 +2917,7 @@ python yolo_cli.py train start \
 # 中等数据集 (500-2000张)
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 200 \
   --batch 16 \
   --augmentation balanced
@@ -2925,7 +2925,7 @@ python yolo_cli.py train start \
 # 大数据集 (>2000张)
 python yolo_cli.py train start \
   --model yolo11m.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --epochs 300 \
   --batch 32 \
   --augmentation aggressive
@@ -3044,12 +3044,12 @@ paths:
 **命令行方式：**
 ```bash
 # 使用默认优化器（推荐）
-python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --model yolo11s.pt --data data/processed/dataset.yaml
 
 # 使用AdamW优化器
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --optimizer AdamW
 
 # 快速训练时指定优化器
@@ -3103,7 +3103,7 @@ training:
 # 冻结前10层（推荐用于小数据集）
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --freeze 10
 
 # 快速训练时冻结
@@ -3115,7 +3115,7 @@ python yolo_cli.py quick train \
 # 不冻结任何层（默认）
 python yolo_cli.py train start \
   --model yolo11s.pt \
-  --data data/dataset.yaml \
+  --data data/processed/dataset.yaml \
   --freeze 0
 ```
 
@@ -3178,10 +3178,10 @@ python yolo_cli.py train start --device cpu    # CPU
 
 ```bash
 # 使用GPU 0和1
-python yolo_cli.py train start --device 0,1 --model yolo11s.pt --data data/dataset.yaml
+python yolo_cli.py train start --device 0,1 --model yolo11s.pt --data data/processed/dataset.yaml
 
 # 使用所有可用GPU（0,1,2,3）
-python yolo_cli.py train start --device 0,1,2,3 --model yolo11m.pt --data data/dataset.yaml
+python yolo_cli.py train start --device 0,1,2,3 --model yolo11m.pt --data data/processed/dataset.yaml
 ```
 
 **注意：** 多GPU训练会自动使用DataParallel或DistributedDataParallel进行分布式训练。
