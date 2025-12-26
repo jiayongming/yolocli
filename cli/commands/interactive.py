@@ -10,7 +10,7 @@ from ..ui.prompts import (
     select_train_operation, select_detect_operation, select_validate_operation,
     select_validation_split, select_option,
     select_yolo_version, select_task_type, select_model_size, select_device,
-    select_augmentation_preset, select_export_formats,
+    select_augmentation_preset, select_optimizer, select_export_formats,
     build_training_config, input_text, input_path, input_number,
     confirm_action,
     select_labelstudio_operation, select_labelstudio_project, input_labelstudio_config,
@@ -445,6 +445,8 @@ def run_train_operations():
                         project=None,
                         name=None,
                         augmentation=config['augmentation'],
+                        optimizer=config.get('optimizer_type', 'auto'),
+                        freeze=config.get('freeze'),
                         patience=config['patience'],
                         save_period=config['save_period'],
                         resume=False,
@@ -561,6 +563,7 @@ def run_quick_train():
         print_info(f"  图像尺寸: {config['imgsz']}")
         print_info(f"  设备: {config['device']}")
         print_info(f"  数据增强: {config['augmentation']}")
+        print_info(f"  优化器: {config.get('optimizer_type', 'auto')}")
         if use_counts:
             print_info(f"  📊 数据集划分: 按样本数 ({counts})")
         else:
@@ -587,6 +590,8 @@ def run_quick_train():
             'imgsz': config['imgsz'],
             'device': config['device'],
             'augmentation': config['augmentation'],
+            'optimizer': config.get('optimizer_type', 'auto'),
+            'freeze': config.get('freeze'),
             'ratios': ratios,
             'counts': counts,
             'skip_verify': skip_verify,

@@ -267,6 +267,27 @@ def select_augmentation_preset() -> str:
     return result.split(' ')[0]
 
 
+def select_optimizer() -> str:
+    """
+    选择优化器
+    
+    Returns:
+        str: 选中的优化器
+    """
+    choices = [
+        "auto - 自动选择 (推荐)",
+        "SGD - 随机梯度下降 (YOLO默认)",
+        "Adam - Adam优化器",
+        "AdamW - Adam with weight decay",
+        "NAdam - Nesterov-accelerated Adam",
+        "RAdam - Rectified Adam",
+        "RMSProp - RMSProp优化器",
+    ]
+    
+    result = select_option("选择优化器:", choices, default=choices[0])
+    return result.split(' ')[0]
+
+
 def select_export_formats() -> List[str]:
     """
     选择导出格式
@@ -466,6 +487,11 @@ def build_training_config() -> Dict[str, Any]:
         # 3. 优化器配置
         console.print()
         print_info("⚡ 优化器配置：")
+        
+        # 优化器类型选择
+        config['optimizer_type'] = select_optimizer()
+        print_info(f"   选择的优化器: {config['optimizer_type']}")
+        
         if confirm_action("自定义优化器参数?", default=False):
             config['optimizer'] = {}
             
@@ -519,7 +545,26 @@ def build_training_config() -> Dict[str, Any]:
         else:
             config['optimizer'] = None
         
-        # 4. 损失函数权重
+        # 4. 层冻结配置
+        console.print()
+        print_info("❄️ 层冻结配置（用于迁移学习）：")
+        if confirm_action("冻结模型层?", default=False):
+            freeze_layers = int(input_number(
+                "  冻结前N层 (0=不冻结, 10=冻结前10层, 推荐: 检测10, 分割12):",
+                default=10,
+                min_value=0,
+                max_value=100
+            ))
+            if freeze_layers > 0:
+                config['freeze'] = freeze_layers
+                print_info(f"   将冻结前 {freeze_layers} 层")
+            else:
+                config['freeze'] = None
+                print_info("   不冻结任何层")
+        else:
+            config['freeze'] = None
+        
+        # 5. 损失函数权重
         console.print()
         print_info("⚖️ 损失函数权重：")
         if confirm_action("自定义损失函数权重?", default=False):
@@ -562,7 +607,9 @@ def build_training_config() -> Dict[str, Any]:
         config['patience'] = 50
         config['save_period'] = 10
         config['augmentation_custom'] = None
+        config['optimizer_type'] = 'auto'
         config['optimizer'] = None
+        config['freeze'] = None
         config['loss_weights'] = None
     
     return config

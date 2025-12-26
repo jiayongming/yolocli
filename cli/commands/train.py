@@ -134,6 +134,8 @@ def start_training(
     save_period: int = typer.Option(10, "--save-period", help="保存周期"),
     resume: bool = typer.Option(False, "--resume", "-r", help="从last.pt恢复训练"),
     pretrained: bool = typer.Option(True, "--pretrained/--from-scratch", help="使用预训练权重"),
+    optimizer: str = typer.Option("auto", "--optimizer", "-opt", help="优化器 (auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp)"),
+    freeze: Optional[int] = typer.Option(None, "--freeze", help="冻结前N层 (0=不冻结, 10=冻结前10层, None=不使用)"),
     # 分割任务特定参数
     overlap_mask: Optional[bool] = typer.Option(None, "--overlap-mask", help="[分割] 是否允许掩码重叠"),
     mask_ratio: Optional[int] = typer.Option(None, "--mask-ratio", help="[分割] 掩码下采样比例"),
@@ -322,6 +324,19 @@ def start_training(
             **aug_config,
             **task_specific_config,
         }
+        
+        # 添加优化器配置
+        if optimizer != "auto":
+            training_kwargs['optimizer'] = optimizer
+            print_info(f"使用优化器: {optimizer}")
+        
+        # 添加层冻结配置
+        if freeze is not None:
+            training_kwargs['freeze'] = freeze
+            if freeze > 0:
+                print_info(f"冻结前 {freeze} 层")
+            else:
+                print_info("不冻结任何层")
         
         # 从 kwargs 获取并添加优化器配置
         optimizer_config = kwargs.get('optimizer_config')

@@ -82,6 +82,10 @@
 - [命令参考](#-命令参考)
 - [使用示例](#-使用示例)
 - [配置文件](#-配置文件)
+- [数据增强策略](#-数据增强策略)
+- [优化器选择](#-优化器选择) 🆕
+- [层冻结](#️-层冻结freeze-layers) 🆕
+- [设备支持](#-设备支持)
 - [常见问题](#-常见问题)
 - [项目结构](#-项目结构)
 
@@ -357,6 +361,13 @@ python yolo_cli.py train start \
   --task detect \
   --data data/dataset.yaml \
   --augmentation aggressive
+
+# 使用特定的优化器
+python yolo_cli.py train start \
+  --model yolo11s.pt \
+  --task detect \
+  --data data/dataset.yaml \
+  --optimizer AdamW
 ```
 
 ## 🔄 Label Studio 数据转换
@@ -2514,6 +2525,8 @@ python yolo_cli.py train start [OPTIONS]
   --batch INTEGER        批次大小
   --imgsz INTEGER        图像尺寸
   --device TEXT          设备 (auto/mps/cuda/cpu)
+  --optimizer TEXT       优化器 (auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp)
+  --freeze INTEGER       冻结前N层 (0=不冻结, 10=冻结前10层)
   --project TEXT         项目目录
   --name TEXT            实验名称
   --augmentation TEXT    数据增强预设
@@ -2957,6 +2970,8 @@ training:
   batch: 16
   imgsz: 640
   device: auto
+  optimizer: auto  # auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp
+  freeze: null  # 冻结前N层 (null=不冻结, 10=冻结前10层)
 
 augmentation:
   default_preset: balanced
@@ -3006,6 +3021,136 @@ paths:
 - Mosaic: 1.0
 - MixUp: 0.0
 - 随机擦除: 0.4
+```
+
+## ⚡ 优化器选择
+
+框架支持多种优化器，可根据任务类型和数据集特点选择：
+
+### 支持的优化器
+
+| 优化器 | 特点 | 适用场景 |
+|--------|------|----------|
+| **auto** | 自动选择（默认） | 让YOLO根据任务类型自动选择最佳优化器 |
+| **SGD** | 随机梯度下降 | YOLO默认优化器，训练稳定，适合大多数场景 |
+| **Adam** | 自适应学习率 | 收敛快，适合小数据集和快速实验 |
+| **AdamW** | Adam + 权重衰减 | 改进的Adam，泛化能力更好，推荐用于大模型 |
+| **NAdam** | Nesterov + Adam | 结合动量的Adam，收敛更快更稳定 |
+| **RAdam** | 修正的Adam | 解决Adam早期训练不稳定问题 |
+| **RMSProp** | 均方根传播 | 适合RNN和动态学习率场景 |
+
+### 使用方法
+
+**命令行方式：**
+```bash
+# 使用默认优化器（推荐）
+python yolo_cli.py train start --model yolo11s.pt --data data/dataset.yaml
+
+# 使用AdamW优化器
+python yolo_cli.py train start \
+  --model yolo11s.pt \
+  --data data/dataset.yaml \
+  --optimizer AdamW
+
+# 快速训练时指定优化器
+python yolo_cli.py quick train \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --optimizer Adam
+```
+
+**配置文件方式：**
+```yaml
+training:
+  optimizer: AdamW  # 指定优化器
+```
+
+**交互式模式：**
+在高级选项中选择优化器类型（系统会提供可视化选择菜单）
+
+### 选择建议
+
+- 🎯 **默认场景**：使用 `auto` 或 `SGD`
+- 🚀 **快速实验**：使用 `Adam` 或 `NAdam`
+- 📈 **大模型训练**：使用 `AdamW`
+- 🔬 **研究对比**：尝试不同优化器找到最佳组合
+
+## ❄️ 层冻结（Freeze Layers）
+
+层冻结是迁移学习中的重要技术，通过冻结模型的前几层来保留预训练权重，只训练后面的层。这在以下场景非常有用：
+
+### 适用场景
+
+- 🎯 **小数据集微调**：数据量较少时，冻结骨干网络防止过拟合
+- 🚀 **快速训练**：减少需要训练的参数，加快训练速度
+- 🔄 **迁移学习**：利用预训练模型的特征提取能力
+- 💾 **显存优化**：冻结层不计算梯度，节省显存
+
+### 冻结层数建议
+
+| 任务类型 | 推荐冻结层数 | 说明 |
+|---------|------------|------|
+| **检测 (Detect)** | 10 层 | 冻结骨干网络前10层，保留底层特征 |
+| **分割 (Segment)** | 12 层 | 分割任务需要更多特征，可冻结更多层 |
+| **分类 (Classify)** | 0-15 层 | 根据数据集相似度调整 |
+| **大数据集** | 0 层 | 数据充足时不建议冻结 |
+| **超小数据集** | 15+ 层 | 只训练分类头部 |
+
+### 使用方法
+
+**命令行方式：**
+```bash
+# 冻结前10层（推荐用于小数据集）
+python yolo_cli.py train start \
+  --model yolo11s.pt \
+  --data data/dataset.yaml \
+  --freeze 10
+
+# 快速训练时冻结
+python yolo_cli.py quick train \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --freeze 10
+
+# 不冻结任何层（默认）
+python yolo_cli.py train start \
+  --model yolo11s.pt \
+  --data data/dataset.yaml \
+  --freeze 0
+```
+
+**配置文件方式：**
+```yaml
+training:
+  freeze: 10  # 冻结前10层
+```
+
+**交互式模式：**
+在高级选项中选择"冻结模型层"（系统会提供详细的配置说明）
+
+### 效果说明
+
+**冻结前10层时：**
+- ✅ 训练速度提升 30-50%
+- ✅ 显存占用减少 20-30%
+- ✅ 小数据集上泛化能力更好
+- ⚠️ 可能需要更长时间达到最佳精度
+
+**不冻结（freeze=0）时：**
+- ✅ 充分利用数据集学习特征
+- ✅ 在大数据集上表现更好
+- ⚠️ 训练时间更长
+- ⚠️ 小数据集上可能过拟合
+
+### 高级技巧
+
+**渐进式解冻（Progressive Unfreezing）：**
+```bash
+# 第一阶段：冻结前10层，快速训练50轮
+python yolo_cli.py train start --freeze 10 --epochs 50
+
+# 第二阶段：不冻结，继续训练100轮
+python yolo_cli.py train start --freeze 0 --epochs 100 --resume
 ```
 
 ## 🔧 设备支持

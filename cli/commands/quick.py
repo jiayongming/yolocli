@@ -47,6 +47,8 @@ def quick_train(
     name: Optional[str] = typer.Option(None, "--name", "-n", help="实验名称"),
     patience: int = typer.Option(50, "--patience", help="早停耐心值"),
     save_period: int = typer.Option(10, "--save-period", help="保存周期"),
+    optimizer: str = typer.Option("auto", "--optimizer", "-opt", help="优化器 (auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp)"),
+    freeze: Optional[int] = typer.Option(None, "--freeze", help="冻结前N层 (0=不冻结, 10=冻结前10层, None=不使用)"),
     # 从交互模式传递的高级配置（非CLI参数，使用 **kwargs 接收）
     **kwargs
 ):
@@ -429,6 +431,8 @@ def quick_train(
             'augmentation': augmentation,
             'patience': patience,
             'save_period': save_period,
+            'optimizer': optimizer,
+            'freeze': freeze,
             'resume': False,
             'pretrained': True,
             # 任务特定参数

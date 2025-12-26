@@ -20,6 +20,8 @@ training:
   patience: 50
   save_period: 10
   device: auto  # auto/mps/cuda/cpu
+  optimizer: auto  # auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp
+  freeze: null  # 冻结前N层 (null=不冻结, 10=冻结前10层)
 
 # 数据增强配置
 augmentation:
