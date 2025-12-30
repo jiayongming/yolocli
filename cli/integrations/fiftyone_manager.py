@@ -82,7 +82,15 @@ class FiftyOneManager:
             
             # 生成数据集名称（在复制前确定）
             if dataset_name is None:
-                dataset_name = f"yolo_{dataset_root.name}"
+                base_name = f"yolo_{dataset_root.name}"
+                dataset_name = base_name
+                
+                # 检查名称是否已存在，如果存在则添加时间戳
+                existing_datasets = self.fo.list_datasets()
+                if dataset_name in existing_datasets:
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    dataset_name = f"{base_name}_{timestamp}"
             
             # 如果需要复制数据集
             if copy_to_datasets:
@@ -181,6 +189,39 @@ class FiftyOneManager:
             else:
                 return (False, None, "数据集配置中缺少类别信息(names)")
             
+            # 初始化调试信息和计数器
+            sample_count = 0
+            debug_info = []
+            debug_info.append(f"Dataset root: {dataset_root}")
+            debug_info.append(f"YAML path: {yaml_path}")
+            
+            # 检测是否为 Pose 任务
+            is_pose = 'kpt_shape' in dataset_config
+            kpt_shape = dataset_config.get('kpt_shape', None)
+            if is_pose and kpt_shape:
+                num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                debug_info.append(f"Pose dataset detected with {num_keypoints} keypoints")
+            else:
+                num_keypoints = 0
+            
+            # 获取关键点标签（如果有的话）
+            # 尝试从 dataset.yaml 中获取关键点名称
+            keypoint_labels = dataset_config.get('keypoint_names', None)
+            if not keypoint_labels and is_pose:
+                # 如果没有定义，使用默认标签
+                if num_keypoints == 4:
+                    keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                elif num_keypoints == 17:
+                    keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                     'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                     'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                     'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                else:
+                    keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+                debug_info.append(f"Using default keypoint labels: {keypoint_labels}")
+            elif keypoint_labels:
+                debug_info.append(f"Keypoint labels from config: {keypoint_labels}")
+            
             # 确定要加载的划分
             if splits is None:
                 splits = ['train', 'val', 'test']
@@ -192,12 +233,6 @@ class FiftyOneManager:
             
             # 创建FiftyOne数据集
             dataset = self.fo.Dataset(dataset_name, persistent=persistent)
-            
-            # 为每个划分添加样本
-            sample_count = 0
-            debug_info = []
-            debug_info.append(f"Dataset root: {dataset_root}")
-            debug_info.append(f"YAML path: {yaml_path}")
             
             for split in splits:
                 split_key = split
@@ -256,6 +291,7 @@ class FiftyOneManager:
                     
                     # 读取标注
                     detections = []
+                    keypoints = []
                     if label_path.exists():
                         with open(label_path, 'r') as f:
                             for line in f:
@@ -265,7 +301,7 @@ class FiftyOneManager:
                                 
                                 parts = line.split()
                                 if len(parts) >= 5:
-                                    # YOLO格式: class_id x_center y_center width height
+                                    # YOLO格式: class_id x_center y_center width height [keypoints...]
                                     class_id = int(parts[0])
                                     x_center = float(parts[1])
                                     y_center = float(parts[2])
@@ -282,18 +318,60 @@ class FiftyOneManager:
                                     
                                     label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
                                     
-                                    detection = self.fo.Detection(
-                                        label=label,
-                                        bounding_box=bbox
-                                    )
-                                    detections.append(detection)
+                                    # 检查是否有关键点数据
+                                    if is_pose and len(parts) > 5:
+                                        # Pose 格式：解析关键点
+                                        # parts[5:] 包含关键点数据：x1 y1 v1 x2 y2 v2 ...
+                                        kpt_data = parts[5:]
+                                        expected_kpt_values = num_keypoints * 3
+                                        
+                                        if len(kpt_data) >= expected_kpt_values:
+                                            # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                            for i in range(0, expected_kpt_values, 3):
+                                                kpt_x = float(kpt_data[i])
+                                                kpt_y = float(kpt_data[i + 1])
+                                                kpt_v = float(kpt_data[i + 2])  # visibility: 0=未标注, 1=遮挡, 2=可见
+                                                kpt_idx = i // 3
+                                                
+                                                # 只添加可见的关键点（visibility > 0）
+                                                if kpt_v > 0:
+                                                    # 获取关键点标签
+                                                    if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                        kpt_label = keypoint_labels[kpt_idx]
+                                                    else:
+                                                        kpt_label = f'kp_{kpt_idx}'
+                                                    
+                                                    # 为每个关键点创建独立的 Keypoint 对象
+                                                    keypoint = self.fo.Keypoint(
+                                                        label=kpt_label,  # 使用关键点的标签而不是对象类别
+                                                        points=[[kpt_x, kpt_y]]  # 只包含一个点
+                                                    )
+                                                    keypoints.append(keypoint)
+                                        
+                                        # 仍然创建 Detection 对象（边界框）
+                                        detection = self.fo.Detection(
+                                            label=label,
+                                            bounding_box=bbox
+                                        )
+                                        detections.append(detection)
+                                    else:
+                                        # 普通检测格式
+                                        detection = self.fo.Detection(
+                                            label=label,
+                                            bounding_box=bbox
+                                        )
+                                        detections.append(detection)
                     
-                    # 添加检测结果
+                    # 添加检测结果（边界框）
                     if detections:
                         sample['ground_truth'] = self.fo.Detections(detections=detections)
                     else:
                         # 负样本（无标注）
                         sample['ground_truth'] = self.fo.Detections(detections=[])
+                    
+                    # 添加关键点结果
+                    if is_pose and keypoints:
+                        sample['ground_truth_keypoints'] = self.fo.Keypoints(keypoints=keypoints)
                     
                     dataset.add_sample(sample)
             
@@ -467,6 +545,42 @@ class FiftyOneManager:
         except Exception as e:
             return (False, f"关闭应用失败: {str(e)}")
     
+    def _detect_pose_format(self, label_file_path: Path) -> Tuple[bool, int]:
+        """检测标签文件是否为 Pose 格式
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            Tuple[bool, int]: (是否为Pose格式, 关键点数量)
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return (False, 0)
+                
+                parts = first_line.split()
+                if len(parts) > 5:
+                    # 检查是否符合 Pose 格式
+                    # class_id x y w h [kp1_x kp1_y kp1_v ...] 或 class_id x y w h conf [kp1_x kp1_y kp1_v ...]
+                    # 关键点数据应该是 3 的倍数
+                    extra_values = len(parts) - 5
+                    
+                    # 情况1: class x y w h kp... (没有置信度)
+                    if extra_values % 3 == 0:
+                        num_keypoints = extra_values // 3
+                        return (True, num_keypoints)
+                    
+                    # 情况2: class x y w h conf kp... (有置信度)
+                    if (extra_values - 1) % 3 == 0:
+                        num_keypoints = (extra_values - 1) // 3
+                        return (True, num_keypoints)
+                
+                return (False, 0)
+        except:
+            return (False, 0)
+    
     def add_predictions_to_dataset(
         self,
         dataset_name: str,
@@ -525,6 +639,39 @@ class FiftyOneManager:
                 # 如果没有labels子目录，尝试直接使用predictions_dir
                 labels_dir = predictions_path
             
+            # 检测是否为 Pose 格式（检查第一个标签文件）
+            is_pose = False
+            num_keypoints = 0
+            for label_file in labels_dir.glob('*.txt'):
+                is_pose, num_keypoints = self._detect_pose_format(label_file)
+                break  # 只检查第一个文件
+            
+            # 获取关键点标签（尝试从数据集的 ground_truth_keypoints 中提取）
+            keypoint_labels = None
+            if is_pose:
+                # 尝试从已有的 ground_truth_keypoints 中获取标签
+                if 'ground_truth_keypoints' in dataset.get_field_schema():
+                    # 获取第一个有关键点的样本
+                    samples_with_kpts = dataset.match(self.fo.ViewField('ground_truth_keypoints').exists())
+                    if len(samples_with_kpts) > 0:
+                        first_sample = samples_with_kpts.first()
+                        if first_sample.ground_truth_keypoints and first_sample.ground_truth_keypoints.keypoints:
+                            first_kpt = first_sample.ground_truth_keypoints.keypoints[0]
+                            if hasattr(first_kpt, 'point_labels') and first_kpt.point_labels:
+                                keypoint_labels = first_kpt.point_labels
+                
+                # 如果还是没有，使用默认标签
+                if not keypoint_labels:
+                    if num_keypoints == 4:
+                        keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                    elif num_keypoints == 17:
+                        keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                         'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                    else:
+                        keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+            
             stats = {
                 'total_samples': len(dataset),
                 'updated_samples': 0,
@@ -543,6 +690,7 @@ class FiftyOneManager:
                 
                 # 读取预测结果
                 detections = []
+                keypoints = []
                 with open(label_file, 'r') as f:
                     for line in f:
                         line = line.strip()
@@ -551,13 +699,29 @@ class FiftyOneManager:
                         
                         parts = line.split()
                         if len(parts) >= 5:
-                            # YOLO格式: class_id x_center y_center width height [confidence]
+                            # YOLO格式: class_id x_center y_center width height [confidence] [keypoints...]
                             class_id = int(parts[0])
                             x_center = float(parts[1])
                             y_center = float(parts[2])
                             width = float(parts[3])
                             height = float(parts[4])
-                            confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                            
+                            # 判断是否有置信度值
+                            if is_pose:
+                                # Pose 格式可能有置信度，检查数据长度
+                                extra_values = len(parts) - 5
+                                if (extra_values - 1) % 3 == 0:
+                                    # 有置信度
+                                    confidence = float(parts[5])
+                                    kpt_start_idx = 6
+                                else:
+                                    # 没有置信度
+                                    confidence = 1.0
+                                    kpt_start_idx = 5
+                            else:
+                                # 普通检测格式
+                                confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                                kpt_start_idx = 6
                             
                             # 过滤低置信度预测
                             if confidence < conf_threshold:
@@ -574,6 +738,35 @@ class FiftyOneManager:
                             
                             label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
                             
+                            # 处理关键点数据
+                            if is_pose and len(parts) > kpt_start_idx:
+                                kpt_data = parts[kpt_start_idx:]
+                                expected_kpt_values = num_keypoints * 3
+                                
+                                if len(kpt_data) >= expected_kpt_values:
+                                    # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                    for i in range(0, expected_kpt_values, 3):
+                                        kpt_x = float(kpt_data[i])
+                                        kpt_y = float(kpt_data[i + 1])
+                                        kpt_v = float(kpt_data[i + 2])
+                                        kpt_idx = i // 3
+                                        
+                                        # 只添加可见的关键点
+                                        if kpt_v > 0:
+                                            # 获取关键点标签
+                                            if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                kpt_label = keypoint_labels[kpt_idx]
+                                            else:
+                                                kpt_label = f'kp_{kpt_idx}'
+                                            
+                                            # 为每个关键点创建独立的 Keypoint 对象
+                                            keypoint = self.fo.Keypoint(
+                                                label=kpt_label,  # 使用关键点的标签
+                                                points=[[kpt_x, kpt_y]],  # 只包含一个点
+                                                confidence=confidence
+                                            )
+                                            keypoints.append(keypoint)
+                            
                             detection = self.fo.Detection(
                                 label=label,
                                 bounding_box=bbox,
@@ -585,6 +778,8 @@ class FiftyOneManager:
                 # 添加预测结果到样本
                 if detections:
                     sample[field_name] = self.fo.Detections(detections=detections)
+                    if is_pose and keypoints:
+                        sample[f"{field_name}_keypoints"] = self.fo.Keypoints(keypoints=keypoints)
                     sample.save()
                     stats['updated_samples'] += 1
             

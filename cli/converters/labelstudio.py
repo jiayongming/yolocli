@@ -590,17 +590,61 @@ class LabelStudioConverter:
             List[Dict]: 处理后的数据列表，关键点已合并为 Pose 格式
         """
         # 首先收集所有不同的关键点标签，确定顺序
-        all_labels = set()
+        # 使用多数投票法确定最常见的标注顺序
+        from collections import Counter
+        import sys
+        
+        all_labels = []
+        label_first_occurrence = {}  # 记录每个标签第一次出现的顺序
+        label_occurrence_count = {}  # 统计每个标签出现的次数，用于调试
+        sample_orders = []  # 收集所有样本的关键点顺序
+        
         for item in parsed_data:
             keypoints = [ann for ann in item['annotations'] if ann.get('type') == 'keypoint']
+            
+            # 记录有完整关键点的样本的顺序（用于多数投票）
+            if len(keypoints) >= 4:
+                order = tuple([kp.get('label', 'unknown') for kp in keypoints[:4]])
+                sample_orders.append(order)
+            
             for kp in keypoints:
                 label = kp.get('label', 'unknown')
-                all_labels.add(label)
+                if label not in label_first_occurrence:
+                    label_first_occurrence[label] = len(all_labels)
+                    all_labels.append(label)
+                    label_occurrence_count[label] = 0
+                label_occurrence_count[label] += 1
         
-        # 按字母顺序排序关键点标签（保证一致性）
-        keypoint_order = sorted(all_labels) if all_labels else ['strat', 'end', 'center', 'pointer']
+        # 使用多数投票确定最常见的顺序
+        if sample_orders:
+            order_counter = Counter(sample_orders)
+            most_common_order, count = order_counter.most_common(1)[0]
+            keypoint_order = list(most_common_order)
+            
+            print(f"ℹ 检测到 {len(sample_orders)} 个完整样本", file=sys.stderr)
+            print(f"✓ 最常见的关键点顺序: {keypoint_order} (出现 {count}/{len(sample_orders)} 次)", file=sys.stderr)
+            
+            # 如果有多种顺序，显示警告
+            if len(order_counter) > 1:
+                print(f"⚠ 发现 {len(order_counter)} 种不同的标注顺序:", file=sys.stderr)
+                for order, cnt in order_counter.most_common(3):
+                    print(f"   {list(order)}: {cnt} 次", file=sys.stderr)
+        else:
+            # 回退到预定义顺序
+            expected_order = ['strat', 'end', 'center', 'pointer']
+            keypoint_order = expected_order
+            print(f"⚠ 无法检测实际顺序，使用默认顺序: {expected_order}", file=sys.stderr)
+        
+        # 输出每个标签的统计信息（用于调试）
+        if label_occurrence_count:
+            import sys
+            print(f"ℹ 关键点统计:", file=sys.stderr)
+            for label in keypoint_order:
+                count = label_occurrence_count.get(label, 0)
+                print(f"  {label}: {count} 个", file=sys.stderr)
         
         processed_data = []
+        inconsistent_samples = []  # 记录关键点顺序不一致的样本
         
         for item in parsed_data:
             # 检查是否有关键点标注
@@ -614,9 +658,20 @@ class LabelStudioConverter:
             # 有关键点，合并为 Pose 格式
             # 创建一个字典来存储每个标签的关键点
             kp_dict = {}
+            actual_labels = []  # 记录实际标注的顺序
             for kp in keypoints:
                 label = kp.get('label', 'unknown')
                 kp_dict[label] = (kp['x'], kp['y'])
+                actual_labels.append(label)
+            
+            # 检查是否所有预期的关键点都存在
+            missing_labels = [l for l in keypoint_order if l not in kp_dict]
+            if missing_labels:
+                inconsistent_samples.append({
+                    'filename': item.get('filename', 'unknown'),
+                    'issue': 'missing_labels',
+                    'missing': missing_labels
+                })
             
             # 按照预定义顺序组织关键点，如果某个关键点缺失，使用 (0, 0) 和 visibility=0
             ordered_keypoints = []
@@ -682,6 +737,16 @@ class LabelStudioConverter:
             new_item['is_negative'] = False
             
             processed_data.append(new_item)
+        
+        # 输出关键点不一致的诊断信息
+        if inconsistent_samples:
+            import sys
+            print(f"\n⚠ 发现 {len(inconsistent_samples)} 个样本的关键点标注不完整:", file=sys.stderr)
+            for i, sample in enumerate(inconsistent_samples[:5]):  # 只显示前5个
+                print(f"  {i+1}. {sample['filename']}: 缺失 {sample['missing']}", file=sys.stderr)
+            if len(inconsistent_samples) > 5:
+                print(f"  ... 还有 {len(inconsistent_samples) - 5} 个样本", file=sys.stderr)
+            print(f"\n💡 建议: 请在 Label Studio 中检查这些样本，确保所有关键点都已标注", file=sys.stderr)
         
         return processed_data
     

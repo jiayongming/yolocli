@@ -835,26 +835,43 @@ def generate_yaml(
         
         yaml_config['kpt_shape'] = [kpt_count, 3]
         
-        # 根据关键点数量设置 flip_idx
+        # 根据关键点数量设置 flip_idx 和关键点名称
         if kpt_count == 17:
             # COCO 17 关键点的对称索引
             yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            yaml_config['keypoint_names'] = [
+                'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+            ]
         elif kpt_count == 4:
             # 4个关键点（如您的模板：strat, end, center, pointer）
             # 假设没有对称关系，使用原始顺序
             yaml_config['flip_idx'] = [0, 1, 2, 3]
+            yaml_config['keypoint_names'] = ['strat', 'end', 'center', 'pointer']
         else:
             # 其他数量，使用原始顺序
             yaml_config['flip_idx'] = list(range(kpt_count))
+            yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
         
         if detected_kpt_count:
             print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
         else:
             print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
+        
+        # 显示关键点名称
+        if 'keypoint_names' in yaml_config:
+            print_info(f"关键点名称: {yaml_config['keypoint_names']}")
     
     # 保存YAML文件
     output_path = Path(output)
     ensure_dir(output_path.parent)
+    
+    # 调试：在保存前检查 yaml_config
+    import sys
+    if task == 'pose' and 'keypoint_names' not in yaml_config:
+        print_warning("警告: yaml_config 中缺少 keypoint_names 字段！", file=sys.stderr)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write("# YOLO 数据集配置文件\n")
@@ -873,7 +890,8 @@ def generate_yaml(
     print_key_value("names", ", ".join(yaml_config['names'].values()))
     if task == 'pose':
         print_key_value("kpt_shape", str(yaml_config['kpt_shape']))
-        print_key_value("flip_idx", "已配置 (COCO 17关键点)")
+        print_key_value("keypoint_names", ", ".join(yaml_config['keypoint_names']))
+        print_key_value("flip_idx", "已配置")
 
 
 @app.command("verify")
