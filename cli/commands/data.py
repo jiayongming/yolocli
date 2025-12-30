@@ -96,6 +96,66 @@ def _validate_detect_label(label_file: Path) -> bool:
         return False
 
 
+def _validate_pose_label(label_file: Path, expected_kpt_count: Optional[int] = None) -> bool:
+    """
+    验证姿势估计标签文件格式
+    
+    格式: class_id x y w h kp1_x kp1_y kp1_v kp2_x kp2_y kp2_v ...
+    每个关键点需要 3 个值 (x, y, visibility)
+    
+    Args:
+        label_file: 标签文件路径
+        expected_kpt_count: 期望的关键点数量（可选）
+        
+    Returns:
+        bool: 标签格式是否有效
+    """
+    try:
+        with open(label_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                # 最少：class_id + bbox(4) + 至少1个关键点(3)
+                if len(parts) < 8:
+                    return False
+                
+                # 检查关键点部分是否为3的倍数
+                kpt_values = len(parts) - 5  # 减去 class_id 和 bbox
+                if kpt_values % 3 != 0:
+                    return False
+                
+                # 如果指定了关键点数量，验证是否匹配
+                if expected_kpt_count is not None:
+                    if kpt_values // 3 != expected_kpt_count:
+                        return False
+                
+                # 验证数值有效性
+                try:
+                    int(parts[0])  # class_id
+                    for val in parts[1:5]:  # bbox
+                        coord = float(val)
+                        if coord < 0 or coord > 1:
+                            return False
+                    
+                    # 验证关键点
+                    for i in range(5, len(parts), 3):
+                        kp_x = float(parts[i])
+                        kp_y = float(parts[i+1])
+                        kp_v = int(parts[i+2])
+                        
+                        if kp_x < 0 or kp_x > 1 or kp_y < 0 or kp_y > 1:
+                            return False
+                        if kp_v not in [0, 1, 2]:
+                            return False
+                except (ValueError, IndexError):
+                    return False
+        return True
+    except Exception:
+        return False
+
+
 @app.command("split")
 def split_dataset(
     images_dir: Optional[str] = typer.Option(None, "--images", "-i", help="图像目录 (检测/分割任务)"),
@@ -105,7 +165,7 @@ def split_dataset(
     ratios: Optional[str] = typer.Option(None, "--ratios", "-r", help="划分比例 (train:val:test，如: 0.7:0.2:0.1)"),
     counts: Optional[str] = typer.Option(None, "--counts", "-c", help="划分样本数 (train:val:test，如: 100:30:10)"),
     seed: int = typer.Option(42, "--seed", help="随机种子"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     create_empty_labels: bool = typer.Option(False, "--create-empty-labels/--no-empty-labels", help="为缺失标签的图片创建空标签（负样本）"),
 ):
     """划分数据集为训练集、验证集、测试集
@@ -265,6 +325,11 @@ def _split_detect_segment_dataset(
                     pairs.append((img_file, label_file, False))  # False = 非负样本
                 else:
                     print_warning(f"分割标签格式无效: {img_file.name}")
+            elif task == 'pose':
+                if _validate_pose_label(label_file):
+                    pairs.append((img_file, label_file, False))  # False = 非负样本
+                else:
+                    print_warning(f"Pose标签格式无效: {img_file.name}")
             else:
                 pairs.append((img_file, label_file, False))  # False = 非负样本
         else:
@@ -650,7 +715,7 @@ def generate_yaml(
     train_dir: Optional[str] = typer.Option(None, "--train", help="训练集目录 (默认根据任务类型自动设置)"),
     val_dir: Optional[str] = typer.Option(None, "--val", help="验证集目录 (默认根据任务类型自动设置)"),
     test_dir: Optional[str] = typer.Option(None, "--test", help="测试集目录 (默认根据任务类型自动设置)"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
 ):
     """生成dataset.yaml配置文件"""
     
@@ -740,6 +805,53 @@ def generate_yaml(
         'nc': len(classes),
     }
     
+    # Pose任务需要额外的配置
+    if task == 'pose':
+        # 尝试从标签文件中检测关键点数量
+        kpt_count = 17  # 默认
+        detected_kpt_count = None
+        
+        # 检查第一个标签文件来确定关键点数量
+        if train_path.exists():
+            label_files = list((data_path / 'labels' / 'train').glob('*.txt'))
+            if not label_files:
+                label_files = list(train_path.parent.parent.glob('labels/train/*.txt'))
+            
+            if label_files:
+                try:
+                    with open(label_files[0], 'r') as f:
+                        first_line = f.readline().strip()
+                        if first_line:
+                            parts = first_line.split()
+                            # YOLO Pose 格式: class_id x y w h kp1_x kp1_y kp1_v ...
+                            # 总列数 = 1 (class) + 4 (bbox) + N*3 (keypoints)
+                            if len(parts) > 5:
+                                kpt_data_count = len(parts) - 5
+                                if kpt_data_count % 3 == 0:
+                                    detected_kpt_count = kpt_data_count // 3
+                                    kpt_count = detected_kpt_count
+                except Exception:
+                    pass
+        
+        yaml_config['kpt_shape'] = [kpt_count, 3]
+        
+        # 根据关键点数量设置 flip_idx
+        if kpt_count == 17:
+            # COCO 17 关键点的对称索引
+            yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+        elif kpt_count == 4:
+            # 4个关键点（如您的模板：strat, end, center, pointer）
+            # 假设没有对称关系，使用原始顺序
+            yaml_config['flip_idx'] = [0, 1, 2, 3]
+        else:
+            # 其他数量，使用原始顺序
+            yaml_config['flip_idx'] = list(range(kpt_count))
+        
+        if detected_kpt_count:
+            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
+        else:
+            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
+    
     # 保存YAML文件
     output_path = Path(output)
     ensure_dir(output_path.parent)
@@ -759,12 +871,15 @@ def generate_yaml(
     print_key_value("test", yaml_config['test'])
     print_key_value("nc", yaml_config['nc'])
     print_key_value("names", ", ".join(yaml_config['names'].values()))
+    if task == 'pose':
+        print_key_value("kpt_shape", str(yaml_config['kpt_shape']))
+        print_key_value("flip_idx", "已配置 (COCO 17关键点)")
 
 
 @app.command("verify")
 def verify_dataset(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
 ):
     """验证数据集完整性"""
     
@@ -884,6 +999,19 @@ def verify_dataset(
                         elif task == 'detect':
                             if not _validate_detect_label(label_file):
                                 issues.append(f"{split}: 检测标签格式错误 - {label_file.name}")
+                        elif task == 'pose':
+                            # 尝试从 dataset.yaml 读取 kpt_shape
+                            kpt_count = None
+                            dataset_yaml = data_path / 'dataset.yaml'
+                            if dataset_yaml.exists():
+                                with open(dataset_yaml, 'r', encoding='utf-8') as f:
+                                    yaml_data = yaml.safe_load(f)
+                                    kpt_shape = yaml_data.get('kpt_shape')
+                                    if kpt_shape:
+                                        kpt_count = kpt_shape[0]
+                            
+                            if not _validate_pose_label(label_file, kpt_count):
+                                issues.append(f"{split}: Pose标签格式错误 - {label_file.name}")
                     except Exception as e:
                         issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
     
@@ -1295,7 +1423,7 @@ def _print_positive_negative_stats(data_path: Path):
 def dataset_stats(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
     detailed: bool = typer.Option(False, "--detailed", "-d", help="显示详细统计"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     positive_classes: Optional[str] = typer.Option(None, "--positive-classes", help="正类列表（逗号分隔，仅用于分类任务）"),
 ):
     """数据集统计分析
@@ -1531,17 +1659,45 @@ def convert_labelstudio(
     
     # 构建类别映射
     print_info("构建类别映射...")
+    
+    # 调试：检查数据结构
+    if parsed_data:
+        first_item = parsed_data[0]
+        if first_item.get('annotations'):
+            first_ann = first_item['annotations'][0]
+            print_info(f"  样本标注类型: {first_ann.get('type', 'unknown')}")
+            if first_ann.get('labels'):
+                print_info(f"  样本标签: {first_ann.get('labels')}")
+            if first_ann.get('keypoints'):
+                kp_count = len(first_ann['keypoints'])
+                print_info(f"  关键点数量: {kp_count}")
+        else:
+            print_warning("  第一个样本没有标注数据")
+    
+    # 检测是否为 Pose 格式（需要在类别映射之前检测）
+    if task == 'detect' and parsed_data:
+        # 检查第一个有标注的样本是否包含 pose 类型
+        for item in parsed_data:
+            if item['annotations']:
+                if item['annotations'][0].get('type') == 'pose':
+                    task = 'pose'  # 更新任务类型
+                    print_info("检测到 Pose 格式标注，任务类型已更新为 'pose'")
+                break
+    
     class_mapping = LabelStudioConverter.build_class_mapping(parsed_data, task)
     
     if not class_mapping:
         print_error("未找到任何类别")
+        print_info("提示: 请检查 Label Studio 导出数据是否包含有效的标注")
+        if task == 'pose':
+            print_info("      对于 Pose 任务，请确保导出数据包含 KeyPointLabels 标注")
         raise typer.Exit(1)
     
     print_success(f"✓ 找到 {len(class_mapping)} 个类别: {', '.join(class_mapping.keys())}")
     
     # 创建输出目录结构
     images_dir = output_path / 'images'
-    if task == 'detect':
+    if task in ['detect', 'pose']:
         labels_dir = output_path / 'labels'
         ensure_dir(images_dir)
         ensure_dir(labels_dir)
@@ -1554,7 +1710,7 @@ def convert_labelstudio(
     
     # 准备下载列表
     print_info("准备下载图片...")
-    if task == 'detect':
+    if task in ['detect', 'pose']:
         download_list = LabelStudioConverter.prepare_download_list(parsed_data, images_dir)
     else:  # classify - 直接下载到类别目录
         download_list = []
@@ -1606,8 +1762,8 @@ def convert_labelstudio(
     # 生成YOLO格式标签/组织文件
     print_info("生成YOLO格式数据...")
     
-    if task == 'detect':
-        # 检测任务：生成标签文件
+    if task in ['detect', 'pose']:
+        # 检测/姿势任务：生成标签文件
         generated_count = 0
         negative_count = 0
         
@@ -1636,13 +1792,35 @@ def convert_labelstudio(
                         class_name = labels[0]
                         class_id = class_mapping.get(class_name, 0)
                         
-                        # 转换坐标
-                        x_center, y_center, w, h = LabelStudioConverter.convert_bbox_to_yolo(
-                            ann['x'], ann['y'], ann['width'], ann['height']
-                        )
-                        
-                        # 写入YOLO格式
-                        f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
+                        # 检查是否为 Pose 格式
+                        if ann.get('type') == 'pose':
+                            # Pose 格式：class_id x y w h kp1_x kp1_y kp1_v kp2_x kp2_y kp2_v ...
+                            # 转换边界框坐标
+                            x_center, y_center, w, h = LabelStudioConverter.convert_bbox_to_yolo(
+                                ann['x'], ann['y'], ann['width'], ann['height']
+                            )
+                            
+                            # 开始写入：class_id + bbox
+                            line_parts = [str(class_id), f"{x_center:.6f}", f"{y_center:.6f}", f"{w:.6f}", f"{h:.6f}"]
+                            
+                            # 添加关键点
+                            keypoints = ann.get('keypoints', [])
+                            for kp in keypoints:
+                                kp_x = kp['x'] / 100.0  # Label Studio 使用百分比坐标
+                                kp_y = kp['y'] / 100.0
+                                kp_v = kp['visibility']
+                                line_parts.extend([f"{kp_x:.6f}", f"{kp_y:.6f}", str(kp_v)])
+                            
+                            f.write(" ".join(line_parts) + "\n")
+                        else:
+                            # 普通检测格式
+                            # 转换坐标
+                            x_center, y_center, w, h = LabelStudioConverter.convert_bbox_to_yolo(
+                                ann['x'], ann['y'], ann['width'], ann['height']
+                            )
+                            
+                            # 写入YOLO格式
+                            f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
                 
                 if item['annotations']:
                     generated_count += 1
@@ -1704,11 +1882,13 @@ def convert_labelstudio(
         f.write(f"  已跳过: {download_stats['skipped']}\n")
         f.write(f"  失败: {download_stats['failed']}\n")
         f.write(f"  总计: {len(download_list)}\n")
-        if task == 'detect':
+        if task in ['detect', 'pose']:
             f.write(f"\n标签生成:\n")
             f.write(f"  正样本（有标注）: {generated_count}\n")
             f.write(f"  负样本（无标注）: {negative_count}\n")
             f.write(f"  包含负样本: {'是' if include_negative else '否'}\n")
+            if task == 'pose':
+                f.write(f"  格式: YOLO Pose (bbox + keypoints)\n")
         else:
             f.write(f"\n文件组织:\n")
             f.write(f"  组织数量: {organized_count}\n")
@@ -1727,8 +1907,10 @@ def convert_labelstudio(
         ["跳过下载", download_stats['skipped']],
     ]
     
-    if task == 'detect':
+    if task in ['detect', 'pose']:
         rows.append(["标签文件", generated_count])
+        if task == 'pose':
+            rows.append(["标签格式", "YOLO Pose"])
     
     print_table("转换摘要", columns, rows, show_lines=True)
     
@@ -1739,14 +1921,14 @@ def convert_labelstudio(
     print_info("接下来可以使用以下命令继续处理:")
     console.print()
     
-    if task == 'detect':
+    if task in ['detect', 'pose']:
         console.print("  [bold cyan]1. 划分数据集:[/bold cyan]")
         console.print(f"     python yolo_cli.py data split \\")
         console.print(f"       --images {output_path}/images \\")
         console.print(f"       --labels {output_path}/labels \\")
         console.print(f"       --output data/processed \\")
         console.print(f"       --ratios 0.7:0.2:0.1 \\")
-        console.print(f"       --task detect")
+        console.print(f"       --task {task}")
     else:
         console.print("  [bold cyan]1. 划分分类数据集:[/bold cyan]")
         console.print(f"     python yolo_cli.py data split \\")
@@ -1760,6 +1942,13 @@ def convert_labelstudio(
     console.print(f"       --path data/processed \\")
     console.print(f"       --classes {output_path}/classes.txt \\")
     console.print(f"       --task {task}")
+    
+    if task == 'pose':
+        console.print()
+        console.print("  [bold yellow]💡 Pose 任务说明:[/bold yellow]")
+        console.print("     - 数据已转换为 YOLO Pose 格式")
+        console.print("     - 每行包含: class_id bbox keypoints")
+        console.print("     - generate-yaml 会自动添加 kpt_shape 配置")
     
     console.print()
     console.print("  [bold cyan]3. 开始训练:[/bold cyan]")

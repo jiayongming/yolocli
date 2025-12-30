@@ -14,6 +14,7 @@ class TaskType(Enum):
     DETECT = "detect"
     SEGMENT = "segment"
     CLASSIFY = "classify"
+    POSE = "pose"
     
     @classmethod
     def from_string(cls, task: str) -> 'TaskType':
@@ -46,7 +47,7 @@ class TaskType(Enum):
         """获取模型文件后缀
         
         Returns:
-            str: 模型后缀（如 '', '-seg', '-cls'）
+            str: 模型后缀（如 '', '-seg', '-cls', '-pose'）
         """
         if self == TaskType.DETECT:
             return ""
@@ -54,6 +55,8 @@ class TaskType(Enum):
             return "-seg"
         elif self == TaskType.CLASSIFY:
             return "-cls"
+        elif self == TaskType.POSE:
+            return "-pose"
         return ""
     
     def __str__(self) -> str:
@@ -409,6 +412,14 @@ def get_task_specific_config(task: str) -> dict:
             'top_k': 5,
             'dropout': 0.0,
         }
+    elif task_type == TaskType.POSE:
+        return {
+            **base_config,
+            'save_txt': True,
+            'save_json': True,
+            'kpt_shape': None,  # 从 dataset.yaml 读取
+            'pose_specific': True,
+        }
     
     return base_config
 
@@ -471,5 +482,7 @@ def parse_model_name(model_name: str) -> Tuple[str, str]:
         return (base[:-4], TaskType.SEGMENT.value)
     elif base.endswith('-cls'):
         return (base[:-4], TaskType.CLASSIFY.value)
+    elif base.endswith('-pose'):
+        return (base[:-5], TaskType.POSE.value)
     else:
         return (base, TaskType.DETECT.value)

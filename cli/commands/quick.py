@@ -31,7 +31,7 @@ def quick_train(
     images_dir: str = typer.Option(..., "--images", "-i", help="原始图像目录"),
     labels_dir: Optional[str] = typer.Option(None, "--labels", "-l", help="原始标签目录（检测/分割必需，分类可选）"),
     classes_file: Optional[str] = typer.Option(None, "--classes", "-c", help="类别文件路径 (默认: data/raw/classes.txt)"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     model_version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
     model_size: str = typer.Option("s", "--size", "-s", help="模型大小 (n/s/m/l/x)"),
     epochs: Optional[int] = typer.Option(None, "--epochs", "-e", help="训练轮数 (检测/分割默认200，分类默认100)"),
@@ -55,7 +55,7 @@ def quick_train(
     """
     一键训练：自动完成数据处理、模型下载和训练的完整流程
     
-    支持三种任务类型：检测(detect)、分割(segment)、分类(classify)
+    支持四种任务类型：检测(detect)、分割(segment)、分类(classify)、姿势估计(pose)
     
     示例:
     

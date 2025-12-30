@@ -182,6 +182,7 @@ def select_task_type() -> str:
         "detect - 目标检测",
         "segment - 实例分割",
         "classify - 图像分类",
+        "pose - 姿势估计",
     ]
     
     result = select_option("选择任务类型:", choices, default=choices[0])
@@ -599,6 +600,32 @@ def build_training_config() -> Dict[str, Any]:
                 ))
         else:
             config['loss_weights'] = None
+        
+        # 6. Pose任务特定配置
+        if config['task'] == 'pose':
+            console.print()
+            print_info("🤸 Pose任务特定配置：")
+            
+            # 关键点配置
+            preset_choice = select_option(
+                "选择关键点预设:",
+                ["COCO (17个关键点 - 人体)", "自定义"],
+                default="COCO (17个关键点 - 人体)"
+            )
+            
+            if "COCO" in preset_choice:
+                config['kpt_shape'] = [17, 3]
+                config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                print_info("  使用COCO 17关键点配置")
+            else:
+                kpt_count = int(input_number(
+                    "  关键点数量:",
+                    default=17,
+                    min_value=1
+                ))
+                config['kpt_shape'] = [kpt_count, 3]
+                config['flip_idx'] = None
+                print_info(f"  配置 {kpt_count} 个关键点")
         
         console.print()
         print_info("✓ 高级选项配置完成")

@@ -543,23 +543,18 @@ class LabelStudioConverter:
                                 item['annotations'].append(annotation_item)
                         
                         elif result_type == 'keypointlabels':
-                            # 关键点标注 - 转换为小边界框用于检测任务
+                            # 关键点标注 - 收集用于 Pose 格式转换
                             x = value.get('x', 0)
                             y = value.get('y', 0)
-                            # width 是关键点的大小（通常很小，如 0.5%）
-                            kp_width = value.get('width', 1.0)
-                            kp_height = kp_width  # 假设是正方形
+                            labels = value.get('keypointlabels', [])
                             
-                            # 将关键点中心转换为边界框（左上角 + 宽高）
-                            # x, y 是中心点坐标，需要转换为左上角
-                            annotation_item = {
-                                'type': 'keypoint',  # 标记为关键点转换的
-                                'x': x - kp_width / 2,  # 左上角 x
-                                'y': y - kp_height / 2,  # 左上角 y
-                                'width': kp_width,
-                                'height': kp_height,
-                                'labels': value.get('keypointlabels', []),
-                                'keypoint_center': (x, y),  # 保留原始关键点中心
+                            # 创建关键点数据结构
+                            keypoint_item = {
+                                'type': 'keypoint',
+                                'x': x,
+                                'y': y,
+                                'labels': labels,
+                                'label': labels[0] if labels else 'unknown',
                             }
                             
                             # 获取原始图像尺寸
@@ -567,7 +562,7 @@ class LabelStudioConverter:
                                 item['image_width'] = result['original_width']
                                 item['image_height'] = result['original_height']
                             
-                            item['annotations'].append(annotation_item)
+                            item['annotations'].append(keypoint_item)
                             
                         elif result_type == 'choices':
                             # 分类标注
@@ -579,7 +574,116 @@ class LabelStudioConverter:
             if include_negative or not item['is_negative']:
                 parsed_data.append(item)
         
+        # 后处理：将关键点标注合并为 Pose 格式
+        parsed_data = LabelStudioConverter._merge_keypoints_to_pose(parsed_data)
+        
         return parsed_data
+    
+    @staticmethod
+    def _merge_keypoints_to_pose(parsed_data: List[Dict]) -> List[Dict]:
+        """将多个独立的关键点标注合并为 Pose 格式
+        
+        Args:
+            parsed_data: 解析后的数据列表
+            
+        Returns:
+            List[Dict]: 处理后的数据列表，关键点已合并为 Pose 格式
+        """
+        # 首先收集所有不同的关键点标签，确定顺序
+        all_labels = set()
+        for item in parsed_data:
+            keypoints = [ann for ann in item['annotations'] if ann.get('type') == 'keypoint']
+            for kp in keypoints:
+                label = kp.get('label', 'unknown')
+                all_labels.add(label)
+        
+        # 按字母顺序排序关键点标签（保证一致性）
+        keypoint_order = sorted(all_labels) if all_labels else ['strat', 'end', 'center', 'pointer']
+        
+        processed_data = []
+        
+        for item in parsed_data:
+            # 检查是否有关键点标注
+            keypoints = [ann for ann in item['annotations'] if ann.get('type') == 'keypoint']
+            
+            if not keypoints:
+                # 没有关键点，保持原样
+                processed_data.append(item)
+                continue
+            
+            # 有关键点，合并为 Pose 格式
+            # 创建一个字典来存储每个标签的关键点
+            kp_dict = {}
+            for kp in keypoints:
+                label = kp.get('label', 'unknown')
+                kp_dict[label] = (kp['x'], kp['y'])
+            
+            # 按照预定义顺序组织关键点，如果某个关键点缺失，使用 (0, 0) 和 visibility=0
+            ordered_keypoints = []
+            all_x = []
+            all_y = []
+            
+            for label in keypoint_order:
+                if label in kp_dict:
+                    x, y = kp_dict[label]
+                    ordered_keypoints.append({
+                        'x': x,
+                        'y': y,
+                        'visibility': 2,  # 2 = 可见
+                        'label': label
+                    })
+                    all_x.append(x)
+                    all_y.append(y)
+                else:
+                    # 关键点缺失
+                    ordered_keypoints.append({
+                        'x': 0,
+                        'y': 0,
+                        'visibility': 0,  # 0 = 未标注
+                        'label': label
+                    })
+            
+            # 计算包含所有关键点的边界框
+            if all_x and all_y:
+                min_x = min(all_x)
+                max_x = max(all_x)
+                min_y = min(all_y)
+                max_y = max(all_y)
+                
+                # 添加一些边距（10%）
+                margin_x = (max_x - min_x) * 0.1
+                margin_y = (max_y - min_y) * 0.1
+                
+                bbox_x = max(0, min_x - margin_x)
+                bbox_y = max(0, min_y - margin_y)
+                bbox_w = min(100, max_x + margin_x) - bbox_x
+                bbox_h = min(100, max_y + margin_y) - bbox_y
+            else:
+                # 如果没有有效的关键点，使用默认边界框
+                bbox_x = 0
+                bbox_y = 0
+                bbox_w = 100
+                bbox_h = 100
+            
+            # 创建 Pose 格式的标注
+            pose_annotation = {
+                'type': 'pose',
+                'x': bbox_x,
+                'y': bbox_y,
+                'width': bbox_w,
+                'height': bbox_h,
+                'keypoints': ordered_keypoints,
+                'labels': ['object'],  # 默认类别
+            }
+            
+            # 替换原来的关键点标注
+            new_item = item.copy()
+            new_item['annotations'] = [pose_annotation]
+            new_item['is_negative'] = False
+            
+            processed_data.append(new_item)
+        
+        return processed_data
     
     @staticmethod
     def parse_csv(csv_file: Path, include_negative: bool = True) -> List[Dict]:
@@ -665,15 +769,15 @@ class LabelStudioConverter:
         
         Args:
             parsed_data: 解析后的数据
-            task_type: 任务类型 ('detect' or 'classify')
+            task_type: 任务类型 ('detect', 'pose', or 'classify')
             
         Returns:
             Dict[str, int]: {'class_name': class_id}
         """
         class_names = set()
         
-        if task_type == 'detect':
-            # 从检测标注中收集类别
+        if task_type in ['detect', 'pose']:
+            # 从检测/姿势标注中收集类别
             for item in parsed_data:
                 for ann in item['annotations']:
                     labels = ann.get('labels', [])
@@ -683,6 +787,10 @@ class LabelStudioConverter:
             for item in parsed_data:
                 if item['category']:
                     class_names.add(item['category'])
+        
+        # 如果没有找到类别，为 Pose 任务添加默认类别
+        if not class_names and task_type == 'pose':
+            class_names.add('object')
         
         # 按字母顺序排序
         sorted_classes = sorted(class_names)

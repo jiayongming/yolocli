@@ -117,12 +117,80 @@ AUGMENTATION_PRESETS = {
     },
 }
 
+# Pose任务专用数据增强预设（避免破坏关键点结构）
+POSE_AUGMENTATION_PRESETS = {
+    'balanced': {
+        'hsv_h': 0.015,
+        'hsv_s': 0.7,
+        'hsv_v': 0.4,
+        'degrees': 0.0,  # Pose不推荐旋转
+        'translate': 0.1,
+        'scale': 0.5,
+        'shear': 0.0,
+        'perspective': 0.0,
+        'flipud': 0.0,
+        'fliplr': 0.5,  # 水平翻转需要flip_idx
+        'mosaic': 0.0,  # Pose不推荐mosaic
+        'mixup': 0.0,   # Pose不推荐mixup
+        'auto_augment': None,
+        'erasing': 0.0,
+    },
+    'conservative': {
+        'hsv_h': 0.01,
+        'hsv_s': 0.5,
+        'hsv_v': 0.3,
+        'degrees': 0.0,
+        'translate': 0.05,
+        'scale': 0.3,
+        'shear': 0.0,
+        'perspective': 0.0,
+        'flipud': 0.0,
+        'fliplr': 0.5,
+        'mosaic': 0.0,
+        'mixup': 0.0,
+        'auto_augment': None,
+        'erasing': 0.0,
+    },
+    'aggressive': {
+        'hsv_h': 0.02,
+        'hsv_s': 0.8,
+        'hsv_v': 0.5,
+        'degrees': 0.0,
+        'translate': 0.15,
+        'scale': 0.6,
+        'shear': 0.0,
+        'perspective': 0.0,
+        'flipud': 0.0,
+        'fliplr': 0.5,
+        'mosaic': 0.0,
+        'mixup': 0.0,
+        'auto_augment': None,
+        'erasing': 0.1,
+    },
+    'default': {
+        'hsv_h': 0.015,
+        'hsv_s': 0.7,
+        'hsv_v': 0.4,
+        'degrees': 0.0,
+        'translate': 0.1,
+        'scale': 0.5,
+        'shear': 0.0,
+        'perspective': 0.0,
+        'flipud': 0.0,
+        'fliplr': 0.5,
+        'mosaic': 0.0,
+        'mixup': 0.0,
+        'auto_augment': None,
+        'erasing': 0.0,
+    },
+}
+
 
 @app.command("start")
 def start_training(
     model: str = typer.Option("yolo11s.pt", "--model", "-m", help="模型名称或路径"),
     data: str = typer.Option("data/processed/dataset.yaml", "--data", "-d", help="数据集配置文件"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     epochs: int = typer.Option(200, "--epochs", "-e", help="训练轮数"),
     batch: int = typer.Option(16, "--batch", "-b", help="批次大小"),
     imgsz: int = typer.Option(640, "--imgsz", help="图像尺寸"),
@@ -141,6 +209,9 @@ def start_training(
     mask_ratio: Optional[int] = typer.Option(None, "--mask-ratio", help="[分割] 掩码下采样比例"),
     # 分类任务特定参数
     dropout: Optional[float] = typer.Option(None, "--dropout", help="[分类] Dropout比例"),
+    # Pose任务特定参数
+    kpt_shape: Optional[str] = typer.Option(None, "--kpt-shape", help="[Pose] 关键点形状，格式: '17,3' (关键点数,3)"),
+    flip_idx: Optional[str] = typer.Option(None, "--flip-idx", help="[Pose] 水平翻转时的关键点索引映射，格式: '0,2,1,4,3,...'"),
     # 从交互模式或quick_train传递的高级配置（非CLI参数，使用 **kwargs 接收）
     **kwargs
 ):
@@ -217,11 +288,17 @@ def start_training(
         print_info(f"使用模型: {model}")
     
     # 获取数据增强配置
-    if augmentation not in AUGMENTATION_PRESETS:
-        print_warning(f"未知的增强预设: {augmentation}，使用 'balanced'")
-        augmentation = 'balanced'
-    
-    aug_config = AUGMENTATION_PRESETS[augmentation].copy()
+    # Pose任务使用专用的数据增强预设
+    if task_type == TaskType.POSE:
+        if augmentation not in POSE_AUGMENTATION_PRESETS:
+            print_warning(f"未知的增强预设: {augmentation}，使用 'balanced'")
+            augmentation = 'balanced'
+        aug_config = POSE_AUGMENTATION_PRESETS[augmentation].copy()
+    else:
+        if augmentation not in AUGMENTATION_PRESETS:
+            print_warning(f"未知的增强预设: {augmentation}，使用 'balanced'")
+            augmentation = 'balanced'
+        aug_config = AUGMENTATION_PRESETS[augmentation].copy()
     
     # 从 kwargs 获取自定义增强参数
     augmentation_custom = kwargs.get('augmentation_custom')
@@ -258,6 +335,27 @@ def start_training(
         if imgsz == 640:
             imgsz = 224
             print_info(f"分类任务使用默认图像尺寸: {imgsz}")
+    
+    elif task_type == TaskType.POSE:
+        # Pose任务特定参数
+        if _is_valid_param(kpt_shape, str):
+            # 解析 kpt_shape，如 "17,3"
+            try:
+                kpt_parts = [int(x) for x in kpt_shape.split(',')]
+                task_specific_config['kpt_shape'] = kpt_parts
+                print_info(f"关键点配置: {kpt_parts[0]} 个关键点")
+            except ValueError:
+                print_warning(f"无效的 kpt_shape 格式: {kpt_shape}，应为 '17,3' 格式")
+        
+        if _is_valid_param(flip_idx, str):
+            # 解析 flip_idx，如 "0,2,1,4,3,..."
+            try:
+                flip_indices = [int(x) for x in flip_idx.split(',')]
+                task_specific_config['fliplr'] = 0.5  # 启用水平翻转
+                task_specific_config['flip_idx'] = flip_indices
+                print_info(f"配置关键点水平翻转映射")
+            except ValueError:
+                print_warning(f"无效的 flip_idx 格式: {flip_idx}")
     
     # 显示训练配置
     train_config = {

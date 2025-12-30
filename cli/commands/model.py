@@ -27,7 +27,7 @@ app = typer.Typer(help="模型管理命令")
 def download(
     version: str = typer.Option("yolo11", "--version", "-v", help="YOLO版本 (yolo11/yolov8)"),
     size: Optional[List[str]] = typer.Option(None, "--size", "-s", help="模型大小 (n/s/m/l/x)，可多选"),
-    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify)"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     all: bool = typer.Option(False, "--all", "-a", help="下载该版本所有模型"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
 ):
@@ -197,7 +197,7 @@ def export(
 def list_models(
     directory: Optional[str] = typer.Option(None, "--dir", "-d", help="模型目录"),
     version: Optional[str] = typer.Option(None, "--version", "-v", help="筛选版本"),
-    task: Optional[str] = typer.Option(None, "--task", "-t", help="筛选任务类型 (detect/segment/classify/all)"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="筛选任务类型 (detect/segment/classify/pose/all)"),
 ):
     """列出本地模型"""
     

@@ -74,7 +74,7 @@ def validate_model(
     """
     验证模型在数据集上的性能
     
-    支持检测(detect)、分割(segment)和分类(classify)三种任务类型。
+    支持检测(detect)、分割(segment)、分类(classify)和姿势估计(pose)四种任务类型。
     会计算并显示 mAP、精确率、召回率等关键指标。
     
     示例:
@@ -201,7 +201,7 @@ def validate_model(
                 'classify': 'classify',
                 'detect': 'detect',
                 'segment': 'segment',
-                'pose': 'detect',  # 姿态估计也归类为检测
+                'pose': 'pose',  # 姿态估计作为独立任务
                 'obb': 'detect',   # 旋转框检测也归类为检测
             }
             if model_task in task_mapping:
@@ -230,9 +230,9 @@ def validate_model(
             'name': name,
         }
         
-        # 只有检测和分割任务需要 conf 和 iou 参数
+        # 只有检测、分割和Pose任务需要 conf 和 iou 参数
         # 分类任务不使用这些参数，避免影响结果
-        if task_type in [TaskType.DETECT, TaskType.SEGMENT]:
+        if task_type in [TaskType.DETECT, TaskType.SEGMENT, TaskType.POSE]:
             validation_kwargs['conf'] = conf
             validation_kwargs['iou'] = iou
         
@@ -544,6 +544,179 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                     else:
                         class_recall = mask_recall
                     
+                    class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall) if (class_precision + class_recall) > 0 else 0.0
+                    
+                    class_table.add_row(
+                        class_name,
+                        f"{ap50_val:.4f}",
+                        f"{ap_val:.4f}",
+                        f"{class_precision:.4f}",
+                        f"{class_recall:.4f}",
+                        f"{class_f1:.4f}"
+                    )
+                
+                console.print(class_table)
+    
+    elif task_type == TaskType.POSE:
+        # Pose 任务包含边界框和关键点指标
+        if hasattr(results, 'box') and results.box:
+            box_metrics = results.box
+            pose_metrics = results.pose if hasattr(results, 'pose') else None
+            
+            # 计算边界框F1分数
+            precision = safe_float(box_metrics.mp)
+            recall = safe_float(box_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            # 创建综合指标表格
+            metrics_table = Table(title="🧍 姿势估计指标 - 综合评估", show_header=True, header_style="bold cyan")
+            metrics_table.add_column("指标类型", style="cyan", width=15)
+            metrics_table.add_column("指标", style="cyan", width=25)
+            metrics_table.add_column("值", style="green", justify="right", width=15)
+            metrics_table.add_column("说明", style="dim", width=35)
+            
+            # 边界框指标
+            metrics_table.add_row(
+                "边界框",
+                "mAP@0.5",
+                f"{safe_float(box_metrics.map50):.4f}",
+                "检测框 IoU=0.5时的平均精度"
+            )
+            metrics_table.add_row(
+                "",
+                "mAP@0.5:0.95",
+                f"{safe_float(box_metrics.map):.4f}",
+                "检测框多IoU阈值平均精度"
+            )
+            metrics_table.add_row(
+                "",
+                "精确率 (Precision)",
+                f"{precision:.4f}",
+                "检测框预测的准确性"
+            )
+            metrics_table.add_row(
+                "",
+                "召回率 (Recall)",
+                f"{recall:.4f}",
+                "检测框找到目标的能力"
+            )
+            metrics_table.add_row(
+                "",
+                "F1 分数",
+                f"{f1_score:.4f}",
+                "检测框综合性能指标"
+            )
+            
+            # 关键点指标
+            if pose_metrics:
+                pose_precision = safe_float(pose_metrics.mp) if hasattr(pose_metrics, 'mp') else 0.0
+                pose_recall = safe_float(pose_metrics.mr) if hasattr(pose_metrics, 'mr') else 0.0
+                pose_f1 = 2 * (pose_precision * pose_recall) / (pose_precision + pose_recall) if (pose_precision + pose_recall) > 0 else 0.0
+                
+                metrics_table.add_row("", "", "", "")  # 分隔行
+                metrics_table.add_row(
+                    "关键点",
+                    "mAP@0.5",
+                    f"{safe_float(pose_metrics.map50) if hasattr(pose_metrics, 'map50') else 0.0:.4f}",
+                    "关键点预测平均精度"
+                )
+                metrics_table.add_row(
+                    "",
+                    "mAP@0.5:0.95",
+                    f"{safe_float(pose_metrics.map) if hasattr(pose_metrics, 'map') else 0.0:.4f}",
+                    "关键点多阈值平均精度"
+                )
+                metrics_table.add_row(
+                    "",
+                    "精确率",
+                    f"{pose_precision:.4f}",
+                    "关键点预测的准确性"
+                )
+                metrics_table.add_row(
+                    "",
+                    "召回率",
+                    f"{pose_recall:.4f}",
+                    "关键点找到的能力"
+                )
+                metrics_table.add_row(
+                    "",
+                    "F1 分数",
+                    f"{pose_f1:.4f}",
+                    "关键点综合性能指标"
+                )
+            else:
+                metrics_table.add_row("", "", "", "")
+                metrics_table.add_row(
+                    "关键点",
+                    "-",
+                    "N/A",
+                    "关键点指标不可用"
+                )
+            
+            console.print(metrics_table)
+            
+            # 显示详细统计信息
+            console.print()
+            stats_table = Table(title="📊 详细统计", show_header=True, header_style="bold yellow")
+            stats_table.add_column("统计项", style="cyan", width=25)
+            stats_table.add_column("值", style="green", justify="right", width=15)
+            
+            if hasattr(results, 'speed'):
+                speed = results.speed
+                if isinstance(speed, dict):
+                    total_time = sum(speed.values())
+                    stats_table.add_row("总推理时间 (ms)", f"{total_time:.2f}")
+                    if 'preprocess' in speed:
+                        stats_table.add_row("  - 预处理", f"{speed['preprocess']:.2f}")
+                    if 'inference' in speed:
+                        stats_table.add_row("  - 推理", f"{speed['inference']:.2f}")
+                    if 'postprocess' in speed:
+                        stats_table.add_row("  - 后处理", f"{speed['postprocess']:.2f}")
+            
+            if hasattr(results, 'seen'):
+                stats_table.add_row("验证图像数", str(results.seen))
+            
+            console.print(stats_table)
+            
+            # 显示每个类别的详细结果
+            if hasattr(box_metrics, 'ap50') and len(box_metrics.ap50) > 0:
+                console.print()
+                
+                class_table = Table(
+                    title="📋 各类别详细指标",
+                    show_header=True,
+                    header_style="bold magenta"
+                )
+                class_table.add_column("类别", style="cyan", width=20)
+                class_table.add_column("Box AP@0.5", style="green", justify="right", width=12)
+                class_table.add_column("Box AP@0.5:0.95", style="green", justify="right", width=14)
+                class_table.add_column("Precision", style="yellow", justify="right", width=12)
+                class_table.add_column("Recall", style="yellow", justify="right", width=12)
+                class_table.add_column("F1", style="blue", justify="right", width=10)
+                
+                # 获取类别名称
+                if hasattr(results, 'names'):
+                    class_names = [results.names[i] for i in range(len(box_metrics.ap50))]
+                else:
+                    class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
+                
+                # 获取每个类别的指标
+                for idx, class_name in enumerate(class_names):
+                    ap50_val = safe_float(box_metrics.ap50[idx]) if idx < len(box_metrics.ap50) else 0.0
+                    ap_val = safe_float(box_metrics.ap[idx]) if hasattr(box_metrics, 'ap') and idx < len(box_metrics.ap) else 0.0
+                    
+                    # 获取每个类别的精确率和召回率
+                    if hasattr(box_metrics, 'p') and idx < len(box_metrics.p):
+                        class_precision = safe_float(box_metrics.p[idx])
+                    else:
+                        class_precision = 0.0
+                    
+                    if hasattr(box_metrics, 'r') and idx < len(box_metrics.r):
+                        class_recall = safe_float(box_metrics.r[idx])
+                    else:
+                        class_recall = 0.0
+                    
+                    # 计算F1
                     class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall) if (class_precision + class_recall) > 0 else 0.0
                     
                     class_table.add_row(
@@ -882,6 +1055,88 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
                     'images_validated': int(results.seen),
                 }
     
+    elif task_type == TaskType.POSE:
+        # Pose 任务包含边界框和关键点指标
+        if hasattr(results, 'box') and results.box:
+            box_metrics = results.box
+            pose_metrics = results.pose if hasattr(results, 'pose') else None
+            
+            # 边界框指标
+            precision = safe_float(box_metrics.mp)
+            recall = safe_float(box_metrics.mr)
+            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+            summary['conf_threshold'] = conf
+            summary['iou_threshold'] = iou
+            
+            summary['metrics'] = {
+                'box': {
+                    'mAP50': safe_float(box_metrics.map50),
+                    'mAP50_95': safe_float(box_metrics.map),
+                    'precision': precision,
+                    'recall': recall,
+                    'f1_score': f1_score,
+                }
+            }
+            
+            # 关键点指标 (如果存在)
+            if pose_metrics:
+                pose_precision = safe_float(pose_metrics.mp) if hasattr(pose_metrics, 'mp') else 0.0
+                pose_recall = safe_float(pose_metrics.mr) if hasattr(pose_metrics, 'mr') else 0.0
+                pose_f1 = 2 * (pose_precision * pose_recall) / (pose_precision + pose_recall) if (pose_precision + pose_recall) > 0 else 0.0
+                
+                summary['metrics']['pose'] = {
+                    'mAP50': safe_float(pose_metrics.map50) if hasattr(pose_metrics, 'map50') else 0.0,
+                    'mAP50_95': safe_float(pose_metrics.map) if hasattr(pose_metrics, 'map') else 0.0,
+                    'precision': pose_precision,
+                    'recall': pose_recall,
+                    'f1_score': pose_f1,
+                }
+            
+            # 每个类别的详细指标
+            if hasattr(box_metrics, 'ap50') and len(box_metrics.ap50) > 0:
+                if hasattr(results, 'names'):
+                    class_names = [results.names[i] for i in range(len(box_metrics.ap50))]
+                else:
+                    class_names = [f"class_{i}" for i in range(len(box_metrics.ap50))]
+                
+                per_class = {}
+                for idx, name in enumerate(class_names):
+                    class_metrics = {
+                        'ap50': safe_float(box_metrics.ap50[idx]) if idx < len(box_metrics.ap50) else 0.0,
+                        'ap50_95': safe_float(box_metrics.ap[idx]) if hasattr(box_metrics, 'ap') and idx < len(box_metrics.ap) else 0.0,
+                    }
+                    
+                    # 添加每个类别的精确率和召回率
+                    if hasattr(box_metrics, 'p') and idx < len(box_metrics.p):
+                        class_precision = safe_float(box_metrics.p[idx])
+                        class_metrics['precision'] = class_precision
+                    
+                    if hasattr(box_metrics, 'r') and idx < len(box_metrics.r):
+                        class_recall = safe_float(box_metrics.r[idx])
+                        class_metrics['recall'] = class_recall
+                    
+                    # 计算类别F1
+                    if 'precision' in class_metrics and 'recall' in class_metrics:
+                        p = class_metrics['precision']
+                        r = class_metrics['recall']
+                        class_metrics['f1_score'] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
+                    
+                    per_class[name] = class_metrics
+                
+                summary['per_class'] = per_class
+            
+            # 添加性能统计
+            if hasattr(results, 'speed'):
+                summary['performance'] = {
+                    'speed_ms': results.speed if isinstance(results.speed, dict) else {},
+                }
+            
+            if hasattr(results, 'seen'):
+                summary['statistics'] = {
+                    'images_validated': int(results.seen),
+                }
+    
     elif task_type == TaskType.CLASSIFY:
         if hasattr(results, 'top1') and hasattr(results, 'top5'):
             summary['metrics'] = {
@@ -966,7 +1221,7 @@ def compare_models(
     """
     比较多个模型的性能
     
-    支持检测(detect)、分割(segment)和分类(classify)三种任务类型。
+    支持检测(detect)、分割(segment)、分类(classify)和姿势估计(pose)四种任务类型。
     任务类型可自动从第一个模型名称推断，或手动指定。
     
     示例:

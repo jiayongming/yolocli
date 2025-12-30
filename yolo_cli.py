@@ -73,7 +73,7 @@ def main(
     YOLO CLI - YOLO推理快捷操作框架
     
     支持 YOLOv8 和 YOLO11，提供完整的模型训练、推理和管理功能。
-    支持三种任务：目标检测(detect)、实例分割(segment)、图像分类(classify)。
+    支持四种任务：目标检测(detect)、实例分割(segment)、图像分类(classify)、姿势估计(pose)。
     
     使用 --help 查看各个命令的详细帮助信息。
     

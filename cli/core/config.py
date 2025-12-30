@@ -193,7 +193,7 @@ class ConfigManager:
         获取任务特定配置
         
         Args:
-            task: 任务类型 (detect, segment, classify)
+            task: 任务类型 (detect, segment, classify, pose)
             
         Returns:
             Dict[str, Any]: 任务配置

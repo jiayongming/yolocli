@@ -218,6 +218,25 @@ def predict_image(
                         }
                         predictions.append(prediction)
         
+        elif task_type == TaskType.POSE:
+            # 姿势估计任务
+            for result in results:
+                if hasattr(result, 'keypoints') and result.keypoints is not None:
+                    keypoints = result.keypoints.xy.cpu().numpy()  # 关键点坐标
+                    keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None
+                    boxes = result.boxes
+                    
+                    for idx, (kp, box) in enumerate(zip(keypoints, boxes)):
+                        prediction = {
+                            'class': int(box.cls[0]),
+                            'class_name': yolo_model.names[int(box.cls[0])],
+                            'confidence': float(box.conf[0]),
+                            'bbox': box.xyxy[0].tolist(),
+                            'keypoints': kp.tolist(),
+                            'keypoint_scores': keypoints_conf[idx].tolist() if keypoints_conf is not None else None,
+                        }
+                        predictions.append(prediction)
+        
         # 整理YOLO输出结果到规范目录结构
         yolo_run_dir = yolo_temp_dir / 'run'
         if yolo_run_dir.exists():

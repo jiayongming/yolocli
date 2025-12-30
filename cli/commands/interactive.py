@@ -151,9 +151,9 @@ def run_data_operations():
                 task_type = select_task_type()
                 max_workers = input_number("并发下载线程数:", default=4, min_value=1, max_value=16)
                 
-                # 对于检测任务，询问是否包含负样本
+                # 对于检测和Pose任务，询问是否包含负样本
                 include_negative = True
-                if task_type == 'detect':
+                if task_type in ['detect', 'pose']:
                     console.print()
                     print_info("💡 负样本说明：")
                     print_info("   - 无标注的图片可作为负样本训练")
@@ -994,9 +994,9 @@ def run_labelstudio_operations():
                 # 配置下载参数
                 max_workers = input_number("并发下载线程数:", default=4, min_value=1, max_value=16)
                 
-                # 对于检测任务，询问是否包含负样本
+                # 对于检测和Pose任务，询问是否包含负样本
                 include_negative = True
-                if task_type == 'detect':
+                if task_type in ['detect', 'pose']:
                     console.print()
                     print_info("💡 负样本说明：")
                     print_info("   - 无标注的图片可作为负样本训练")
@@ -1549,6 +1549,7 @@ def run_validate_operations():
                         "检测 (detect)",
                         "分割 (segment)",
                         "分类 (classify)",
+                        "姿势估计 (pose)",
                     ],
                     default="自动推断（从模型名称推断）"
                 )
@@ -1559,6 +1560,8 @@ def run_validate_operations():
                     task = "detect"
                 elif "分割" in task_choice:
                     task = "segment"
+                elif "姿势" in task_choice:
+                    task = "pose"
                 else:  # 分类
                     task = "classify"
                 
@@ -1633,6 +1636,7 @@ def run_validate_operations():
                         "检测 (detect)",
                         "分割 (segment)",
                         "分类 (classify)",
+                        "姿势估计 (pose)",
                     ],
                     default="自动推断（从第一个模型名称推断）"
                 )
@@ -1643,6 +1647,8 @@ def run_validate_operations():
                     task = "detect"
                 elif "分割" in task_choice:
                     task = "segment"
+                elif "姿势" in task_choice:
+                    task = "pose"
                 else:  # 分类
                     task = "classify"
                 
