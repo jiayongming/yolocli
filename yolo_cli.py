@@ -21,7 +21,7 @@ import typer
 from typing import Optional
 from rich.console import Console
 
-from cli.commands import model, data, train, detect, interactive, quick, predict, validate
+from cli.commands import model, data, train, detect, interactive, quick, predict, validate, labelstudio
 from cli.ui.display import print_logo, print_info
 from cli import __version__
 
@@ -40,6 +40,7 @@ app.add_typer(data.app, name="data", help="数据处理 (划分、验证、统�
 app.add_typer(train.app, name="train", help="模型训练 (启动、恢复、配置)")
 app.add_typer(validate.app, name="validate", help="模型验证 (性能评估、模型比较)")
 app.add_typer(predict.app, name="predict", help="模型预测 (检测、分割、分类)")
+app.add_typer(labelstudio.app, name="labelstudio", help="Label Studio集成 (上传数据集)")
 # 向后兼容：保留detect作为predict的别名
 app.add_typer(detect.app, name="detect", help="目标检测 (图片、视频、批量) [别名]")
 
@@ -102,6 +103,7 @@ def main(
         console.print("  [cyan]train[/cyan]              模型训练 (启动、恢复、配置)")
         console.print("  [cyan]validate[/cyan]           模型验证 (性能评估、模型比较)")
         console.print("  [cyan]predict[/cyan]            模型预测 (检测、分割、分类)")
+        console.print("  [cyan]labelstudio[/cyan]        Label Studio集成 (上传数据集)")
         console.print("  [cyan]detect[/cyan]             目标检测 (图片、视频、批量) [别名]")
         console.print("  [cyan]interactive-mode[/cyan]   交互式模式 🎮")
         console.print()

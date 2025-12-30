@@ -732,6 +732,172 @@ def run_labelstudio_operations():
                     print_error(f"✗ {msg}")
                     continue
             
+            elif operation == 'upload':
+                # 上传数据集到Label Studio
+                print_section_header("上传数据集到Label Studio")
+                
+                # 确保有连接配置
+                if not default_url or not default_token:
+                    print_warning("请先配置Label Studio连接")
+                    continue
+                
+                # 选择数据集
+                datasets_base = config_mgr.project_root / 'datasets'
+                
+                # 获取可用数据集
+                available_datasets = []
+                if datasets_base.exists():
+                    available_datasets = [d.name for d in datasets_base.iterdir() if d.is_dir()]
+                
+                if not available_datasets:
+                    print_warning("datasets目录下没有找到数据集")
+                    print_info("您可以先将数据集复制到datasets目录，或输入自定义路径")
+                
+                # 选择或输入数据集路径
+                if available_datasets:
+                    print_info(f"找到 {len(available_datasets)} 个数据集:")
+                    for ds in available_datasets:
+                        print_info(f"  • {ds}")
+                    console.print()
+                    
+                    use_existing = confirm_action("使用datasets目录下的数据集?", default=True)
+                    
+                    if use_existing:
+                        choices = [f"{ds}" for ds in available_datasets]
+                        choices.append("back - 返回")
+                        dataset_choice = select_option("选择数据集:", choices)
+                        
+                        if dataset_choice == "back":
+                            continue
+                        
+                        dataset_path = datasets_base / dataset_choice
+                    else:
+                        dataset_path = Path(input_path("数据集路径:", must_exist=True))
+                else:
+                    dataset_path = Path(input_path("数据集路径:", must_exist=True))
+                
+                # 输入项目ID
+                project_id = int(input_number("Label Studio项目ID:", min_value=1))
+                
+                # 选择要上传的数据集分割
+                split_choices = [
+                    "all - 全部 (train, val, test)",
+                    "train - 仅训练集",
+                    "val - 仅验证集",
+                    "test - 仅测试集",
+                    "custom - 自定义选择",
+                ]
+                split_choice = select_option("选择要上传的数据集分割:", split_choices)
+                
+                splits = []
+                if split_choice.startswith("all"):
+                    splits = ['train', 'val', 'test']
+                elif split_choice.startswith("train"):
+                    splits = ['train']
+                elif split_choice.startswith("val"):
+                    splits = ['val']
+                elif split_choice.startswith("test"):
+                    splits = ['test']
+                elif split_choice.startswith("custom"):
+                    # 多选
+                    if confirm_action("上传train?", default=True):
+                        splits.append('train')
+                    if confirm_action("上传val?", default=True):
+                        splits.append('val')
+                    if confirm_action("上传test?", default=False):
+                        splits.append('test')
+                
+                if not splits:
+                    print_warning("未选择任何数据集分割")
+                    continue
+                
+                # 配置并发数
+                console.print()
+                print_info("💡 并发上传说明：")
+                print_info("   - 并发数越大，上传速度越快")
+                print_info("   - 推荐值：4-8，根据网络情况调整")
+                print_info("   - 过大可能导致网络拥塞或API限流")
+                console.print()
+                max_workers = int(input_number("最大并发数:", default=4, min_value=1, max_value=16))
+                
+                # 询问是否配置标注模板
+                console.print()
+                print_info("💡 标注模板配置说明：")
+                print_info("   - 自动从数据集配置读取类别信息")
+                print_info("   - 生成Label Studio标注界面")
+                print_info("   - 支持矩形框和多边形标注")
+                console.print()
+                setup_config = confirm_action("是否配置Label Studio标注模板?", default=True)
+                
+                # 询问是否上传后验证
+                verify = confirm_action("上传后是否验证结果?", default=True)
+                
+                # 显示上传信息
+                console.print()
+                print_info("上传配置:")
+                print_info(f"  数据集: {dataset_path}")
+                print_info(f"  Label Studio: {default_url}")
+                print_info(f"  项目ID: {project_id}")
+                print_info(f"  数据集分割: {', '.join(splits)}")
+                print_info(f"  并发数: {max_workers}")
+                print_info(f"  配置标注模板: {'是' if setup_config else '否'}")
+                console.print()
+                
+                if not confirm_action("确认开始上传?", default=True):
+                    continue
+                
+                # 执行上传
+                from ..integrations.labelstudio_uploader import LabelStudioUploader
+                
+                try:
+                    uploader = LabelStudioUploader(default_url, default_token, project_id)
+                    
+                    # 测试连接
+                    print_info("测试连接...")
+                    if not uploader.test_connection():
+                        print_error("连接失败，请检查URL和API密钥")
+                        continue
+                    
+                    # 加载数据集配置
+                    print_info("加载数据集配置...")
+                    uploader.load_dataset_config(dataset_path)
+                    
+                    # 配置标注模板
+                    if setup_config:
+                        print_section_header("配置标注模板")
+                        if uploader.setup_project_config():
+                            print_success("✓ 标注模板配置完成")
+                        else:
+                            print_warning("标注模板配置失败，将继续上传")
+                        console.print()
+                    
+                    # 上传数据集
+                    print_section_header("上传数据集")
+                    total_uploaded, total_failed = uploader.upload_tasks(
+                        dataset_path=dataset_path,
+                        splits=splits,
+                        max_images=None,
+                        max_workers=max_workers
+                    )
+                    
+                    # 显示结果
+                    console.print()
+                    print_section_header("上传完成")
+                    print_success(f"成功: {total_uploaded} 个任务")
+                    if total_failed > 0:
+                        print_error(f"失败: {total_failed} 个任务")
+                    
+                    # 验证上传结果
+                    if verify and total_uploaded > 0:
+                        console.print()
+                        print_section_header("验证上传结果")
+                        uploader.verify_uploaded_tasks(num_samples=5)
+                    
+                except Exception as e:
+                    print_error(f"上传失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+            
             elif operation == 'list':
                 # 列出所有项目
                 print_section_header("Label Studio项目列表")

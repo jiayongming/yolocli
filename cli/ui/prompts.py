@@ -756,6 +756,7 @@ def select_labelstudio_operation() -> str:
         str: 选中的操作
     """
     choices = [
+        "upload - 上传数据集到Label Studio",
         "list - 列出所有项目",
         "fetch - 获取项目数据",
         "config - 配置Label Studio连接",

@@ -13,7 +13,9 @@
 - 🎯 **完整工作流**: 涵盖模型下载、数据处理、训练、验证、推理、导出全流程
 - 📊 **模型验证增强**: 全面的性能评估，包含准确率、精确率、召回率、F1值等完整指标 🆕
 - 📈 **灵活数据划分**: 支持按比例或按样本数划分数据集，适合不同实验需求 🆕
-- 🔄 **Label Studio 集成**: 从 Label Studio 直接转换标注数据，支持断点续传
+- 🔄 **Label Studio 集成**: 
+  - 从 Label Studio 直接转换标注数据，支持断点续传
+  - 上传 YOLO 数据集到 Label Studio 进行标注审核 🆕
 - 🎨 **FiftyOne 可视化**: 数据集管理、预测结果展示、Ground Truth vs Predictions 对比分析 🆕
 - 🎮 **交互式模式**: 友好的交互式界面，引导式操作，支持所有新功能 🆕
 - 🔄 **多版本支持**: 同时支持YOLOv8和YOLO11，自动版本管理
@@ -74,6 +76,7 @@
   - [实例分割快速开始](#实例分割快速开始)
   - [图像分类快速开始](#图像分类快速开始)
 - [Label Studio 数据转换](#-label-studio-数据转换)
+- [Label Studio 数据集上传](#-label-studio-数据集上传) 🆕
 - [FiftyOne 可视化与预测分析](#-fiftyone-可视化与预测分析) 🆕
 - [数据准备](#-数据准备)
 - [完整工作流程](#-完整工作流程)
@@ -522,6 +525,309 @@ python yolo_cli.py train \
 在 Label Studio 界面：**Account & Settings** → **Personal Access Token**
 
 💡 **提示**: 命令支持 Refresh Token 和 Access Token，会自动识别和转换
+
+## 📤 Label Studio 数据集上传
+
+将本地 YOLO 数据集上传到 Label Studio 进行标注、审核或进一步处理！
+
+### 核心特性
+
+- ✅ **智能 Token 处理**: 自动识别并转换 Refresh Token
+- ✅ **数据集自动识别**: 支持 `datasets/` 目录下的数据集
+- ✅ **标注模板配置**: 自动生成 Label Studio 标注界面配置（交互式可选）
+- ✅ **文件上传模式**: 直接上传文件到 Label Studio，自动管理存储
+- ✅ **预标注支持**: YOLO 标注自动转换为 Label Studio 预标注
+- ✅ **并发上传**: 可配置并发数（默认4），大幅提升上传速度
+- ✅ **上传验证**: 自动验证上传结果
+
+### 快速开始
+
+#### 1. 命令行上传
+
+```bash
+# 上传 datasets 目录下的数据集
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1
+
+# 上传指定路径的数据集
+python yolo_cli.py labelstudio upload /path/to/dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1
+
+# 仅上传特定分割
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --split train \
+  --split val
+
+# 配置标注模板（不上传数据）
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --setup-config
+
+# 配置并发数加速上传
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --workers 8
+```
+
+#### 2. 交互式上传
+
+```bash
+python yolo_cli.py interactive-mode
+# 选择 "Label Studio数据管理"
+# 选择 "upload - 上传数据集到Label Studio"
+# 按照提示完成配置
+```
+
+### 工作原理
+
+上传器使用**文件上传模式** + **并发上传**，高效可靠：
+- ✅ 直接上传文件到 Label Studio 服务器
+- ✅ Label Studio 会自动管理文件存储（可能重命名文件）
+- ✅ 原始文件名会保存在任务元数据中
+- ✅ YOLO 标注会自动转换为预标注
+- ✅ 并发上传（默认4线程），可根据网络情况调整（1-16）
+- ✅ 支持大规模数据集上传
+
+### 完整工作流示例
+
+#### 场景1：标注新数据集
+
+```bash
+# 1. 准备数据集（已有图片和初始标注）
+python yolo_cli.py data split \
+  --images data/raw/images \
+  --labels data/raw/labels \
+  --output datasets/my_dataset
+
+# 2. 上传到 Label Studio 进行人工审核
+python yolo_cli.py labelstudio upload datasets/my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --split train
+
+# 3. 在 Label Studio 中审核和修正标注
+
+# 4. 导出审核后的数据
+python yolo_cli.py data convert-labelstudio \
+  --input labelstudio_export.json \
+  --url http://localhost:8080 \
+  --token YOUR_API_KEY \
+  --output datasets/my_dataset_reviewed
+```
+
+#### 场景2：主动学习流程
+
+```bash
+# 1. 训练初始模型
+python yolo_cli.py train start \
+  --model yolo11n.pt \
+  --data data/processed/dataset.yaml
+
+# 2. 使用模型预测新数据
+python yolo_cli.py predict batch \
+  results/training/best.pt \
+  new_images/
+
+# 3. 将预测结果上传到 Label Studio
+# （先将预测结果整理为YOLO格式）
+python yolo_cli.py labelstudio upload results/predictions/20250101_120000 \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 2
+
+# 4. 在 Label Studio 中修正预测错误
+
+# 5. 导出修正后的数据，加入训练集
+python yolo_cli.py data convert-labelstudio \
+  --input new_labels.json \
+  --url http://localhost:8080 \
+  --token YOUR_API_KEY
+
+# 6. 重新训练模型（增量学习）
+python yolo_cli.py train start \
+  --model results/training/best.pt \
+  --data data/processed/dataset.yaml
+```
+
+### 高级功能
+
+#### 1. 仅配置标注模板
+
+如果只需要配置 Label Studio 项目的标注界面：
+
+```bash
+python yolo_cli.py labelstudio setup-config my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1
+```
+
+#### 2. 验证已上传的任务
+
+```bash
+python yolo_cli.py labelstudio verify \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --samples 10
+```
+
+#### 3. 测试上传（限制图片数量）
+
+```bash
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --max 10  # 仅上传10张图片测试
+```
+
+#### 4. 调整并发数提升上传速度
+
+```bash
+# 增加并发数（适合网络良好的环境）
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --workers 8  # 使用8个并发线程
+
+# 减少并发数（适合网络不稳定的环境）
+python yolo_cli.py labelstudio upload my_dataset \
+  --url http://localhost:8080 \
+  --api-key YOUR_API_KEY \
+  --project-id 1 \
+  --workers 2  # 使用2个并发线程
+```
+
+**并发数选择建议**:
+- 🌐 **局域网**: 8-16 个线程
+- 🌍 **公网良好**: 4-8 个线程（推荐）
+- 📶 **网络不稳定**: 1-2 个线程
+- ⚠️ **API限流**: 适当降低并发数
+
+### 支持的数据集格式
+
+上传器支持以下YOLO数据集结构：
+
+**格式1（推荐）**:
+```
+dataset/
+├── dataset.yaml        # 数据集配置
+├── images/
+│   ├── train/
+│   ├── val/
+│   └── test/
+└── labels/
+    ├── train/
+    ├── val/
+    └── test/
+```
+
+**格式2**:
+```
+dataset/
+├── data.yaml           # 数据集配置
+├── train/
+│   ├── images/
+│   └── labels/
+├── val/
+│   ├── images/
+│   └── labels/
+└── test/
+    ├── images/
+    └── labels/
+```
+
+### 标注模板
+
+上传器会自动为您的项目生成Label Studio标注模板，支持：
+
+- **矩形框标注** (Rectangle Labels)：用于检测任务
+- **多边形标注** (Polygon Labels)：用于分割任务
+- **自动颜色分配**：为每个类别自动分配不同颜色
+- **完整类别列表**：从 `dataset.yaml` 自动读取
+
+### 常见问题
+
+**Q: 上传后图片显示不出来？**
+A: 确保 Label Studio 已正确配置文件存储。检查 Label Studio 的存储设置。
+
+**Q: 上传的文件名会改变吗？**
+A: Label Studio 可能会重命名文件，但原始文件名会保存在任务元数据中，不影响使用。
+
+**Q: 如何获取项目ID？**
+A: 在 Label Studio 中打开项目，URL 中的数字就是项目ID（如 `/projects/1/`）。
+
+**Q: 可以增量上传吗？**
+A: 可以！系统会将新任务追加到现有项目中，不会删除已有数据。
+
+**Q: 上传的标注可以修改吗？**
+A: 可以！上传的标注会作为"预标注"（Predictions），您可以在Label Studio中修改。
+
+**Q: 支持哪些任务类型？**
+A: 目前支持目标检测和实例分割任务，分类任务即将支持。
+
+**Q: 如何选择合适的并发数？**
+A: 
+- 局域网环境：推荐 8-16
+- 公网环境：推荐 4-8（默认4）
+- 网络不稳定：推荐 1-2
+- 如果遇到上传失败较多，可以降低并发数
+
+**Q: 上传速度慢怎么办？**
+A: 
+1. 增加并发数（`--workers 8`）
+2. 确保网络连接稳定
+3. 检查 Label Studio 服务器性能
+4. 如果是大图片，考虑先压缩
+
+### 最佳实践
+
+1. **使用 datasets 目录管理**
+   ```bash
+   # 将数据集复制到 datasets 目录
+   cp -r my_dataset datasets/
+   # 直接使用数据集名称上传
+   python yolo_cli.py labelstudio upload my_dataset ...
+   ```
+
+2. **先测试少量数据**
+   ```bash
+   # 使用 --max 限制上传数量，快速验证配置
+   python yolo_cli.py labelstudio upload my_dataset \
+     --url http://localhost:8080 \
+     --api-key YOUR_API_KEY \
+     --project-id 1 \
+     --split train \
+     --max 10 \
+     --workers 2  # 测试时使用较小并发数
+   ```
+
+3. **使用交互式模式配置标注模板**
+   ```bash
+   python yolo_cli.py interactive-mode
+   # 选择 "Label Studio数据管理"
+   # 选择 "upload - 上传数据集到Label Studio"
+   # 在配置步骤中选择"是否配置标注模板"
+   ```
+
+4. **交互式模式更友好**
+   - 对于首次使用，推荐使用交互式模式
+   - 提供了更清晰的提示和选项
+   - 可以保存配置，下次直接使用
 
 ---
 
