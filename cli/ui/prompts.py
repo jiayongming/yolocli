@@ -868,25 +868,30 @@ def select_fiftyone_operation() -> str:
     return result.split(' ')[0]
 
 
-def select_fiftyone_dataset(datasets: List[str]) -> Optional[str]:
+def select_fiftyone_dataset(datasets: List[str], allow_delete_all: bool = False) -> Optional[str]:
     """
     从数据集列表中选择
     
     Args:
         datasets: 数据集名称列表
+        allow_delete_all: 是否允许"删除全部"选项（仅在删除场景下使用）
     
     Returns:
-        Optional[str]: 选中的数据集名称，或None表示返回
+        Optional[str]: 选中的数据集名称，"__DELETE_ALL__"表示删除全部，None表示返回
     """
     if not datasets:
         return None
     
     choices = list(datasets)
+    if allow_delete_all and len(datasets) > 1:
+        choices.insert(0, "🗑️  删除全部数据集")
     choices.append("返回")
     
     result = select_option("选择数据集:", choices)
     
     if result == "返回":
         return None
+    elif result == "🗑️  删除全部数据集":
+        return "__DELETE_ALL__"
     
     return result

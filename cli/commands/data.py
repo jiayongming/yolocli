@@ -143,11 +143,24 @@ def _validate_pose_label(label_file: Path, expected_kpt_count: Optional[int] = N
                     for i in range(5, len(parts), 3):
                         kp_x = float(parts[i])
                         kp_y = float(parts[i+1])
-                        kp_v = int(parts[i+2])
+                        
+                        # visibility可以是整数0/1/2或浮点数（会被转换）
+                        try:
+                            kp_v_raw = float(parts[i+2])
+                            # 检查是否为标准格式（整数0/1/2）
+                            if kp_v_raw.is_integer():
+                                kp_v = int(kp_v_raw)
+                                if kp_v not in [0, 1, 2]:
+                                    return False
+                            # 如果是浮点数（如0.967），也接受（但会在后续提示用户修复）
+                            elif 0 <= kp_v_raw <= 1:
+                                pass  # 接受浮点数形式的confidence
+                            else:
+                                return False
+                        except ValueError:
+                            return False
                         
                         if kp_x < 0 or kp_x > 1 or kp_y < 0 or kp_y > 1:
-                            return False
-                        if kp_v not in [0, 1, 2]:
                             return False
                 except (ValueError, IndexError):
                     return False

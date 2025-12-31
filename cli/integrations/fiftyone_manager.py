@@ -529,6 +529,37 @@ class FiftyOneManager:
         except Exception as e:
             return (False, f"删除数据集失败: {str(e)}")
     
+    def delete_all_datasets(self) -> Tuple[bool, int, str]:
+        """删除所有数据集
+        
+        Returns:
+            Tuple[bool, int, str]: (是否成功, 删除数量, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, 0, error)
+        
+        try:
+            datasets = self.fo.list_datasets()
+            deleted_count = 0
+            errors = []
+            
+            for dataset_name in datasets:
+                try:
+                    self.fo.delete_dataset(dataset_name)
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append(f"{dataset_name}: {str(e)}")
+            
+            if errors:
+                error_msg = "; ".join(errors)
+                return (False, deleted_count, f"部分删除失败: {error_msg}")
+            
+            return (True, deleted_count, "")
+            
+        except Exception as e:
+            return (False, 0, f"删除所有数据集失败: {str(e)}")
+    
     def close_app(self) -> Tuple[bool, str]:
         """关闭FiftyOne应用
         

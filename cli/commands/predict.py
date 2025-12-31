@@ -110,7 +110,7 @@ def predict_image(
         print_error(f"图片不存在: {image}")
         raise typer.Exit(1)
     
-    # 推断任务类型
+    # 推断任务类型（初步，从文件名）
     if task is None:
         _, task = parse_model_name(model_path.name)
     else:
@@ -136,17 +136,28 @@ def predict_image(
     if device == 'auto':
         device = detect_device()
     
-    print_info(f"任务类型: {task.upper()}")
-    print_info(f"模型: {model_path.name}")
-    print_info(f"图片: {image_path.name}")
-    if task != 'classify':
-        print_info(f"置信度阈值: {conf}")
-    print_info(f"设备: {get_device_name(device)}")
-    
     try:
         # 加载模型
         print_info("加载模型...")
         yolo_model = YOLO(str(model_path))
+        
+        # 从模型对象确认任务类型（优先级更高）
+        actual_task = getattr(yolo_model, 'task', None)
+        if actual_task and actual_task != task:
+            print_info(f"根据模型调整任务类型: {task} → {actual_task}")
+            task = actual_task
+            task_type = TaskType.from_string(task)
+        
+        print_info(f"任务类型: {task.upper()}")
+        print_info(f"模型: {model_path.name}")
+        print_info(f"图片: {image_path.name}")
+        if task != 'classify':
+            print_info(f"置信度阈值: {conf}")
+        print_info(f"设备: {get_device_name(device)}")
+        
+        # 如果是pose任务，添加提示
+        if task_type == TaskType.POSE:
+            print_info("⚠️  Pose任务：将手动保存正确格式的标签")
         
         # 执行预测
         print_info(f"执行{task}预测...")
@@ -165,7 +176,8 @@ def predict_image(
         if task_type != TaskType.CLASSIFY:
             predict_kwargs['conf'] = conf
             predict_kwargs['iou'] = iou
-            predict_kwargs['save_txt'] = save_txt
+            # 对于pose任务，禁止Ultralytics自动保存txt（会保存错误格式）
+            predict_kwargs['save_txt'] = False if task_type == TaskType.POSE else save_txt
             predict_kwargs['save_conf'] = True
         
         results = yolo_model.predict(**predict_kwargs)
@@ -220,13 +232,59 @@ def predict_image(
         
         elif task_type == TaskType.POSE:
             # 姿势估计任务
+            pose_label_lines = []  # 保存标签行
+            
             for result in results:
                 if hasattr(result, 'keypoints') and result.keypoints is not None:
-                    keypoints = result.keypoints.xy.cpu().numpy()  # 关键点坐标
-                    keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None
+                    keypoints = result.keypoints.xy.cpu().numpy()  # 关键点坐标 [N, num_kpts, 2]
+                    keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None  # [N, num_kpts]
                     boxes = result.boxes
+                    img_h, img_w = result.orig_shape
                     
                     for idx, (kp, box) in enumerate(zip(keypoints, boxes)):
+                        # bbox信息 (xyxy -> xywh normalized)
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x_center = ((xyxy[0] + xyxy[2]) / 2) / img_w
+                        y_center = ((xyxy[1] + xyxy[3]) / 2) / img_h
+                        width = (xyxy[2] - xyxy[0]) / img_w
+                        height = (xyxy[3] - xyxy[1]) / img_h
+                        
+                        # 构建标签行
+                        label_parts = [
+                            int(box.cls[0]),  # class_id
+                            x_center, y_center, width, height  # bbox
+                        ]
+                        
+                        # 添加关键点
+                        kpts_conf = keypoints_conf[idx] if keypoints_conf is not None else None
+                        for kpt_idx, (kpt_x, kpt_y) in enumerate(kp):
+                            # 归一化坐标
+                            norm_x = kpt_x / img_w
+                            norm_y = kpt_y / img_h
+                            
+                            # visibility: 将confidence转为0/1/2
+                            if kpts_conf is not None:
+                                conf_val = kpts_conf[kpt_idx]
+                                if conf_val < 0.3:
+                                    visibility = 0  # 不可见
+                                elif conf_val < 0.7:
+                                    visibility = 1  # 遮挡
+                                else:
+                                    visibility = 2  # 可见
+                            else:
+                                # 如果没有confidence，根据坐标判断
+                                if kpt_x <= 0 or kpt_y <= 0:
+                                    visibility = 0
+                                else:
+                                    visibility = 2
+                            
+                            label_parts.extend([norm_x, norm_y, visibility])
+                        
+                        # 转为字符串
+                        label_line = ' '.join([str(label_parts[0])] + [f"{v:.6f}" if isinstance(v, float) else str(v) for v in label_parts[1:]])
+                        pose_label_lines.append(label_line)
+                        
+                        # JSON记录
                         prediction = {
                             'class': int(box.cls[0]),
                             'class_name': yolo_model.names[int(box.cls[0])],
@@ -244,6 +302,22 @@ def predict_image(
             # 清理临时目录
             if yolo_temp_dir.exists():
                 shutil.rmtree(yolo_temp_dir)
+        
+        # 如果是pose任务，覆盖保存正确格式的标签文件
+        if task_type == TaskType.POSE and save_txt and 'pose_label_lines' in locals() and pose_label_lines:
+            labels_dir = output_dir / 'labels'
+            labels_dir.mkdir(parents=True, exist_ok=True)
+            
+            label_name = image_path.stem + '.txt'
+            label_file = labels_dir / label_name
+            
+            # 写入标签
+            with open(label_file, 'w') as f:
+                f.write('\n'.join(pose_label_lines))
+                if pose_label_lines:
+                    f.write('\n')
+            
+            print_info(f"✓ 已保存Pose标签文件（正确格式）")
         
         # 保存类别列表
         save_classes_file(yolo_model, output_dir)
@@ -290,6 +364,7 @@ def predict_image(
 def detect_batch(
     model: str = typer.Argument(..., help="模型路径"),
     source: str = typer.Argument(..., help="图片目录或视频文件"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型 (detect/segment/classify/pose，不指定则自动推断)"),
     conf: float = typer.Option(0.25, "--conf", "-c", help="置信度阈值"),
     iou: float = typer.Option(0.45, "--iou", help="IOU阈值"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
@@ -298,7 +373,7 @@ def detect_batch(
     device: str = typer.Option("auto", "--device", "-d", help="设备"),
     batch: int = typer.Option(1, "--batch", "-b", help="批次大小"),
 ):
-    """批量检测"""
+    """批量预测"""
     
     print_section_header("批量检测")
     
@@ -342,12 +417,34 @@ def detect_batch(
         print_info("加载模型...")
         yolo_model = YOLO(str(model_path))
         
+        # 判断任务类型（在预测之前）
+        if task:
+            # 用户指定了任务类型
+            model_task = validate_task_type(task)
+            print_info(f"使用指定任务类型: {model_task}")
+        else:
+            # 自动推断：优先使用模型对象的task属性
+            model_task = getattr(yolo_model, 'task', None)
+            if model_task is None:
+                # 从文件名推断
+                model_task = parse_model_name(model_path.stem)[1]
+            print_info(f"检测到任务类型: {model_task}")
+        
+        is_pose = model_task == 'pose'
+        
+        if is_pose:
+            print_info("⚠️  Pose任务：将手动保存正确格式的标签")
+        
         # 如果是目录，统计图片数量
         if source_path.is_dir():
             images = find_files(source_path, ['.jpg', '.jpeg', '.png', '.bmp'])
             print_info(f"找到 {len(images)} 张图片")
         else:
             print_info("检测视频文件...")
+        
+        # 对于pose任务，禁止Ultralytics自动保存txt（会保存错误格式）
+        # 我们会在后面手动保存正确格式的标签
+        actual_save_txt = False if is_pose else save_txt
         
         # 执行检测
         print_info("开始检测...")
@@ -356,7 +453,7 @@ def detect_batch(
             conf=conf,
             iou=iou,
             save=True,
-            save_txt=save_txt,
+            save_txt=actual_save_txt,
             save_conf=True,
             project=str(yolo_temp_dir),
             name='run',
@@ -370,6 +467,9 @@ def detect_batch(
         all_detections = {}
         total_objects = 0
         
+        # 如果是pose任务且需要保存txt，准备手动保存正确格式的标签
+        pose_labels = {}  # {image_name: [label_lines]}
+        
         with create_progress_bar() as progress:
             task = progress.add_task("检测进度", total=None)
             
@@ -378,17 +478,90 @@ def detect_batch(
                 
                 detections = []
                 boxes = result.boxes
-                for box in boxes:
-                    detection = {
-                        'class': int(box.cls[0]),
-                        'class_name': yolo_model.names[int(box.cls[0])],
-                        'confidence': float(box.conf[0]),
-                        'bbox': box.xyxy[0].tolist(),
-                    }
-                    detections.append(detection)
+                
+                # Pose任务特殊处理
+                if is_pose and hasattr(result, 'keypoints') and result.keypoints is not None:
+                    keypoints = result.keypoints.xy.cpu().numpy()  # [N, num_kpts, 2]
+                    keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None  # [N, num_kpts]
+                    
+                    # 准备标签行
+                    label_lines = []
+                    
+                    for idx, box in enumerate(boxes):
+                        # bbox信息 (xyxy -> xywh normalized)
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        img_h, img_w = result.orig_shape
+                        x_center = ((xyxy[0] + xyxy[2]) / 2) / img_w
+                        y_center = ((xyxy[1] + xyxy[3]) / 2) / img_h
+                        width = (xyxy[2] - xyxy[0]) / img_w
+                        height = (xyxy[3] - xyxy[1]) / img_h
+                        
+                        # 关键点信息
+                        kpts = keypoints[idx]  # [num_kpts, 2]
+                        kpts_conf = keypoints_conf[idx] if keypoints_conf is not None else None  # [num_kpts]
+                        
+                        # 构建标签行: class x y w h kp1_x kp1_y kp1_v ...
+                        label_parts = [
+                            int(box.cls[0]),  # class_id
+                            x_center, y_center, width, height  # bbox
+                        ]
+                        
+                        # 添加关键点
+                        for kpt_idx, (kpt_x, kpt_y) in enumerate(kpts):
+                            # 归一化坐标
+                            norm_x = kpt_x / img_w
+                            norm_y = kpt_y / img_h
+                            
+                            # visibility: 将confidence转为0/1/2
+                            if kpts_conf is not None:
+                                conf = kpts_conf[kpt_idx]
+                                if conf < 0.3:
+                                    visibility = 0  # 不可见
+                                elif conf < 0.7:
+                                    visibility = 1  # 遮挡
+                                else:
+                                    visibility = 2  # 可见
+                            else:
+                                # 如果没有confidence，根据坐标判断
+                                if kpt_x <= 0 or kpt_y <= 0:
+                                    visibility = 0
+                                else:
+                                    visibility = 2
+                            
+                            label_parts.extend([norm_x, norm_y, visibility])
+                        
+                        # 转为字符串
+                        label_line = ' '.join([str(label_parts[0])] + [f"{v:.6f}" if isinstance(v, float) else str(v) for v in label_parts[1:]])
+                        label_lines.append(label_line)
+                        
+                        # JSON记录
+                        detection = {
+                            'class': int(box.cls[0]),
+                            'class_name': yolo_model.names[int(box.cls[0])],
+                            'confidence': float(box.conf[0]),
+                            'bbox': box.xyxy[0].tolist(),
+                            'keypoints': kpts.tolist(),
+                            'keypoint_scores': kpts_conf.tolist() if kpts_conf is not None else None,
+                        }
+                        detections.append(detection)
+                    
+                    # 保存标签行
+                    pose_labels[img_name] = label_lines
+                    total_objects += len(boxes)
+                
+                else:
+                    # 普通检测任务
+                    for box in boxes:
+                        detection = {
+                            'class': int(box.cls[0]),
+                            'class_name': yolo_model.names[int(box.cls[0])],
+                            'confidence': float(box.conf[0]),
+                            'bbox': box.xyxy[0].tolist(),
+                        }
+                        detections.append(detection)
+                    total_objects += len(boxes)
                 
                 all_detections[img_name] = detections
-                total_objects += len(detections)
                 
                 progress.update(task, advance=1, description=f"已处理 {i+1} 张")
         
@@ -399,6 +572,24 @@ def detect_batch(
             # 清理临时目录
             if yolo_temp_dir.exists():
                 shutil.rmtree(yolo_temp_dir)
+        
+        # 如果是pose任务，覆盖保存正确格式的标签文件
+        if is_pose and save_txt and pose_labels:
+            labels_dir = output_dir / 'labels'
+            labels_dir.mkdir(parents=True, exist_ok=True)
+            
+            for img_name, label_lines in pose_labels.items():
+                # 获取标签文件名（去掉图片扩展名，加.txt）
+                label_name = Path(img_name).stem + '.txt'
+                label_file = labels_dir / label_name
+                
+                # 写入标签
+                with open(label_file, 'w') as f:
+                    f.write('\n'.join(label_lines))
+                    if label_lines:  # 如果有标签，添加结尾换行
+                        f.write('\n')
+            
+            print_info(f"✓ 已保存 {len(pose_labels)} 个Pose标签文件（正确格式）")
         
         # 保存类别列表
         save_classes_file(yolo_model, output_dir)

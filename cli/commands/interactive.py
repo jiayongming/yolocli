@@ -631,12 +631,23 @@ def run_detect_operations():
                 
                 model_path = input_path("模型路径:", default="results/training/best.pt", must_exist=False)
                 image_path = input_path("图片路径:", default="test.jpg", must_exist=False)
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
                 conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
                 
+                console.print()
+                print_info(f"任务类型: {task_type}")
+                print_info(f"模型: {model_path}")
+                print_info(f"图片: {image_path}")
+                console.print()
+                
                 if confirm_action("确认检测?"):
-                    from ..commands.detect import detect_image
-                    detect_image(model=model_path, image=image_path, conf=conf, iou=0.45, 
-                               output=None, save_txt=True, save_json=True, show=False, device='auto')
+                    from ..commands.predict import predict_image
+                    predict_image(model=model_path, image=image_path, task=task_type,
+                               conf=conf, iou=0.45, output=None, save_txt=True, 
+                               save_json=True, show=False, device='auto', top_k=5)
             
             elif operation == 'batch':
                 # 批量检测
@@ -644,12 +655,23 @@ def run_detect_operations():
                 
                 model_path = input_path("模型路径:", default="results/training/best.pt", must_exist=False)
                 source_path = input_path("图片目录或视频:", default="test_images/", must_exist=False)
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
                 conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
                 
+                console.print()
+                print_info(f"任务类型: {task_type}")
+                print_info(f"模型: {model_path}")
+                print_info(f"源: {source_path}")
+                console.print()
+                
                 if confirm_action("确认批量检测?"):
-                    from ..commands.detect import detect_batch
-                    detect_batch(model=model_path, source=source_path, conf=conf, iou=0.45,
-                               output=None, save_txt=True, save_json=True, device='auto', batch=1)
+                    from ..commands.predict import detect_batch
+                    detect_batch(model=model_path, source=source_path, task=task_type, 
+                               conf=conf, iou=0.45, output=None, save_txt=True, 
+                               save_json=True, device='auto', batch=1)
             
             elif operation == 'video':
                 # 视频检测
@@ -661,7 +683,7 @@ def run_detect_operations():
                 show = confirm_action("实时显示?", default=False)
                 
                 if confirm_action("确认检测?"):
-                    from ..commands.detect import detect_video
+                    from ..commands.predict import detect_video
                     detect_video(model=model_path, video=video_path, conf=conf, iou=0.45,
                                output=None, save_txt=False, show=show, device='auto')
             
@@ -1496,21 +1518,43 @@ def run_fiftyone_operations():
                     print_warning("没有可用的数据集")
                     continue
                 
-                # 选择数据集
-                dataset_name = select_fiftyone_dataset(list(datasets))
+                # 选择数据集（允许"删除全部"选项）
+                dataset_name = select_fiftyone_dataset(list(datasets), allow_delete_all=True)
                 if dataset_name is None:
                     continue
                 
-                print_warning(f"即将删除数据集: {dataset_name}")
-                print_info("注意: 这不会删除原始图片和标签文件")
-                
-                if confirm_action("确认删除?", default=False):
-                    success, error = fo_mgr.delete_dataset(dataset_name)
+                # 处理删除全部
+                if dataset_name == "__DELETE_ALL__":
+                    print_warning(f"⚠️  即将删除所有 {len(datasets)} 个数据集!")
+                    print_info("数据集列表:")
+                    for ds in datasets:
+                        print_info(f"  - {ds}")
+                    console.print()
+                    print_info("注意: 这不会删除原始图片和标签文件")
+                    console.print()
                     
-                    if success:
-                        print_success(f"✓ 数据集已删除: {dataset_name}")
-                    else:
-                        print_error(f"删除失败: {error}")
+                    if confirm_action("确认删除全部数据集?", default=False):
+                        success, deleted_count, error = fo_mgr.delete_all_datasets()
+                        
+                        if success:
+                            print_success(f"✓ 已成功删除 {deleted_count} 个数据集")
+                        else:
+                            if deleted_count > 0:
+                                print_warning(f"⚠️  已删除 {deleted_count} 个数据集，但有错误: {error}")
+                            else:
+                                print_error(f"删除失败: {error}")
+                else:
+                    # 删除单个数据集
+                    print_warning(f"即将删除数据集: {dataset_name}")
+                    print_info("注意: 这不会删除原始图片和标签文件")
+                    
+                    if confirm_action("确认删除?", default=False):
+                        success, error = fo_mgr.delete_dataset(dataset_name)
+                        
+                        if success:
+                            print_success(f"✓ 数据集已删除: {dataset_name}")
+                        else:
+                            print_error(f"删除失败: {error}")
             
             console.print()
             if not confirm_action("继续FiftyOne操作?", default=False):
