@@ -26,7 +26,7 @@ from ..ui.display import print_info, print_success, print_warning, print_error
 class LabelStudioUploader:
     """Label Studio上传器"""
     
-    def __init__(self, url: str, api_key: str, project_id: int):
+    def __init__(self, url: str, api_key: str, project_id: int, task_type: str = 'detect'):
         """
         初始化上传器
         
@@ -34,13 +34,16 @@ class LabelStudioUploader:
             url: Label Studio服务器URL
             api_key: API密钥（支持Refresh Token或Access Token）
             project_id: 项目ID
+            task_type: 任务类型 (detect/segment/pose)
         """
         self.url = url.rstrip('/')
         self.original_token = api_key
         self.api_key = self._process_token(api_key)
         self.project_id = project_id
+        self.task_type = task_type
         self.headers = self._get_auth_headers(self.api_key)
         self.classes = []
+        self.keypoint_names = []  # pose任务的关键点名称
     
     def _decode_jwt_payload(self, token: str) -> Optional[Dict]:
         """解码JWT token payload"""
@@ -176,8 +179,22 @@ class LabelStudioUploader:
                     self.classes = config.get('names', [])
                     if isinstance(self.classes, dict):
                         self.classes = [self.classes[i] for i in sorted(self.classes.keys())]
+                    
+                    # 加载pose相关配置
+                    if self.task_type == 'pose':
+                        self.keypoint_names = config.get('keypoint_names', [])
+                        if not self.keypoint_names:
+                            # 如果没有keypoint_names，根据kpt_shape生成
+                            kpt_shape = config.get('kpt_shape', [])
+                            if kpt_shape and len(kpt_shape) > 0:
+                                kpt_count = kpt_shape[0]
+                                self.keypoint_names = [f'kp_{i+1}' for i in range(kpt_count)]
+                    
                     print_success(f"✓ 加载配置文件: {config_path.name}")
                     print_info(f"  类别数: {len(self.classes)}")
+                    if self.task_type == 'pose' and self.keypoint_names:
+                        print_info(f"  关键点数: {len(self.keypoint_names)}")
+                        print_info(f"  关键点: {', '.join(self.keypoint_names[:5])}{'...' if len(self.keypoint_names) > 5 else ''}")
                     return config
         
         raise FileNotFoundError(f"未找到数据集配置文件: {dataset_path}")
@@ -186,6 +203,60 @@ class LabelStudioUploader:
         """获取图片尺寸"""
         with Image.open(image_path) as img:
             return img.size
+    
+    def _yolo_to_labelstudio_pose(self, yolo_annotation: List[float],
+                                 img_width: int, img_height: int) -> Dict:
+        """
+        将YOLO Pose格式转换为Label Studio KeyPoint格式
+        
+        格式: [class_id, x_center, y_center, width, height, kp1_x, kp1_y, kp1_v, ...]
+        """
+        if len(yolo_annotation) < 5:
+            return None
+        
+        class_id = int(yolo_annotation[0])
+        x_center, y_center, width, height = yolo_annotation[1:5]
+        
+        # 转换bbox（作为辅助信息，不显示）
+        x = (x_center - width / 2) * 100
+        y = (y_center - height / 2) * 100
+        w = width * 100
+        h = height * 100
+        
+        # 解析关键点
+        keypoints = []
+        kpt_data = yolo_annotation[5:]  # 所有关键点数据
+        
+        if len(kpt_data) % 3 != 0:
+            print_warning(f"警告：关键点数据不完整 ({len(kpt_data)} 值)")
+            return None
+        
+        kpt_count = len(kpt_data) // 3
+        
+        for i in range(kpt_count):
+            kp_x = kpt_data[i * 3]
+            kp_y = kpt_data[i * 3 + 1]
+            kp_v = kpt_data[i * 3 + 2]  # visibility: 0=不可见, 1=遮挡, 2=可见
+            
+            # 只上传可见或遮挡的关键点
+            if kp_v > 0:
+                kp_label = self.keypoint_names[i] if i < len(self.keypoint_names) else f'kp_{i+1}'
+                keypoints.append({
+                    "original_width": img_width,
+                    "original_height": img_height,
+                    "image_rotation": 0,
+                    "value": {
+                        "x": kp_x * 100,  # 转换为百分比
+                        "y": kp_y * 100,
+                        "width": 0.5,  # 关键点显示大小
+                        "keypointlabels": [kp_label]
+                    },
+                    "from_name": "keypoint",
+                    "to_name": "image",
+                    "type": "keypointlabels"
+                })
+        
+        return keypoints
     
     def _yolo_to_labelstudio_bbox(self, yolo_annotation: List[float], 
                                   img_width: int, img_height: int) -> Dict:
@@ -470,9 +541,18 @@ class LabelStudioUploader:
         
         # 转换为Label Studio格式
         predictions = []
-        for anno in yolo_annotations:
-            bbox = self._yolo_to_labelstudio_bbox(anno, img_width, img_height)
-            predictions.append(bbox)
+        if self.task_type == 'pose':
+            # Pose任务：转换关键点
+            for anno in yolo_annotations:
+                keypoints = self._yolo_to_labelstudio_pose(anno, img_width, img_height)
+                if keypoints:
+                    # pose返回的是关键点列表，需要展开
+                    predictions.extend(keypoints)
+        else:
+            # 检测/分割任务：转换bbox/polygon
+            for anno in yolo_annotations:
+                bbox = self._yolo_to_labelstudio_bbox(anno, img_width, img_height)
+                predictions.append(bbox)
         
         # 上传文件到Label Studio
         file_info = self._upload_file_to_labelstudio(image_path)
@@ -675,14 +755,37 @@ class LabelStudioUploader:
             print_error(f"上传异常: {str(e)}")
             return False
     
-    def setup_project_config(self) -> bool:
+    def setup_project_config(self, task_type: str = None) -> bool:
         """配置Label Studio项目（设置标注界面）"""
         if not self.classes:
             print_error("未加载类别信息，请先加载数据集配置")
             return False
         
-        # 生成标注配置（支持矩形框和多边形）
-        labeling_config = f"""
+        task = task_type or self.task_type
+        
+        # 根据任务类型生成不同的标注配置
+        if task == 'pose':
+            # Pose任务：关键点标注
+            if not self.keypoint_names:
+                print_error("未加载关键点信息，请确保dataset.yaml包含keypoint_names")
+                return False
+            
+            keypoint_labels = '\n    '.join([
+                f'<Label value="{kp}" background="#{self._get_color(i)}"/>'
+                for i, kp in enumerate(self.keypoint_names)
+            ])
+            
+            labeling_config = f"""
+<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <KeyPointLabels name="keypoint" toName="image" opacity="0.9">
+    {keypoint_labels}
+  </KeyPointLabels>
+</View>
+"""
+        else:
+            # 检测/分割任务：矩形框和多边形
+            labeling_config = f"""
 <View>
   <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
   <RectangleLabels name="label" toName="image" strokeWidth="3" opacity="0.9">
@@ -768,12 +871,32 @@ class LabelStudioUploader:
                 pred_count = len(predictions[0].get('result', [])) if predictions else 0
                 
                 print_info(f"任务 #{task_id}: {original_name}")
-                print_info(f"  原始标注数: {anno_count}, 上传的标注数: {pred_count}")
                 
-                if anno_count == pred_count:
-                    print_success("  ✓ 标注数量匹配")
+                # 根据任务类型验证
+                if self.task_type == 'pose':
+                    # Pose任务：原始标注数是对象数，上传的标注数是可见关键点数
+                    # 注意：只有visibility>0的关键点才会被上传
+                    print_info(f"  原始对象数: {anno_count}, 上传的可见关键点数: {pred_count}")
+                    
+                    if self.keypoint_names:
+                        expected_total = anno_count * len(self.keypoint_names)
+                        print_info(f"  说明: 每个对象有{len(self.keypoint_names)}个关键点，实际上传{pred_count}个（不可见的关键点未上传）")
+                        
+                        # 简单验证：关键点数应该在合理范围内
+                        if pred_count > 0 and pred_count <= expected_total:
+                            print_success("  ✓ 标注验证通过")
+                        else:
+                            print_warning(f"  ⚠️  关键点数量异常（期望≤{expected_total}，实际{pred_count}）")
+                    else:
+                        print_warning("  ⚠️  无法验证（缺少关键点信息）")
                 else:
-                    print_warning("  ⚠️  标注数量不匹配！")
+                    # 检测/分割任务：直接比较标注数
+                    print_info(f"  原始标注数: {anno_count}, 上传的标注数: {pred_count}")
+                    
+                    if anno_count == pred_count:
+                        print_success("  ✓ 标注数量匹配")
+                    else:
+                        print_warning("  ⚠️  标注数量不匹配！")
             
             print_success("\n✓ 验证完成！")
             return True

@@ -801,6 +801,15 @@ def run_labelstudio_operations():
                 # 输入项目ID
                 project_id = int(input_number("Label Studio项目ID:", min_value=1))
                 
+                # 选择任务类型
+                console.print()
+                print_info("💡 任务类型说明：")
+                print_info("   - 目标检测(detect): 矩形框标注")
+                print_info("   - 分割(segment): 多边形标注")  
+                print_info("   - 姿势估计(pose): 关键点标注")
+                console.print()
+                task_type = select_task_type()
+                
                 # 选择要上传的数据集分割
                 split_choices = [
                     "all - 全部 (train, val, test)",
@@ -860,6 +869,7 @@ def run_labelstudio_operations():
                 print_info(f"  数据集: {dataset_path}")
                 print_info(f"  Label Studio: {default_url}")
                 print_info(f"  项目ID: {project_id}")
+                print_info(f"  任务类型: {task_type}")
                 print_info(f"  数据集分割: {', '.join(splits)}")
                 print_info(f"  并发数: {max_workers}")
                 print_info(f"  配置标注模板: {'是' if setup_config else '否'}")
@@ -872,7 +882,7 @@ def run_labelstudio_operations():
                 from ..integrations.labelstudio_uploader import LabelStudioUploader
                 
                 try:
-                    uploader = LabelStudioUploader(default_url, default_token, project_id)
+                    uploader = LabelStudioUploader(default_url, default_token, project_id, task_type=task_type)
                     
                     # 测试连接
                     print_info("测试连接...")
@@ -887,7 +897,7 @@ def run_labelstudio_operations():
                     # 配置标注模板
                     if setup_config:
                         print_section_header("配置标注模板")
-                        if uploader.setup_project_config():
+                        if uploader.setup_project_config(task_type=task_type):
                             print_success("✓ 标注模板配置完成")
                         else:
                             print_warning("标注模板配置失败，将继续上传")
