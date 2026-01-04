@@ -589,7 +589,17 @@ class LabelStudioConverter:
         Returns:
             List[Dict]: 处理后的数据列表，关键点已合并为 Pose 格式
         """
-        # 首先收集所有不同的关键点标签，确定顺序
+        # 首先检查是否有关键点标注
+        has_keypoints = any(
+            any(ann.get('type') == 'keypoint' for ann in item.get('annotations', []))
+            for item in parsed_data
+        )
+        
+        # 如果没有关键点标注，直接返回原始数据
+        if not has_keypoints:
+            return parsed_data
+        
+        # 收集所有不同的关键点标签，确定顺序
         # 使用多数投票法确定最常见的标注顺序
         from collections import Counter
         import sys
