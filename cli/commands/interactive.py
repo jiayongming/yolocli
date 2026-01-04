@@ -857,6 +857,117 @@ def run_labelstudio_operations():
                     import traceback
                     traceback.print_exc()
             
+            elif operation == 'audit':
+                # 审计标注质量
+                print_section_header("Label Studio 标注审计")
+                
+                # 确保有连接配置
+                if not default_url or not default_token:
+                    print_warning("请先配置Label Studio连接")
+                    continue
+                
+                # 输入项目ID
+                project_id = int(input_number("Label Studio项目ID:", min_value=1))
+                
+                # 配置审计参数
+                console.print()
+                
+                # 询问是否抽样审计
+                sample_audit = confirm_action("是否进行抽样审计?（否则审计全部任务）", default=False)
+                max_tasks = None
+                if sample_audit:
+                    max_tasks = int(input_number("抽样任务数量:", default=500, min_value=1))
+                
+                show_details = confirm_action("显示异常任务的详细信息?", default=True)
+                max_samples = int(input_number("每种异常类型显示的最大样本数:", default=10, min_value=1, max_value=100))
+                
+                # 询问是否导出报告
+                export_report = confirm_action("导出审计报告到文件?", default=False)
+                output_file = None
+                if export_report:
+                    from datetime import datetime
+                    default_filename = f"audit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    output_file = input_text("报告文件名（将保存到results/audit/）:", default=default_filename)
+                
+                # 显示审计配置
+                console.print()
+                print_info("审计配置:")
+                print_info(f"  项目ID: {project_id}")
+                print_info(f"  审计模式: {'抽样审计' if max_tasks else '全部审计'}")
+                if max_tasks:
+                    print_info(f"  抽样数量: {max_tasks} 个任务")
+                print_info(f"  显示详情: {'是' if show_details else '否'}")
+                print_info(f"  样本数量: {max_samples}")
+                if output_file:
+                    print_info(f"  导出报告: results/audit/{Path(output_file).name}")
+                console.print()
+                
+                if not confirm_action("确认开始审计?", default=True):
+                    continue
+                
+                # 执行审计
+                try:
+                    from ..integrations.labelstudio_uploader import LabelStudioUploader
+                    
+                    uploader = LabelStudioUploader(default_url, default_token, project_id)
+                    
+                    print_info("\n连接到 Label Studio...")
+                    if not uploader.test_connection():
+                        print_error("连接失败，请检查URL和API密钥")
+                        continue
+                    
+                    # 执行审计
+                    print_info("\n开始审计...")
+                    audit_report = uploader.audit_annotations(
+                        show_details=show_details,
+                        max_samples=max_samples,
+                        max_tasks=max_tasks
+                    )
+                    
+                    # 导出报告
+                    if output_file and audit_report:
+                        try:
+                            import json
+                            
+                            # 创建 results/audit 目录
+                            audit_dir = config_mgr.project_root / 'results' / 'audit'
+                            audit_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            # 如果用户输入的是绝对路径，直接使用
+                            # 否则，保存到 results/audit 目录
+                            output_path = Path(output_file)
+                            if not output_path.is_absolute():
+                                # 只取文件名，放到 results/audit 目录
+                                output_path = audit_dir / output_path.name
+                            
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                json.dump(audit_report, f, indent=2, ensure_ascii=False)
+                            
+                            # 验证文件是否存在
+                            if output_path.exists():
+                                file_size = output_path.stat().st_size
+                                # 显示相对路径
+                                try:
+                                    rel_path = output_path.relative_to(config_mgr.project_root)
+                                    print_success(f"\n✅ 报告已导出到: {rel_path}")
+                                except ValueError:
+                                    # 如果无法计算相对路径，显示绝对路径
+                                    print_success(f"\n✅ 报告已导出到: {output_path}")
+                                print_info(f"   文件大小: {file_size:,} 字节")
+                            else:
+                                print_error(f"\n✗ 报告文件未创建: {output_path}")
+                        except Exception as e:
+                            print_error(f"\n✗ 导出报告失败: {str(e)}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    print_section_header("审计完成")
+                
+                except Exception as e:
+                    print_error(f"审计失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+            
             elif operation == 'upload':
                 # 上传数据集到Label Studio
                 print_section_header("上传数据集到Label Studio")

@@ -785,6 +785,7 @@ def select_labelstudio_operation() -> str:
     choices = [
         "upload - 上传数据集到Label Studio",
         "predict - 使用本地模型预测任务",
+        "audit - 审计标注质量",
         "list - 列出所有项目",
         "fetch - 获取项目数据",
         "config - 配置Label Studio连接",

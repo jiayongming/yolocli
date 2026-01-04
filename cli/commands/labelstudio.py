@@ -208,6 +208,113 @@ def verify_uploaded_tasks(
         raise typer.Exit(1)
 
 
+@app.command("audit")
+def audit_annotations(
+    url: str = typer.Option(..., "--url", "-u", help="Label Studio服务器URL"),
+    api_key: str = typer.Option(..., "--api-key", "-k", help="Label Studio API密钥"),
+    project_id: int = typer.Option(..., "--project-id", "-p", help="Label Studio项目ID"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="导出报告文件名（将保存到results/audit/）"),
+    show_details: bool = typer.Option(True, "--details/--no-details", help="显示异常任务的详细信息"),
+    max_samples: int = typer.Option(10, "--max-samples", help="每种异常类型显示的最大样本数"),
+    max_tasks: Optional[int] = typer.Option(None, "--max-tasks", help="最大审计任务数（默认全部，用于抽样审计）"),
+):
+    """
+    审计Label Studio项目的标注质量
+    
+    检查项：
+      - 关键点标注顺序一致性（pose任务）
+      - 缺失标注
+      - 重复标注
+      - 标注格式异常
+    
+    示例:
+        # 审计所有任务（默认）
+        yolo_cli labelstudio audit --url http://localhost:8080 --api-key xxx --project-id 1
+        
+        # 抽样审计（只审计前500个任务）
+        yolo_cli labelstudio audit --url http://localhost:8080 --api-key xxx --project-id 1 --max-tasks 500
+        
+        # 导出报告（将保存到results/audit/目录）
+        yolo_cli labelstudio audit --url http://localhost:8080 --api-key xxx --project-id 1 --output audit_report.json
+        
+        # 只显示统计，不显示详细信息
+        yolo_cli labelstudio audit --url http://localhost:8080 --api-key xxx --project-id 1 --no-details
+    """
+    print_section_header("Label Studio 标注审计")
+    
+    print_info(f"Label Studio: {url}")
+    print_info(f"项目ID: {project_id}")
+    
+    # 初始化上传器
+    try:
+        uploader = LabelStudioUploader(url, api_key, project_id)
+    except Exception as e:
+        print_error(f"初始化失败: {str(e)}")
+        raise typer.Exit(1)
+    
+    # 测试连接
+    print_info("\n连接到 Label Studio...")
+    if not uploader.test_connection():
+        print_error("连接失败，请检查URL和API密钥")
+        raise typer.Exit(1)
+    
+    # 执行审计
+    try:
+        print_info("\n开始审计...")
+        audit_report = uploader.audit_annotations(
+            show_details=show_details,
+            max_samples=max_samples,
+            max_tasks=max_tasks
+        )
+        
+        # 导出报告
+        if output and audit_report:
+            try:
+                import json
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                # 创建 results/audit 目录
+                audit_dir = config.project_root / 'results' / 'audit'
+                audit_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 如果用户输入的是绝对路径，直接使用
+                # 否则，保存到 results/audit 目录
+                output_path = Path(output)
+                if not output_path.is_absolute():
+                    # 只取文件名，放到 results/audit 目录
+                    output_path = audit_dir / output_path.name
+                
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(audit_report, f, indent=2, ensure_ascii=False)
+                
+                # 验证文件是否存在
+                if output_path.exists():
+                    file_size = output_path.stat().st_size
+                    # 显示相对路径
+                    try:
+                        rel_path = output_path.relative_to(config.project_root)
+                        print_success(f"\n✅ 报告已导出到: {rel_path}")
+                    except ValueError:
+                        # 如果无法计算相对路径，显示绝对路径
+                        print_success(f"\n✅ 报告已导出到: {output_path}")
+                    print_info(f"   文件大小: {file_size:,} 字节")
+                else:
+                    print_error(f"\n✗ 报告文件未创建: {output_path}")
+            except Exception as e:
+                print_error(f"\n✗ 导出报告失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+        
+        print_section_header("审计完成")
+        
+    except Exception as e:
+        print_error(f"审计失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 @app.command("predict")
 def predict_tasks(
     model: str = typer.Argument(..., help="YOLO模型路径"),

@@ -1581,4 +1581,267 @@ class LabelStudioUploader:
                     print_info("\n临时文件已清理")
             except Exception as e:
                 print_warning(f"清理临时文件失败: {str(e)}")
+    
+    def audit_annotations(self, show_details: bool = True, max_samples: int = 10, max_tasks: Optional[int] = None) -> Dict:
+        """
+        审计Label Studio项目的标注质量
+        
+        Args:
+            show_details: 是否显示异常任务的详细信息
+            max_samples: 每种异常类型显示的最大样本数
+            max_tasks: 最大审计任务数（None表示审计全部，用于抽样审计）
+            
+        Returns:
+            Dict: 审计报告
+        """
+        from collections import defaultdict, Counter
+        
+        # 使用导出API一次性获取所有任务和标注
+        print_info("正在导出项目数据...")
+        export_url = f"{self.url}/api/projects/{self.project_id}/export"
+        
+        try:
+            response = requests.get(
+                export_url,
+                headers=self.headers,
+                params={'exportType': 'JSON'},
+                timeout=120  # 导出可能需要较长时间
+            )
+            
+            if response.status_code != 200:
+                print_error(f"导出失败: {response.status_code} - {response.text[:200]}")
+                return {}
+            
+            all_tasks = response.json()
+            
+            if not isinstance(all_tasks, list):
+                print_error(f"导出数据格式异常: {type(all_tasks)}")
+                return {}
+            
+            print_success(f"✓ 成功导出 {len(all_tasks)} 个任务")
+            
+            # 如果需要抽样，截取前N个
+            if max_tasks and len(all_tasks) > max_tasks:
+                all_tasks = all_tasks[:max_tasks]
+                print_info(f"  抽样：使用前 {max_tasks} 个任务")
+        
+        except Exception as e:
+            print_error(f"导出异常: {str(e)}")
+            return {}
+        
+        # 统计数据
+        total_tasks = len(all_tasks)
+        annotated_tasks = [t for t in all_tasks if t.get('annotations')]
+        unannotated_tasks = [t for t in all_tasks if not t.get('annotations')]
+        
+        print_info(f"已标注: {len(annotated_tasks)} 个")
+        print_info(f"未标注: {len(unannotated_tasks)} 个")
+        
+        # 分析标注
+        print_info("\n分析标注一致性...")
+        
+        audit_report = {
+            'summary': {
+                'total_tasks': total_tasks,
+                'annotated_tasks': len(annotated_tasks),
+                'unannotated_tasks': len(unannotated_tasks),
+                'audit_mode': '抽样' if max_tasks else '全部',
+                'max_tasks': max_tasks,
+            },
+            'issues': {},
+            'statistics': {}
+        }
+        
+        # 检查关键点标注顺序（pose任务）
+        keypoint_order_issues = self._check_keypoint_order_consistency(
+            annotated_tasks, show_details, max_samples
+        )
+        if keypoint_order_issues:
+            audit_report['issues']['keypoint_order'] = keypoint_order_issues
+        
+        # 检查标注完整性
+        completeness_issues = self._check_annotation_completeness(
+            annotated_tasks, show_details, max_samples
+        )
+        if completeness_issues:
+            audit_report['issues']['completeness'] = completeness_issues
+        
+        # 检查重复标注
+        duplicate_issues = self._check_duplicate_annotations(
+            annotated_tasks, show_details, max_samples
+        )
+        if duplicate_issues:
+            audit_report['issues']['duplicates'] = duplicate_issues
+        
+        # 显示统计摘要
+        self._display_audit_summary(audit_report)
+        
+        return audit_report
+    
+    def _check_keypoint_order_consistency(self, tasks: List[Dict], show_details: bool, max_samples: int) -> Dict:
+        """检查关键点标注顺序的一致性"""
+        from collections import Counter
+        
+        keypoint_orders = []
+        task_order_map = {}  # task_id -> keypoint_order
+        
+        for task in tasks:
+            task_id = task.get('id')
+            annotations = task.get('annotations', [])
+            
+            if not annotations:
+                continue
+            
+            # 获取第一个annotation（通常是人工标注）
+            annotation = annotations[0]
+            results = annotation.get('result', [])
+            
+            # 提取关键点标签顺序
+            keypoints = [r for r in results if r.get('type') == 'keypointlabels']
+            
+            if keypoints:
+                # 提取关键点名称序列
+                kp_names = []
+                for kp in keypoints:
+                    labels = kp.get('value', {}).get('keypointlabels', [])
+                    if labels:
+                        kp_names.extend(labels)
+                
+                if kp_names:
+                    order_tuple = tuple(kp_names)
+                    keypoint_orders.append(order_tuple)
+                    task_order_map[task_id] = order_tuple
+        
+        if not keypoint_orders:
+            return None
+        
+        # 统计不同的标注顺序
+        order_counter = Counter(keypoint_orders)
+        
+        if len(order_counter) == 1:
+            print_success(f"✓ 关键点标注顺序一致: {list(order_counter.keys())[0]}")
+            return None
+        
+        # 发现不一致
+        most_common_order = order_counter.most_common(1)[0]
+        print_warning(f"⚠ 发现 {len(order_counter)} 种不同的关键点标注顺序")
+        print_info(f"  最常见顺序: {list(most_common_order[0])} (出现 {most_common_order[1]} 次)")
+        
+        # 找出异常任务
+        abnormal_tasks = {}
+        for order, count in order_counter.items():
+            if order != most_common_order[0]:
+                task_ids = [tid for tid, torder in task_order_map.items() if torder == order]
+                abnormal_tasks[str(list(order))] = {
+                    'count': count,
+                    'task_ids': task_ids[:max_samples] if show_details else []
+                }
+                
+                if show_details:
+                    print_warning(f"  异常顺序: {list(order)}")
+                    print_info(f"    出现次数: {count}")
+                    print_info(f"    任务ID示例: {task_ids[:max_samples]}")
+        
+        return {
+            'total_samples': len(keypoint_orders),
+            'unique_orders': len(order_counter),
+            'most_common_order': {
+                'order': list(most_common_order[0]),
+                'count': most_common_order[1]
+            },
+            'abnormal_orders': abnormal_tasks
+        }
+    
+    def _check_annotation_completeness(self, tasks: List[Dict], show_details: bool, max_samples: int) -> Dict:
+        """检查标注完整性"""
+        incomplete_tasks = []
+        
+        for task in tasks:
+            task_id = task.get('id')
+            annotations = task.get('annotations', [])
+            
+            if not annotations:
+                continue
+            
+            annotation = annotations[0]
+            results = annotation.get('result', [])
+            
+            # 检查是否有空标注
+            if not results:
+                incomplete_tasks.append(task_id)
+        
+        if incomplete_tasks:
+            print_warning(f"⚠ 发现 {len(incomplete_tasks)} 个空标注任务")
+            if show_details:
+                print_info(f"  任务ID示例: {incomplete_tasks[:max_samples]}")
+            
+            return {
+                'count': len(incomplete_tasks),
+                'task_ids': incomplete_tasks[:max_samples] if show_details else []
+            }
+        
+        return None
+    
+    def _check_duplicate_annotations(self, tasks: List[Dict], show_details: bool, max_samples: int) -> Dict:
+        """检查重复标注"""
+        duplicate_tasks = []
+        
+        for task in tasks:
+            task_id = task.get('id')
+            annotations = task.get('annotations', [])
+            
+            if len(annotations) > 1:
+                duplicate_tasks.append({
+                    'task_id': task_id,
+                    'annotation_count': len(annotations)
+                })
+        
+        if duplicate_tasks:
+            print_warning(f"⚠ 发现 {len(duplicate_tasks)} 个任务有多个标注")
+            if show_details:
+                for item in duplicate_tasks[:max_samples]:
+                    print_info(f"  任务 #{item['task_id']}: {item['annotation_count']} 个标注")
+            
+            return {
+                'count': len(duplicate_tasks),
+                'details': duplicate_tasks[:max_samples] if show_details else []
+            }
+        
+        return None
+    
+    def _display_audit_summary(self, report: Dict):
+        """显示审计摘要"""
+        print_section_header = lambda title: print_info(f"\n{'='*60}\n{title:^60}\n{'='*60}")
+        
+        print_section_header("审计摘要")
+        
+        summary = report['summary']
+        print_info(f"审计模式: {summary['audit_mode']}")
+        if summary.get('max_tasks'):
+            print_info(f"抽样数量: {summary['max_tasks']} 个任务")
+        print_info(f"总任务数: {summary['total_tasks']}")
+        print_info(f"已标注: {summary['annotated_tasks']}")
+        print_info(f"未标注: {summary['unannotated_tasks']}")
+        
+        issues = report.get('issues', {})
+        
+        if not issues:
+            print_success("\n✅ 未发现标注问题！")
+            return
+        
+        print_warning(f"\n发现 {len(issues)} 类问题:")
+        
+        for issue_type, issue_data in issues.items():
+            if issue_type == 'keypoint_order':
+                print_warning(f"\n  1. 关键点顺序不一致")
+                print_info(f"     - {issue_data['unique_orders']} 种不同顺序")
+                print_info(f"     - {len(issue_data['abnormal_orders'])} 种异常顺序")
+            
+            elif issue_type == 'completeness':
+                print_warning(f"\n  2. 空标注")
+                print_info(f"     - {issue_data['count']} 个任务")
+            
+            elif issue_type == 'duplicates':
+                print_warning(f"\n  3. 重复标注")
+                print_info(f"     - {issue_data['count']} 个任务")
 
