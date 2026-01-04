@@ -258,11 +258,6 @@ class LabelStudioUploader:
                     "type": "keypointlabels"
                 })
         
-        if visible_count == 0:
-            print_warning(f"警告：{kpt_count}个关键点全部不可见 (visibility=0)")
-        else:
-            print_info(f"转换pose标注: {visible_count}/{kpt_count} 个可见关键点")
-        
         return keypoints
     
     def _yolo_to_labelstudio_bbox(self, yolo_annotation: List[float], 
@@ -1179,10 +1174,6 @@ class LabelStudioUploader:
         predictions = []
         img_width, img_height = result.orig_shape[1], result.orig_shape[0]
         
-        # 调试信息
-        print_info(f"开始转换预测结果 (任务类型: {task_type}, 图片尺寸: {img_width}x{img_height})")
-        print_info(f"模型类别数: {len(self.classes)}, 类别: {self.classes if len(self.classes) <= 5 else self.classes[:5] + ['...']}")
-        
         try:
             if task_type == 'detect':
                 # 检测任务：转换bbox
@@ -1230,15 +1221,10 @@ class LabelStudioUploader:
                     keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None
                     boxes = result.boxes
                     
-                    print_info(f"检测到 {len(boxes)} 个目标")
-                    
                     for idx, (kp, box) in enumerate(zip(keypoints, boxes)):
                         class_id = int(box.cls[0])
-                        conf = float(box.conf[0])
-                        print_info(f"  目标 {idx+1}: class_id={class_id}, conf={conf:.2%}, classes数量={len(self.classes)}")
                         
                         if class_id < len(self.classes):
-                            print_info(f"    ✓ 类别有效: {self.classes[class_id]}")
                             # 1. 添加bbox（RectangleLabels）
                             xyxy = box.xyxy[0].cpu().numpy()
                             x_center = ((xyxy[0] + xyxy[2]) / 2) / img_width
@@ -1291,11 +1277,6 @@ class LabelStudioUploader:
                             )
                             if keypoint_preds:
                                 predictions.extend(keypoint_preds)
-                            else:
-                                print_warning(f"警告：关键点转换结果为空 (类别: {self.classes[class_id] if class_id < len(self.classes) else class_id})")
-                        else:
-                            # class_id越界
-                            print_warning(f"    ✗ 跳过：class_id={class_id} 超出范围 (classes数量: {len(self.classes)})")
             
             elif task_type == 'classify':
                 # 分类任务
@@ -1373,16 +1354,9 @@ class LabelStudioUploader:
                 "model_version": "yolocli_local_model"
             }
             
-            # 调试信息：打印上传的数据
+            # 检查predictions是否为空
             if not predictions:
-                print_warning(f"任务 #{task_id}: predictions为空列表，跳过上传")
                 return False
-            
-            # 打印第一个prediction的结构（用于调试）
-            import json
-            print_info(f"任务 #{task_id}: 上传 {len(predictions)} 个predictions")
-            if predictions:
-                print_info(f"  第一个prediction示例: {json.dumps(predictions[0], indent=2, ensure_ascii=False)[:300]}...")
             
             response = requests.post(
                 create_url,
