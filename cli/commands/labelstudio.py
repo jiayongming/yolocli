@@ -208,6 +208,118 @@ def verify_uploaded_tasks(
         raise typer.Exit(1)
 
 
+@app.command("predict")
+def predict_tasks(
+    model: str = typer.Argument(..., help="YOLO模型路径"),
+    url: str = typer.Option(..., "--url", "-u", help="Label Studio服务器URL"),
+    api_key: str = typer.Option(..., "--api-key", "-k", help="Label Studio API密钥"),
+    project_id: int = typer.Option(..., "--project-id", "-p", help="Label Studio项目ID"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="任务类型 (detect/segment/pose/classify，不指定则自动推断)"),
+    task_ids: Optional[List[int]] = typer.Option(None, "--task-ids", help="指定任务ID列表"),
+    task_range: Optional[List[int]] = typer.Option(None, "--task-range", help="指定任务ID范围 (start end)"),
+    unlabeled: bool = typer.Option(False, "--unlabeled", help="预测所有未标注的任务"),
+    conf: float = typer.Option(0.25, "--conf", "-c", help="置信度阈值"),
+    iou: float = typer.Option(0.45, "--iou", help="IOU阈值"),
+    max_workers: int = typer.Option(4, "--max-workers", "-w", help="最大并发数"),
+    device: str = typer.Option("auto", "--device", "-d", help="设备 (auto/cpu/cuda)"),
+):
+    """
+    使用本地YOLO模型预测Label Studio任务
+    
+    任务筛选方式（三选一）：
+      - --task-ids: 指定任务ID列表，如 --task-ids 1 2 3 5 8
+      - --task-range: 指定任务ID范围，如 --task-range 5900 6000
+      - --unlabeled: 预测所有未标注的任务
+    
+    示例:
+        # 预测指定任务ID列表
+        yolo_cli labelstudio predict yolo11n.pt --url http://localhost:8080 --api-key xxx --project-id 1 --task-ids 1 2 3 5 8
+        
+        # 预测任务ID范围
+        yolo_cli labelstudio predict best.pt --url http://localhost:8080 --api-key xxx --project-id 1 --task-range 5900 6000
+        
+        # 预测所有未标注任务
+        yolo_cli labelstudio predict yolo11m.pt --url http://localhost:8080 --api-key xxx --project-id 1 --unlabeled
+        
+        # 显式指定任务类型
+        yolo_cli labelstudio predict yolo11n-pose.pt --url http://localhost:8080 --api-key xxx --project-id 1 --task pose --unlabeled
+    """
+    print_section_header("Label Studio 任务预测")
+    
+    # 验证模型路径
+    model_path = Path(model)
+    if not model_path.exists():
+        print_error(f"模型不存在: {model}")
+        raise typer.Exit(1)
+    
+    # 验证任务筛选参数（三选一）
+    filter_count = sum([
+        task_ids is not None,
+        task_range is not None,
+        unlabeled
+    ])
+    
+    if filter_count == 0:
+        print_error("必须指定一种任务筛选方式: --task-ids, --task-range 或 --unlabeled")
+        raise typer.Exit(1)
+    
+    if filter_count > 1:
+        print_error("只能指定一种任务筛选方式")
+        raise typer.Exit(1)
+    
+    # 验证 task_range 参数
+    if task_range is not None:
+        if len(task_range) != 2:
+            print_error("--task-range 需要两个参数: 起始ID 结束ID")
+            raise typer.Exit(1)
+        if task_range[0] > task_range[1]:
+            print_error("起始ID必须小于或等于结束ID")
+            raise typer.Exit(1)
+    
+    print_info(f"模型: {model_path.name}")
+    print_info(f"Label Studio: {url}")
+    print_info(f"项目ID: {project_id}")
+    
+    # 初始化上传器
+    try:
+        uploader = LabelStudioUploader(url, api_key, project_id, task_type=task or 'detect')
+    except Exception as e:
+        print_error(f"初始化失败: {str(e)}")
+        raise typer.Exit(1)
+    
+    # 测试连接
+    print_info("\n连接到 Label Studio...")
+    if not uploader.test_connection():
+        print_error("连接失败，请检查URL和API密钥")
+        raise typer.Exit(1)
+    
+    # 执行预测
+    try:
+        print_info("\n开始预测...")
+        success, failed = uploader.predict_tasks_with_yolo(
+            model_path=model_path,
+            task_ids=task_ids,
+            task_range=tuple(task_range) if task_range else None,
+            unlabeled=unlabeled,
+            task_type=task,
+            conf=conf,
+            iou=iou,
+            device=device,
+            max_workers=max_workers
+        )
+        
+        print_section_header("预测完成")
+        print_success(f"成功: {success} 个任务")
+        if failed > 0:
+            print_error(f"失败: {failed} 个任务")
+        
+    except Exception as e:
+        print_error(f"预测失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 def _resolve_dataset_path(dataset: str) -> Path:
     """
     解析数据集路径

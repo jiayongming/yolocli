@@ -11,7 +11,7 @@ os.environ.setdefault('PROMPT_TOOLKIT_NO_CPR', '1')
 warnings.filterwarnings('ignore', message='.*cursor position requests.*')
 
 import questionary
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 
@@ -784,6 +784,7 @@ def select_labelstudio_operation() -> str:
     """
     choices = [
         "upload - 上传数据集到Label Studio",
+        "predict - 使用本地模型预测任务",
         "list - 列出所有项目",
         "fetch - 获取项目数据",
         "config - 配置Label Studio连接",
@@ -895,3 +896,103 @@ def select_fiftyone_dataset(datasets: List[str], allow_delete_all: bool = False)
         return "__DELETE_ALL__"
     
     return result
+
+
+def select_task_filter_mode() -> str:
+    """
+    选择Label Studio任务筛选方式
+    
+    Returns:
+        str: 筛选方式 ('ids', 'range', 'unlabeled')
+    """
+    choices = [
+        "按任务ID列表筛选",
+        "按任务ID范围筛选",
+        "预测所有未标注的任务",
+    ]
+    
+    result = select_option("选择任务筛选方式:", choices)
+    
+    if "ID列表" in result:
+        return 'ids'
+    elif "ID范围" in result:
+        return 'range'
+    else:
+        return 'unlabeled'
+
+
+def input_task_ids() -> List[int]:
+    """
+    输入任务ID列表
+    
+    Returns:
+        List[int]: 任务ID列表
+    """
+    while True:
+        ids_str = input_text(
+            "输入任务ID（逗号分隔）:",
+            default="1,2,3"
+        )
+        
+        try:
+            # 解析逗号分隔的ID
+            ids = [int(id_str.strip()) for id_str in ids_str.split(',') if id_str.strip()]
+            if ids:
+                return ids
+            else:
+                console.print("[red]✗ 请至少输入一个任务ID[/red]")
+        except ValueError:
+            console.print("[red]✗ 请输入有效的数字ID（用逗号分隔）[/red]")
+
+
+def input_task_range() -> Tuple[int, int]:
+    """
+    输入任务ID范围
+    
+    Returns:
+        Tuple[int, int]: (起始ID, 结束ID)
+    """
+    while True:
+        start_id = input_number(
+            "起始任务ID:",
+            min_value=1
+        )
+        
+        end_id = input_number(
+            "结束任务ID:",
+            min_value=start_id
+        )
+        
+        if start_id <= end_id:
+            return (int(start_id), int(end_id))
+        else:
+            console.print("[red]✗ 起始ID必须小于或等于结束ID[/red]")
+
+
+def select_task_type_for_predict() -> Optional[str]:
+    """
+    选择预测任务类型
+    
+    Returns:
+        Optional[str]: 任务类型 (None表示自动推断, 或 'detect'/'segment'/'pose'/'classify')
+    """
+    choices = [
+        "自动推断（从模型推断）",
+        "检测 (detect)",
+        "分割 (segment)",
+        "姿态估计 (pose)",
+        "分类 (classify)",
+    ]
+    
+    result = select_option("任务类型:", choices)
+    
+    if "自动推断" in result:
+        return None
+    elif "检测" in result:
+        return 'detect'
+    elif "分割" in result:
+        return 'segment'
+    elif "姿态" in result:
+        return 'pose'
+    else:
+        return 'classify'

@@ -233,6 +233,7 @@ class LabelStudioUploader:
         
         kpt_count = len(kpt_data) // 3
         
+        visible_count = 0
         for i in range(kpt_count):
             kp_x = kpt_data[i * 3]
             kp_y = kpt_data[i * 3 + 1]
@@ -240,14 +241,15 @@ class LabelStudioUploader:
             
             # 只上传可见或遮挡的关键点
             if kp_v > 0:
+                visible_count += 1
                 kp_label = self.keypoint_names[i] if i < len(self.keypoint_names) else f'kp_{i+1}'
                 keypoints.append({
-                    "original_width": img_width,
-                    "original_height": img_height,
+                    "original_width": int(img_width),
+                    "original_height": int(img_height),
                     "image_rotation": 0,
                     "value": {
-                        "x": kp_x * 100,  # 转换为百分比
-                        "y": kp_y * 100,
+                        "x": float(kp_x * 100),  # 转换为百分比
+                        "y": float(kp_y * 100),
                         "width": 0.5,  # 关键点显示大小
                         "keypointlabels": [kp_label]
                     },
@@ -255,6 +257,11 @@ class LabelStudioUploader:
                     "to_name": "image",
                     "type": "keypointlabels"
                 })
+        
+        if visible_count == 0:
+            print_warning(f"警告：{kpt_count}个关键点全部不可见 (visibility=0)")
+        else:
+            print_info(f"转换pose标注: {visible_count}/{kpt_count} 个可见关键点")
         
         return keypoints
     
@@ -273,14 +280,14 @@ class LabelStudioUploader:
         if len(coords) == 4:
             # 检测格式
             x_center, y_center, width, height = coords
-            x = (x_center - width / 2) * 100
-            y = (y_center - height / 2) * 100
-            w = width * 100
-            h = height * 100
+            x = float((x_center - width / 2) * 100)
+            y = float((y_center - height / 2) * 100)
+            w = float(width * 100)
+            h = float(height * 100)
             
             return {
-                "original_width": img_width,
-                "original_height": img_height,
+                "original_width": int(img_width),
+                "original_height": int(img_height),
                 "image_rotation": 0,
                 "value": {
                     "x": x,
@@ -299,11 +306,11 @@ class LabelStudioUploader:
             points = []
             for i in range(0, len(coords), 2):
                 if i + 1 < len(coords):
-                    points.append([coords[i] * 100, coords[i+1] * 100])
+                    points.append([float(coords[i] * 100), float(coords[i+1] * 100)])
             
             return {
-                "original_width": img_width,
-                "original_height": img_height,
+                "original_width": int(img_width),
+                "original_height": int(img_height),
                 "image_rotation": 0,
                 "value": {
                     "points": points,
@@ -904,4 +911,700 @@ class LabelStudioUploader:
         except Exception as e:
             print_error(f"✗ 验证异常: {str(e)}")
             return False
+    
+    def get_tasks_by_ids(self, task_ids: List[int]) -> List[Dict]:
+        """
+        从Label Studio获取指定ID的任务
+        
+        Args:
+            task_ids: 任务ID列表
+            
+        Returns:
+            List[Dict]: 任务数据列表
+        """
+        if not task_ids:
+            return []
+        
+        tasks = []
+        for task_id in task_ids:
+            try:
+                # 使用单个任务API获取
+                url = f"{self.url}/api/tasks/{task_id}/"
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    task = response.json()
+                    tasks.append(task)
+                elif response.status_code == 404:
+                    print_warning(f"任务 #{task_id} 不存在")
+                else:
+                    print_warning(f"获取任务 #{task_id} 失败: {response.status_code}")
+                    
+            except Exception as e:
+                print_warning(f"获取任务 #{task_id} 异常: {str(e)}")
+                continue
+        
+        return tasks
+    
+    def get_tasks_by_range(self, start_id: int, end_id: int) -> List[Dict]:
+        """
+        获取指定ID范围的任务
+        
+        对于小范围（<=50个ID），逐个获取任务
+        对于大范围，使用分页获取所有任务后过滤
+        
+        Args:
+            start_id: 起始ID
+            end_id: 结束ID
+            
+        Returns:
+            List[Dict]: 任务数据列表
+        """
+        range_size = end_id - start_id + 1
+        
+        # 对于小范围，逐个获取（更精确）
+        if range_size <= 50:
+            task_ids = list(range(start_id, end_id + 1))
+            return self.get_tasks_by_ids(task_ids)
+        
+        # 对于大范围，使用分页获取并过滤
+        url = f"{self.url}/api/projects/{self.project_id}/tasks"
+        all_tasks = []
+        page = 1
+        page_size = 100
+        
+        try:
+            while True:
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params={'page': page, 'page_size': page_size},
+                    timeout=30
+                )
+                
+                if response.status_code != 200:
+                    print_error(f"获取任务失败: {response.status_code}")
+                    break
+                
+                data = response.json()
+                
+                # 处理不同的响应格式
+                if isinstance(data, dict):
+                    tasks = data.get('results', data.get('tasks', []))
+                elif isinstance(data, list):
+                    tasks = data
+                else:
+                    break
+                
+                if not tasks:
+                    break
+                
+                # 过滤在范围内的任务
+                for task in tasks:
+                    task_id = task.get('id')
+                    if task_id and start_id <= task_id <= end_id:
+                        all_tasks.append(task)
+                
+                # 检查是否还有更多页
+                if isinstance(data, dict):
+                    # 如果最后一个任务的ID已经超过end_id，停止
+                    if tasks and tasks[-1].get('id', 0) > end_id:
+                        break
+                    # 检查是否还有下一页
+                    if not data.get('next'):
+                        break
+                else:
+                    break
+                
+                page += 1
+            
+            return all_tasks
+            
+        except Exception as e:
+            print_error(f"获取任务范围异常: {str(e)}")
+            return []
+    
+    def get_unlabeled_tasks(self) -> List[Dict]:
+        """
+        获取所有未标注的任务
+        
+        Returns:
+            List[Dict]: 未标注任务列表
+        """
+        url = f"{self.url}/api/projects/{self.project_id}/tasks"
+        all_tasks = []
+        page = 1
+        page_size = 100
+        
+        try:
+            while True:
+                # 尝试使用过滤参数
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params={
+                        'page': page,
+                        'page_size': page_size,
+                        # 尝试不同的过滤方式
+                        # 'filter': 'tasks:annotations_results=0'
+                    },
+                    timeout=30
+                )
+                
+                if response.status_code != 200:
+                    print_error(f"获取任务失败: {response.status_code}")
+                    break
+                
+                data = response.json()
+                
+                # 处理不同的响应格式
+                if isinstance(data, dict):
+                    tasks = data.get('results', data.get('tasks', []))
+                elif isinstance(data, list):
+                    tasks = data
+                else:
+                    break
+                
+                if not tasks:
+                    break
+                
+                # 过滤未标注的任务（没有annotations或annotations为空）
+                for task in tasks:
+                    annotations = task.get('annotations', [])
+                    # 只有当annotations为空或None时才认为是未标注
+                    if not annotations:
+                        all_tasks.append(task)
+                
+                # 检查是否还有更多页
+                if isinstance(data, dict):
+                    if not data.get('next'):
+                        break
+                else:
+                    break
+                
+                page += 1
+            
+            return all_tasks
+            
+        except Exception as e:
+            print_error(f"获取未标注任务异常: {str(e)}")
+            return []
+    
+    def download_task_image(self, task: Dict, temp_dir: Path) -> Optional[Path]:
+        """
+        下载任务图片到临时目录
+        
+        Args:
+            task: 任务数据字典
+            temp_dir: 临时目录路径
+            
+        Returns:
+            Optional[Path]: 下载后的图片路径，失败返回None
+        """
+        try:
+            # 从任务数据中提取图片URL
+            data = task.get('data', {})
+            image_url = data.get('image')
+            
+            if not image_url:
+                print_warning(f"任务 #{task.get('id')} 没有图片URL")
+                return None
+            
+            # 处理不同类型的图片URL
+            # 1. 相对路径: /data/upload/xxx.jpg
+            # 2. 完整URL: http://domain.com/data/upload/xxx.jpg
+            # 3. 本地文件路径: /path/to/image.jpg
+            
+            if image_url.startswith('http://') or image_url.startswith('https://'):
+                # 完整URL，直接下载
+                download_url = image_url
+            elif image_url.startswith('/'):
+                # 相对路径，构造完整URL
+                download_url = f"{self.url}{image_url}"
+            else:
+                # 其他情况，尝试构造URL
+                download_url = f"{self.url}/{image_url}"
+            
+            # 生成本地文件名
+            task_id = task.get('id', 'unknown')
+            # 从URL中提取文件扩展名
+            if '.' in image_url:
+                ext = image_url.rsplit('.', 1)[-1].split('?')[0]  # 去除查询参数
+                if ext.lower() in ['jpg', 'jpeg', 'png', 'bmp', 'gif']:
+                    filename = f"task_{task_id}.{ext}"
+                else:
+                    filename = f"task_{task_id}.jpg"
+            else:
+                filename = f"task_{task_id}.jpg"
+            
+            local_path = temp_dir / filename
+            
+            # 下载图片
+            response = requests.get(
+                download_url,
+                headers={'Authorization': self.headers['Authorization']},
+                timeout=60,
+                stream=True
+            )
+            
+            if response.status_code == 200:
+                # 保存到本地
+                with open(local_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return local_path
+            else:
+                print_warning(f"下载图片失败 (任务 #{task_id}): {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print_warning(f"下载任务 #{task.get('id')} 图片时出错: {str(e)}")
+            return None
+    
+    def yolo_result_to_labelstudio_format(self, result, task_type: str) -> List[Dict]:
+        """
+        将YOLO预测结果转换为Label Studio格式
+        
+        Args:
+            result: YOLO Results对象
+            task_type: 任务类型 (detect/segment/pose/classify)
+            
+        Returns:
+            List[Dict]: Label Studio格式的预测结果列表
+        """
+        predictions = []
+        img_width, img_height = result.orig_shape[1], result.orig_shape[0]
+        
+        # 调试信息
+        print_info(f"开始转换预测结果 (任务类型: {task_type}, 图片尺寸: {img_width}x{img_height})")
+        print_info(f"模型类别数: {len(self.classes)}, 类别: {self.classes if len(self.classes) <= 5 else self.classes[:5] + ['...']}")
+        
+        try:
+            if task_type == 'detect':
+                # 检测任务：转换bbox
+                if hasattr(result, 'boxes') and result.boxes is not None:
+                    boxes = result.boxes
+                    for box in boxes:
+                        class_id = int(box.cls[0])
+                        if class_id < len(self.classes):
+                            pred = self._yolo_to_labelstudio_bbox(
+                                [class_id, *box.xywhn[0].cpu().numpy().tolist()],
+                                img_width,
+                                img_height
+                            )
+                            predictions.append(pred)
+            
+            elif task_type == 'segment':
+                # 分割任务：转换多边形
+                if hasattr(result, 'masks') and result.masks is not None:
+                    boxes = result.boxes
+                    masks = result.masks
+                    
+                    for box, mask in zip(boxes, masks):
+                        class_id = int(box.cls[0])
+                        if class_id < len(self.classes):
+                            # 获取mask的轮廓点
+                            if hasattr(mask, 'xy') and len(mask.xy) > 0:
+                                # mask.xy是归一化的坐标点
+                                points = mask.xy[0]  # 取第一个轮廓
+                                # 构造YOLO格式: [class_id, x1, y1, x2, y2, ...]
+                                yolo_anno = [class_id]
+                                for point in points:
+                                    yolo_anno.extend([point[0] / img_width, point[1] / img_height])
+                                
+                                pred = self._yolo_to_labelstudio_bbox(
+                                    yolo_anno,
+                                    img_width,
+                                    img_height
+                                )
+                                predictions.append(pred)
+            
+            elif task_type == 'pose':
+                # 姿态估计：转换关键点和bbox
+                if hasattr(result, 'keypoints') and result.keypoints is not None:
+                    keypoints = result.keypoints.xy.cpu().numpy()  # [N, num_kpts, 2]
+                    keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None
+                    boxes = result.boxes
+                    
+                    print_info(f"检测到 {len(boxes)} 个目标")
+                    
+                    for idx, (kp, box) in enumerate(zip(keypoints, boxes)):
+                        class_id = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        print_info(f"  目标 {idx+1}: class_id={class_id}, conf={conf:.2%}, classes数量={len(self.classes)}")
+                        
+                        if class_id < len(self.classes):
+                            print_info(f"    ✓ 类别有效: {self.classes[class_id]}")
+                            # 1. 添加bbox（RectangleLabels）
+                            xyxy = box.xyxy[0].cpu().numpy()
+                            x_center = ((xyxy[0] + xyxy[2]) / 2) / img_width
+                            y_center = ((xyxy[1] + xyxy[3]) / 2) / img_height
+                            width = (xyxy[2] - xyxy[0]) / img_width
+                            height = (xyxy[3] - xyxy[1]) / img_height
+                            
+                            # 添加bbox标注
+                            bbox_anno = [class_id, x_center, y_center, width, height]
+                            bbox_pred = self._yolo_to_labelstudio_bbox(
+                                bbox_anno,
+                                img_width,
+                                img_height
+                            )
+                            if bbox_pred:
+                                # 添加置信度
+                                bbox_pred['score'] = float(box.conf[0])
+                                predictions.append(bbox_pred)
+                            
+                            # 2. 添加关键点（KeyPointLabels）
+                            # 构建YOLO格式标注
+                            yolo_anno = [class_id, x_center, y_center, width, height]
+                            
+                            # 添加关键点
+                            kpts_conf = keypoints_conf[idx] if keypoints_conf is not None else None
+                            for kpt_idx, (kpt_x, kpt_y) in enumerate(kp):
+                                # 归一化坐标
+                                norm_x = kpt_x / img_width
+                                norm_y = kpt_y / img_height
+                                
+                                # visibility
+                                if kpts_conf is not None:
+                                    conf_val = kpts_conf[kpt_idx]
+                                    if conf_val < 0.3:
+                                        visibility = 0
+                                    elif conf_val < 0.7:
+                                        visibility = 1
+                                    else:
+                                        visibility = 2
+                                else:
+                                    visibility = 2 if kpt_x > 0 and kpt_y > 0 else 0
+                                
+                                yolo_anno.extend([norm_x, norm_y, visibility])
+                            
+                            # 转换为Label Studio格式
+                            keypoint_preds = self._yolo_to_labelstudio_pose(
+                                yolo_anno,
+                                img_width,
+                                img_height
+                            )
+                            if keypoint_preds:
+                                predictions.extend(keypoint_preds)
+                            else:
+                                print_warning(f"警告：关键点转换结果为空 (类别: {self.classes[class_id] if class_id < len(self.classes) else class_id})")
+                        else:
+                            # class_id越界
+                            print_warning(f"    ✗ 跳过：class_id={class_id} 超出范围 (classes数量: {len(self.classes)})")
+            
+            elif task_type == 'classify':
+                # 分类任务
+                if hasattr(result, 'probs') and result.probs is not None:
+                    probs = result.probs
+                    top_idx = probs.top1
+                    top_conf = probs.top1conf
+                    
+                    if top_idx < len(self.classes):
+                        # 分类格式（Label Studio的Choices）
+                        pred = {
+                            "original_width": int(img_width),
+                            "original_height": int(img_height),
+                            "image_rotation": 0,
+                            "value": {
+                                "choices": [self.classes[int(top_idx)]]
+                            },
+                            "from_name": "choice",
+                            "to_name": "image",
+                            "type": "choices",
+                            "score": float(top_conf)
+                        }
+                        predictions.append(pred)
+        
+        except Exception as e:
+            print_warning(f"转换预测结果时出错: {str(e)}")
+        
+        return predictions
+    
+    def upload_prediction(self, task_id: int, predictions: List[Dict], overwrite: bool = True) -> bool:
+        """
+        上传预测结果到Label Studio
+        
+        Args:
+            task_id: 任务ID
+            predictions: 预测结果列表（Label Studio格式）
+            overwrite: 是否覆盖已有predictions
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 如果需要覆盖，先获取并删除已有的predictions
+            if overwrite:
+                # 获取任务的现有predictions
+                get_url = f"{self.url}/api/tasks/{task_id}/predictions"
+                response = requests.get(
+                    get_url,
+                    headers=self.headers,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    existing_preds = response.json()
+                    # 删除所有现有predictions
+                    for pred in existing_preds:
+                        pred_id = pred.get('id')
+                        if pred_id:
+                            delete_url = f"{self.url}/api/predictions/{pred_id}"
+                            requests.delete(delete_url, headers=self.headers, timeout=10)
+            
+            # 创建新的prediction
+            create_url = f"{self.url}/api/predictions/"
+            
+            # 计算平均置信度
+            avg_score = 0.0
+            if predictions:
+                scores = [p.get('score', p.get('value', {}).get('score', 0.5)) for p in predictions]
+                avg_score = sum(scores) / len(scores) if scores else 0.5
+            
+            prediction_data = {
+                "task": task_id,
+                "result": predictions,
+                "score": float(avg_score),
+                "model_version": "yolocli_local_model"
+            }
+            
+            # 调试信息：打印上传的数据
+            if not predictions:
+                print_warning(f"任务 #{task_id}: predictions为空列表，跳过上传")
+                return False
+            
+            # 打印第一个prediction的结构（用于调试）
+            import json
+            print_info(f"任务 #{task_id}: 上传 {len(predictions)} 个predictions")
+            if predictions:
+                print_info(f"  第一个prediction示例: {json.dumps(predictions[0], indent=2, ensure_ascii=False)[:300]}...")
+            
+            response = requests.post(
+                create_url,
+                headers=self.headers,
+                json=prediction_data,
+                timeout=30
+            )
+            
+            if response.status_code in [200, 201]:
+                return True
+            else:
+                print_warning(f"上传prediction失败 (任务 #{task_id}): {response.status_code} - {response.text[:200]}")
+                return False
+                
+        except Exception as e:
+            print_warning(f"上传prediction异常 (任务 #{task_id}): {str(e)}")
+            return False
+    
+    def predict_tasks_with_yolo(
+        self,
+        model_path: Path,
+        task_ids: Optional[List[int]] = None,
+        task_range: Optional[Tuple[int, int]] = None,
+        unlabeled: bool = False,
+        task_type: Optional[str] = None,
+        conf: float = 0.25,
+        iou: float = 0.45,
+        device: str = 'auto',
+        max_workers: int = 4
+    ) -> Tuple[int, int]:
+        """
+        使用YOLO模型预测Label Studio任务
+        
+        Args:
+            model_path: YOLO模型路径
+            task_ids: 任务ID列表
+            task_range: 任务ID范围 (start, end)
+            unlabeled: 是否预测所有未标注任务
+            task_type: 任务类型（None则自动推断）
+            conf: 置信度阈值
+            iou: IOU阈值
+            device: 设备
+            max_workers: 最大并发数
+            
+        Returns:
+            Tuple[int, int]: (成功数, 失败数)
+        """
+        from ultralytics import YOLO
+        from ..core.utils import detect_device, get_device_name, parse_model_name
+        from ..ui.display import create_progress_bar
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import tempfile
+        import shutil
+        import threading
+        
+        # 获取任务列表
+        print_info("\n获取任务列表...")
+        if task_ids:
+            tasks = self.get_tasks_by_ids(task_ids)
+            filter_desc = f"任务ID: {', '.join(map(str, task_ids[:5]))}" + ('...' if len(task_ids) > 5 else '')
+        elif task_range:
+            tasks = self.get_tasks_by_range(task_range[0], task_range[1])
+            filter_desc = f"ID范围: {task_range[0]}-{task_range[1]}"
+        elif unlabeled:
+            tasks = self.get_unlabeled_tasks()
+            filter_desc = "所有未标注任务"
+        else:
+            print_error("未指定任务筛选条件")
+            return (0, 0)
+        
+        if not tasks:
+            print_warning("未找到符合条件的任务")
+            return (0, 0)
+        
+        print_success(f"✓ 找到 {len(tasks)} 个任务 ({filter_desc})")
+        
+        # 创建临时目录
+        temp_dir = Path(tempfile.mkdtemp(prefix='yolocli_ls_predict_'))
+        
+        try:
+            # 加载模型
+            print_info("\n加载模型...")
+            yolo_model = YOLO(str(model_path))
+            
+            # 确定任务类型
+            if task_type:
+                actual_task = task_type
+                print_info(f"使用指定任务类型: {actual_task}")
+            else:
+                # 自动推断
+                actual_task = getattr(yolo_model, 'task', None)
+                if actual_task:
+                    print_info(f"从模型推断任务类型: {actual_task}")
+                else:
+                    _, actual_task = parse_model_name(model_path.name)
+                    print_info(f"从文件名推断任务类型: {actual_task}")
+            
+            self.task_type = actual_task
+            
+            # 设置类别名称（从模型获取）
+            if hasattr(yolo_model, 'names'):
+                self.classes = list(yolo_model.names.values())
+                print_info(f"模型类别: {len(self.classes)} 个 ({', '.join(self.classes[:3])}{'...' if len(self.classes) > 3 else ''})")
+            else:
+                print_warning("警告：无法从模型获取类别信息")
+                self.classes = []
+            
+            # 设置关键点名称（如果是pose任务）
+            if actual_task == 'pose':
+                if hasattr(yolo_model.model, 'kpt_shape') and yolo_model.model.kpt_shape:
+                    num_kpts = yolo_model.model.kpt_shape[0]
+                    # 尝试获取关键点名称
+                    if hasattr(yolo_model.model, 'names'):
+                        self.keypoint_names = getattr(yolo_model.model, 'keypoint_names', None)
+                    if not hasattr(self, 'keypoint_names') or not self.keypoint_names:
+                        # 使用默认名称
+                        self.keypoint_names = [f'kp_{i+1}' for i in range(num_kpts)]
+                    print_info(f"关键点数量: {num_kpts} 个")
+                else:
+                    print_warning("警告：无法获取关键点信息")
+                    self.keypoint_names = []
+            
+            # 自动检测设备
+            if device == 'auto':
+                device = detect_device()
+            
+            print_info(f"模型: {model_path.name}")
+            print_info(f"任务类型: {actual_task.upper()}")
+            print_info(f"设备: {get_device_name(device)}")
+            print_info(f"置信度阈值: {conf}")
+            if actual_task != 'classify':
+                print_info(f"IOU阈值: {iou}")
+            
+            # 并发处理任务
+            print_info(f"\n开始预测（并发数: {max_workers}）...")
+            
+            success_count = 0
+            failed_count = 0
+            lock = threading.Lock()
+            
+            def process_single_task(task):
+                """处理单个任务"""
+                task_id = task.get('id')
+                
+                try:
+                    # 1. 下载图片
+                    image_path = self.download_task_image(task, temp_dir)
+                    if not image_path:
+                        return False, f"任务 #{task_id}: 图片下载失败"
+                    
+                    # 2. YOLO预测
+                    predict_kwargs = {
+                        'source': str(image_path),
+                        'device': device,
+                        'verbose': False,
+                    }
+                    
+                    if actual_task != 'classify':
+                        predict_kwargs['conf'] = conf
+                        predict_kwargs['iou'] = iou
+                    
+                    results = yolo_model.predict(**predict_kwargs)
+                    
+                    if not results:
+                        return False, f"任务 #{task_id}: 预测失败"
+                    
+                    # 3. 转换为Label Studio格式
+                    result = results[0]
+                    predictions = self.yolo_result_to_labelstudio_format(result, actual_task)
+                    
+                    # 4. 上传predictions
+                    if self.upload_prediction(task_id, predictions, overwrite=True):
+                        obj_count = len(predictions)
+                        return True, f"任务 #{task_id}: 预测完成 ({obj_count} 个目标)"
+                    else:
+                        return False, f"任务 #{task_id}: 上传失败"
+                    
+                except Exception as e:
+                    return False, f"任务 #{task_id}: 处理异常 - {str(e)}"
+            
+            # 使用线程池并发处理
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with create_progress_bar() as progress:
+                    task_progress = progress.add_task("预测进度", total=len(tasks))
+                    
+                    # 提交所有任务
+                    futures = {
+                        executor.submit(process_single_task, task): task
+                        for task in tasks
+                    }
+                    
+                    # 处理完成的任务
+                    for future in as_completed(futures):
+                        try:
+                            success, message = future.result()
+                            
+                            with lock:
+                                if success:
+                                    success_count += 1
+                                    # 每10个显示一次进度
+                                    if success_count % 10 == 0 or success_count == len(tasks):
+                                        print_success(f"✓ 进度: 已成功上传 {success_count}/{len(tasks)} 个任务")
+                                else:
+                                    failed_count += 1
+                                    print_warning(f"✗ {message}")
+                                
+                                progress.update(task_progress, advance=1)
+                        
+                        except Exception as e:
+                            with lock:
+                                failed_count += 1
+                                progress.update(task_progress, advance=1)
+                                print_warning(f"✗ 任务异常: {str(e)}")
+            
+            return (success_count, failed_count)
+        
+        finally:
+            # 清理临时文件
+            try:
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                    print_info("\n临时文件已清理")
+            except Exception as e:
+                print_warning(f"清理临时文件失败: {str(e)}")
 

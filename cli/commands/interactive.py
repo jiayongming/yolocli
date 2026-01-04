@@ -754,6 +754,109 @@ def run_labelstudio_operations():
                     print_error(f"✗ {msg}")
                     continue
             
+            elif operation == 'predict':
+                # 使用本地模型预测任务
+                print_section_header("Label Studio 任务预测")
+                
+                # 确保有连接配置
+                if not default_url or not default_token:
+                    print_warning("请先配置Label Studio连接")
+                    continue
+                
+                # 输入模型路径
+                model_path = input_path("模型路径:", default="results/training/best.pt", must_exist=False)
+                if not Path(model_path).exists():
+                    print_error(f"模型不存在: {model_path}")
+                    continue
+                
+                # 输入项目ID
+                project_id = int(input_number("Label Studio项目ID:", min_value=1))
+                
+                # 选择任务类型
+                from ..ui.prompts import select_task_type_for_predict
+                task_type = select_task_type_for_predict()
+                
+                if task_type is None:
+                    print_info("ℹ 将从模型自动推断任务类型（推荐）")
+                
+                # 选择任务筛选方式
+                from ..ui.prompts import select_task_filter_mode, input_task_ids, input_task_range
+                filter_mode = select_task_filter_mode()
+                
+                task_ids = None
+                task_range = None
+                unlabeled = False
+                
+                if filter_mode == 'ids':
+                    task_ids = input_task_ids()
+                    filter_desc = f"任务ID: {', '.join(map(str, task_ids[:5]))}" + ('...' if len(task_ids) > 5 else '')
+                elif filter_mode == 'range':
+                    task_range = input_task_range()
+                    filter_desc = f"ID范围: {task_range[0]}-{task_range[1]}"
+                else:  # unlabeled
+                    unlabeled = True
+                    filter_desc = "所有未标注任务"
+                    print_info("ℹ 将预测项目中所有未标注的任务")
+                
+                # 配置预测参数
+                console.print()
+                print_info("配置预测参数:")
+                conf = float(input_text("置信度阈值:", default="0.25"))
+                iou = float(input_text("IOU阈值:", default="0.45"))
+                device_choice = select_device()
+                max_workers = int(input_number("最大并发数:", default=4, min_value=1, max_value=16))
+                
+                # 显示预测配置
+                console.print()
+                print_info("预测配置:")
+                print_info(f"  模型: {model_path}")
+                print_info(f"  Label Studio项目: {project_id}")
+                print_info(f"  任务类型: {task_type or '自动推断'}")
+                print_info(f"  任务筛选: {filter_desc}")
+                print_info(f"  置信度阈值: {conf}")
+                print_info(f"  IOU阈值: {iou}")
+                print_info(f"  设备: {device_choice}")
+                print_info(f"  并发数: {max_workers}")
+                console.print()
+                
+                if not confirm_action("确认开始预测?", default=True):
+                    continue
+                
+                # 执行预测
+                try:
+                    from ..integrations.labelstudio_uploader import LabelStudioUploader
+                    
+                    uploader = LabelStudioUploader(default_url, default_token, project_id, task_type=task_type or 'detect')
+                    
+                    print_info("\n连接到 Label Studio...")
+                    if not uploader.test_connection():
+                        print_error("连接失败，请检查URL和API密钥")
+                        continue
+                    
+                    # 执行预测
+                    print_info("\n开始预测...")
+                    success, failed = uploader.predict_tasks_with_yolo(
+                        model_path=Path(model_path),
+                        task_ids=task_ids,
+                        task_range=task_range,
+                        unlabeled=unlabeled,
+                        task_type=task_type,
+                        conf=conf,
+                        iou=iou,
+                        device=device_choice,
+                        max_workers=max_workers
+                    )
+                    
+                    print_section_header("预测完成")
+                    print_success(f"成功: {success} 个任务")
+                    if failed > 0:
+                        print_error(f"失败: {failed} 个任务")
+                
+                except Exception as e:
+                    print_error(f"预测失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+            
             elif operation == 'upload':
                 # 上传数据集到Label Studio
                 print_section_header("上传数据集到Label Studio")
