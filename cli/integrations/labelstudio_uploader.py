@@ -44,6 +44,7 @@ class LabelStudioUploader:
         self.headers = self._get_auth_headers(self.api_key)
         self.classes = []
         self.keypoint_names = []  # pose任务的关键点名称
+        self.keypoint_from_name = "keypoint"  # KeyPointLabels 控件的 name 属性
     
     def _decode_jwt_payload(self, token: str) -> Optional[Dict]:
         """解码JWT token payload"""
@@ -112,6 +113,61 @@ class LabelStudioUploader:
             headers['Authorization'] = f'Token {token}'
         
         return headers
+    
+    def get_project_keypoint_labels(self) -> Tuple[List[str], str]:
+        """
+        从 Label Studio 项目配置中获取关键点标签名称和控件名称
+        
+        Returns:
+            Tuple[List[str], str]: (关键点标签名称列表, KeyPointLabels的name属性)
+        """
+        try:
+            # 获取项目信息
+            response = requests.get(
+                f"{self.url}/api/projects/{self.project_id}",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                return [], "keypoint"
+            
+            project = response.json()
+            label_config = project.get('label_config', '')
+            
+            if not label_config:
+                return [], "keypoint"
+            
+            # 解析 XML 配置中的 KeyPointLabels
+            import re
+            # 先找到 <KeyPointLabels> ... </KeyPointLabels> 块
+            keypoint_block_pattern = r'<KeyPointLabels[^>]*>.*?</KeyPointLabels>'
+            keypoint_blocks = re.findall(keypoint_block_pattern, label_config, re.DOTALL)
+            
+            if not keypoint_blocks:
+                return [], "keypoint"
+            
+            keypoint_block = keypoint_blocks[0]
+            
+            # 提取 KeyPointLabels 的 name 属性
+            name_pattern = r'<KeyPointLabels[^>]*name=["\']([^"\']+)["\']'
+            name_match = re.search(name_pattern, keypoint_block)
+            control_name = name_match.group(1) if name_match else "keypoint"
+            
+            # 在 KeyPointLabels 块中提取所有 <Label value="xxx"/> 标签
+            label_pattern = r'<Label\s+value="([^"]+)"'
+            matches = re.findall(label_pattern, keypoint_block)
+            
+            if matches:
+                print_info(f"从 Label Studio 项目获取到关键点标签: {matches}")
+                print_info(f"KeyPointLabels 控件名称: {control_name}")
+                return matches, control_name
+            
+            return [], control_name
+            
+        except Exception as e:
+            print_warning(f"无法从项目获取关键点标签: {str(e)}")
+            return [], "keypoint"
     
     def test_connection(self) -> bool:
         """测试连接"""
@@ -244,18 +300,18 @@ class LabelStudioUploader:
                 visible_count += 1
                 kp_label = self.keypoint_names[i] if i < len(self.keypoint_names) else f'kp_{i+1}'
                 keypoints.append({
-                    "original_width": int(img_width),
-                    "original_height": int(img_height),
-                    "image_rotation": 0,
+                    "type": "keypointlabels",
                     "value": {
                         "x": float(kp_x * 100),  # 转换为百分比
                         "y": float(kp_y * 100),
                         "width": 0.5,  # 关键点显示大小
-                        "keypointlabels": [kp_label]
+                        "keypointlabels": [kp_label]  # ✓ 正确：使用 keypointlabels
                     },
-                    "from_name": "keypoint",
                     "to_name": "image",
-                    "type": "keypointlabels"
+                    "from_name": self.keypoint_from_name,  # 使用从项目配置获取的控件名称
+                    "original_width": int(img_width),
+                    "original_height": int(img_height),
+                    "image_rotation": 0
                 })
         
         return keypoints
@@ -1174,11 +1230,26 @@ class LabelStudioUploader:
         predictions = []
         img_width, img_height = result.orig_shape[1], result.orig_shape[0]
         
+        # 调试信息：显示检测结果统计
+        debug_info = []
+        if hasattr(result, 'boxes') and result.boxes is not None:
+            debug_info.append(f"检测到 {len(result.boxes)} 个边界框")
+        if hasattr(result, 'masks') and result.masks is not None:
+            debug_info.append(f"检测到 {len(result.masks)} 个mask")
+        if hasattr(result, 'keypoints') and result.keypoints is not None:
+            debug_info.append(f"检测到 {len(result.keypoints)} 组关键点")
+        if hasattr(result, 'probs') and result.probs is not None:
+            debug_info.append(f"分类结果: top1={result.probs.top1}, conf={result.probs.top1conf:.2f}")
+        
+        if not debug_info:
+            print_warning(f"⚠ YOLO未检测到任何对象 (任务类型: {task_type})")
+        
         try:
             if task_type == 'detect':
                 # 检测任务：转换bbox
                 if hasattr(result, 'boxes') and result.boxes is not None:
                     boxes = result.boxes
+                    skipped_count = 0
                     for box in boxes:
                         class_id = int(box.cls[0])
                         if class_id < len(self.classes):
@@ -1188,6 +1259,11 @@ class LabelStudioUploader:
                                 img_height
                             )
                             predictions.append(pred)
+                        else:
+                            skipped_count += 1
+                    
+                    if skipped_count > 0:
+                        print_warning(f"⚠ 跳过 {skipped_count} 个对象 (class_id >= {len(self.classes)}, classes: {self.classes})")
             
             elif task_type == 'segment':
                 # 分割任务：转换多边形
@@ -1195,6 +1271,7 @@ class LabelStudioUploader:
                     boxes = result.boxes
                     masks = result.masks
                     
+                    skipped_count = 0
                     for box, mask in zip(boxes, masks):
                         class_id = int(box.cls[0])
                         if class_id < len(self.classes):
@@ -1213,6 +1290,11 @@ class LabelStudioUploader:
                                     img_height
                                 )
                                 predictions.append(pred)
+                        else:
+                            skipped_count += 1
+                    
+                    if skipped_count > 0:
+                        print_warning(f"⚠ 跳过 {skipped_count} 个对象 (class_id >= {len(self.classes)}, classes: {self.classes})")
             
             elif task_type == 'pose':
                 # 姿态估计：转换关键点和bbox
@@ -1221,6 +1303,7 @@ class LabelStudioUploader:
                     keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None
                     boxes = result.boxes
                     
+                    skipped_count = 0
                     for idx, (kp, box) in enumerate(zip(keypoints, boxes)):
                         class_id = int(box.cls[0])
                         
@@ -1277,6 +1360,12 @@ class LabelStudioUploader:
                             )
                             if keypoint_preds:
                                 predictions.extend(keypoint_preds)
+                        else:
+                            skipped_count += 1
+                    
+                    # 如果有被跳过的对象，打印警告
+                    if skipped_count > 0:
+                        print_warning(f"⚠ 跳过 {skipped_count} 个对象 (class_id >= {len(self.classes)}, classes: {self.classes})")
             
             elif task_type == 'classify':
                 # 分类任务
@@ -1304,9 +1393,18 @@ class LabelStudioUploader:
         except Exception as e:
             print_warning(f"转换预测结果时出错: {str(e)}")
         
+        # 调试信息：显示转换结果统计
+        if not predictions and debug_info:
+            print_warning(f"⚠ 虽然检测到对象({', '.join(debug_info)})，但转换后predictions为空")
+            print_warning(f"   可能原因: class_id超出范围 (self.classes长度: {len(self.classes)})")
+            if task_type == 'pose':
+                print_warning(f"   或关键点配置问题 (self.keypoint_names长度: {len(self.keypoint_names)})")
+        elif predictions:
+            print_info(f"✓ 成功转换 {len(predictions)} 个predictions ({', '.join(debug_info)})")
+        
         return predictions
     
-    def upload_prediction(self, task_id: int, predictions: List[Dict], overwrite: bool = True) -> bool:
+    def upload_prediction(self, task_id: int, predictions: List[Dict], overwrite: bool = True) -> Tuple[bool, Optional[str]]:
         """
         上传预测结果到Label Studio
         
@@ -1316,7 +1414,7 @@ class LabelStudioUploader:
             overwrite: 是否覆盖已有predictions
             
         Returns:
-            bool: 是否成功
+            Tuple[bool, Optional[str]]: (是否成功, 错误信息)
         """
         try:
             # 如果需要覆盖，先获取并删除已有的predictions
@@ -1356,7 +1454,17 @@ class LabelStudioUploader:
             
             # 检查predictions是否为空
             if not predictions:
-                return False
+                error_msg = "predictions为空"
+                return False, error_msg
+            
+            # 调试：首次上传时显示prediction示例
+            if not hasattr(self, '_first_pred_shown') and self.task_type == 'pose':
+                # 对于pose任务，显示关键点prediction而不是bbox
+                keypoint_pred = next((p for p in predictions if p.get('type') == 'keypointlabels'), None)
+                if keypoint_pred:
+                    print_info(f"\n调试：关键点prediction示例 (任务 #{task_id}):")
+                    print_info(json.dumps(keypoint_pred, indent=2, ensure_ascii=False))
+                self._first_pred_shown = True
             
             response = requests.post(
                 create_url,
@@ -1366,14 +1474,37 @@ class LabelStudioUploader:
             )
             
             if response.status_code in [200, 201]:
-                return True
+                return True, None
             else:
-                print_warning(f"上传prediction失败 (任务 #{task_id}): {response.status_code} - {response.text[:200]}")
-                return False
+                # 构建详细错误信息
+                error_msg = f"HTTP {response.status_code}: {response.text}"
+                
+                print_error(f"✗ 上传prediction失败 (任务 #{task_id})")
+                print_error(f"   状态码: {response.status_code}")
+                print_error(f"   响应: {response.text}")
+                print_info(f"   发送的predictions数量: {len(predictions)}")
+                
+                # 显示第一个prediction的详细信息
+                if predictions:
+                    print_info(f"   第一个prediction类型: {predictions[0].get('type', 'unknown')}")
+                    if predictions[0].get('type') == 'keypointlabels':
+                        print_info(f"   from_name: {predictions[0].get('from_name', 'N/A')}")
+                        print_info(f"   labels: {predictions[0].get('value', {}).get('labels', 'N/A')}")
+                        print_info(f"   完整JSON: {json.dumps(predictions[0], indent=2, ensure_ascii=False)}")
+                
+                return False, error_msg
                 
         except Exception as e:
-            print_warning(f"上传prediction异常 (任务 #{task_id}): {str(e)}")
-            return False
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            
+            print_error(f"✗ 上传prediction异常 (任务 #{task_id})")
+            print_error(f"   异常类型: {type(e).__name__}")
+            print_error(f"   异常信息: {str(e)}")
+            import traceback
+            traceback_str = traceback.format_exc()
+            print_error(f"   堆栈跟踪: {traceback_str}")
+            
+            return False, f"{error_msg}\n{traceback_str}"
     
     def predict_tasks_with_yolo(
         self,
@@ -1468,12 +1599,30 @@ class LabelStudioUploader:
             if actual_task == 'pose':
                 if hasattr(yolo_model.model, 'kpt_shape') and yolo_model.model.kpt_shape:
                     num_kpts = yolo_model.model.kpt_shape[0]
-                    # 尝试获取关键点名称
-                    if hasattr(yolo_model.model, 'names'):
+                    
+                    # 优先从 Label Studio 项目配置中获取关键点名称
+                    print_info("正在从 Label Studio 项目获取关键点标签...")
+                    ls_keypoint_labels, ls_control_name = self.get_project_keypoint_labels()
+                    
+                    # 保存控件名称
+                    self.keypoint_from_name = ls_control_name
+                    
+                    if ls_keypoint_labels and len(ls_keypoint_labels) == num_kpts:
+                        # 使用 Label Studio 项目中定义的关键点标签
+                        self.keypoint_names = ls_keypoint_labels
+                        print_success(f"✓ 使用 Label Studio 项目关键点标签: {self.keypoint_names}")
+                    else:
+                        if ls_keypoint_labels:
+                            print_warning(f"Label Studio 关键点数量({len(ls_keypoint_labels)})与模型不匹配({num_kpts})，使用模型配置")
+                        
+                        # 尝试从模型获取关键点名称
                         self.keypoint_names = getattr(yolo_model.model, 'keypoint_names', None)
-                    if not hasattr(self, 'keypoint_names') or not self.keypoint_names:
-                        # 使用默认名称
-                        self.keypoint_names = [f'kp_{i+1}' for i in range(num_kpts)]
+                        
+                        if not self.keypoint_names:
+                            # 使用默认名称
+                            self.keypoint_names = [f'kp_{i+1}' for i in range(num_kpts)]
+                            print_info(f"使用默认关键点名称: {self.keypoint_names}")
+                    
                     print_info(f"关键点数量: {num_kpts} 个")
                 else:
                     print_warning("警告：无法获取关键点信息")
@@ -1495,6 +1644,7 @@ class LabelStudioUploader:
             
             success_count = 0
             failed_count = 0
+            failed_tasks = []  # 收集失败任务的详细信息
             lock = threading.Lock()
             
             def process_single_task(task):
@@ -1505,7 +1655,7 @@ class LabelStudioUploader:
                     # 1. 下载图片
                     image_path = self.download_task_image(task, temp_dir)
                     if not image_path:
-                        return False, f"任务 #{task_id}: 图片下载失败"
+                        return False, task_id, "图片下载失败", None
                     
                     # 2. YOLO预测
                     predict_kwargs = {
@@ -1521,21 +1671,29 @@ class LabelStudioUploader:
                     results = yolo_model.predict(**predict_kwargs)
                     
                     if not results:
-                        return False, f"任务 #{task_id}: 预测失败"
+                        return False, task_id, "YOLO预测返回空结果", None
                     
                     # 3. 转换为Label Studio格式
                     result = results[0]
                     predictions = self.yolo_result_to_labelstudio_format(result, actual_task)
                     
+                    # 如果predictions为空，标记为成功但跳过上传（没有检测到对象是正常的）
+                    if not predictions:
+                        return True, task_id, f"预测完成 (0 个目标，跳过上传)", None
+                    
                     # 4. 上传predictions
-                    if self.upload_prediction(task_id, predictions, overwrite=True):
+                    success, error_msg = self.upload_prediction(task_id, predictions, overwrite=True)
+                    if success:
                         obj_count = len(predictions)
-                        return True, f"任务 #{task_id}: 预测完成 ({obj_count} 个目标)"
+                        return True, task_id, f"预测完成 ({obj_count} 个目标)", None
                     else:
-                        return False, f"任务 #{task_id}: 上传失败"
+                        error_detail = f"Label Studio API错误:\n{error_msg}\n\nPrediction数据:\n{json.dumps(predictions[:2], indent=2, ensure_ascii=False) if predictions else 'N/A'}"
+                        return False, task_id, "上传到Label Studio失败", error_detail
                     
                 except Exception as e:
-                    return False, f"任务 #{task_id}: 处理异常 - {str(e)}"
+                    import traceback
+                    error_detail = f"{str(e)}\n{traceback.format_exc()}"
+                    return False, task_id, f"处理异常: {str(e)}", error_detail
             
             # 使用线程池并发处理
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1551,7 +1709,7 @@ class LabelStudioUploader:
                     # 处理完成的任务
                     for future in as_completed(futures):
                         try:
-                            success, message = future.result()
+                            success, task_id, message, detail = future.result()
                             
                             with lock:
                                 if success:
@@ -1561,15 +1719,60 @@ class LabelStudioUploader:
                                         print_success(f"✓ 进度: 已成功上传 {success_count}/{len(tasks)} 个任务")
                                 else:
                                     failed_count += 1
-                                    print_warning(f"✗ {message}")
+                                    failed_tasks.append({
+                                        'task_id': task_id,
+                                        'reason': message,
+                                        'detail': detail
+                                    })
+                                    print_warning(f"✗ 任务 #{task_id}: {message}")
                                 
                                 progress.update(task_progress, advance=1)
                         
                         except Exception as e:
                             with lock:
                                 failed_count += 1
+                                failed_tasks.append({
+                                    'task_id': 'unknown',
+                                    'reason': f"Future异常: {str(e)}",
+                                    'detail': None
+                                })
                                 progress.update(task_progress, advance=1)
                                 print_warning(f"✗ 任务异常: {str(e)}")
+            
+            # 如果有失败任务，显示详细信息
+            if failed_tasks:
+                print_error("\n" + "=" * 80)
+                print_error(f"失败任务详情 ({len(failed_tasks)} 个)")
+                print_error("=" * 80)
+                
+                # 按失败原因分组
+                from collections import defaultdict
+                failures_by_reason = defaultdict(list)
+                for failed in failed_tasks:
+                    failures_by_reason[failed['reason']].append(failed['task_id'])
+                
+                # 显示分组统计
+                for reason, task_ids in failures_by_reason.items():
+                    print_error(f"\n原因: {reason}")
+                    print_error(f"  影响任务数: {len(task_ids)}")
+                    print_error(f"  任务ID: {', '.join(map(str, task_ids[:10]))}" + 
+                               (f" ... (还有{len(task_ids)-10}个)" if len(task_ids) > 10 else ""))
+                
+                # 显示前3个失败任务的详细错误信息
+                print_error("\n详细错误信息 (前3个):")
+                for i, failed in enumerate(failed_tasks[:3], 1):
+                    print_error(f"\n{i}. 任务 #{failed['task_id']}")
+                    print_error(f"   原因: {failed['reason']}")
+                    if failed['detail']:
+                        # 显示完整的错误详情（可能很长）
+                        detail_str = str(failed['detail'])
+                        if len(detail_str) > 2000:
+                            print_error(f"   详情: {detail_str[:2000]}...")
+                            print_error(f"   (详情过长，已截断。完整长度: {len(detail_str)} 字符)")
+                        else:
+                            print_error(f"   详情:\n{detail_str}")
+                
+                print_error("=" * 80 + "\n")
             
             return (success_count, failed_count)
         
