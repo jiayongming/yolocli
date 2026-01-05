@@ -47,6 +47,83 @@ def save_classes_file(model, output_dir: Path):
             f.write(f"{model.names[idx]}\n")
 
 
+def save_dataset_yaml(model, output_dir: Path, images_dir: str = 'images', labels_dir: str = 'labels'):
+    """保存dataset.yaml配置文件（包含关键点信息）
+    
+    Args:
+        model: YOLO模型对象
+        output_dir: 输出目录
+        images_dir: 图片目录相对路径
+        labels_dir: 标签目录相对路径
+    """
+    import yaml
+    
+    yaml_config = {
+        'path': '.',
+        'train': f'{images_dir}',
+        'val': f'{images_dir}',
+        'test': f'{images_dir}',
+        'nc': len(model.names),
+        'names': {i: name for i, name in model.names.items()},
+    }
+    
+    # 检查是否是 Pose 任务
+    if hasattr(model, 'task') and model.task == 'pose':
+        # 尝试从模型获取关键点配置
+        kpt_shape = None
+        keypoint_names = None
+        flip_idx = None
+        
+        # 方法1: 从模型的 yaml 配置中获取
+        if hasattr(model.model, 'yaml') and isinstance(model.model.yaml, dict):
+            yaml_data = model.model.yaml
+            kpt_shape = yaml_data.get('kpt_shape')
+            keypoint_names = yaml_data.get('keypoint_names')
+            flip_idx = yaml_data.get('flip_idx')
+        
+        # 方法2: 从模型结构获取
+        if not kpt_shape and hasattr(model.model, 'kpt_shape'):
+            kpt_shape = model.model.kpt_shape
+        
+        # 如果有 kpt_shape，添加到配置
+        if kpt_shape:
+            yaml_config['kpt_shape'] = list(kpt_shape) if isinstance(kpt_shape, tuple) else kpt_shape
+            
+            num_kpts = kpt_shape[0] if isinstance(kpt_shape, (list, tuple)) else kpt_shape
+            
+            # 如果没有关键点名称，使用默认
+            if not keypoint_names:
+                if num_kpts == 17:
+                    keypoint_names = [
+                        'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                        'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                        'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                        'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+                    ]
+                    flip_idx = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                elif num_kpts == 4:
+                    keypoint_names = ['start', 'end', 'center', 'pointer']
+                    flip_idx = [0, 1, 2, 3]
+                else:
+                    keypoint_names = [f'kp_{i}' for i in range(num_kpts)]
+                    flip_idx = list(range(num_kpts))
+            
+            if keypoint_names:
+                yaml_config['keypoint_names'] = keypoint_names
+            
+            if flip_idx:
+                yaml_config['flip_idx'] = flip_idx
+    
+    # 保存 yaml 文件
+    yaml_file = output_dir / 'dataset.yaml'
+    with open(yaml_file, 'w', encoding='utf-8') as f:
+        f.write("# YOLO Dataset Configuration (Generated from Model)\n")
+        f.write("# 此文件由模型预测自动生成\n\n")
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    return yaml_file
+
+
 def organize_prediction_results(yolo_output_dir: Path, organized_dir: Path):
     """整理YOLO预测结果到规范的目录结构
     
@@ -322,6 +399,10 @@ def predict_image(
         # 保存类别列表
         save_classes_file(yolo_model, output_dir)
         
+        # 保存 dataset.yaml（包含关键点信息）
+        yaml_file = save_dataset_yaml(yolo_model, output_dir)
+        print_info(f"已保存数据集配置: {yaml_file.name}")
+        
         # 保存JSON结果
         if save_json:
             json_file = output_dir / f"{image_path.stem}_results.json"
@@ -593,6 +674,10 @@ def detect_batch(
         
         # 保存类别列表
         save_classes_file(yolo_model, output_dir)
+        
+        # 保存 dataset.yaml（包含关键点信息）
+        yaml_file = save_dataset_yaml(yolo_model, output_dir)
+        print_info(f"已保存数据集配置: {yaml_file.name}")
         
         # 保存JSON结果
         if save_json:

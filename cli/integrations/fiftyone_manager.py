@@ -235,7 +235,7 @@ class FiftyOneManager:
                 if not keypoint_labels:
                     # 使用默认标签
                     if num_keypoints == 4:
-                        keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
                     elif num_keypoints == 17:
                         keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
                                          'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
@@ -900,7 +900,7 @@ class FiftyOneManager:
                 # 如果还是没有，使用默认标签
                 if not keypoint_labels:
                     if num_keypoints == 4:
-                        keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
                     elif num_keypoints == 17:
                         keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
                                          'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
@@ -1190,7 +1190,7 @@ class FiftyOneManager:
             # 如果是pose任务且没有提供关键点标签，使用默认标签
             if is_pose and not keypoint_labels:
                 if num_keypoints == 4:
-                    keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                    keypoint_labels = ['start', 'end', 'center', 'pointer']
                 elif num_keypoints == 17:
                     keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
                                      'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',

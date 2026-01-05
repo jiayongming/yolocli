@@ -492,6 +492,13 @@ def _split_detect_segment_dataset(
         f.write(f"随机种子: {seed}\n")
         f.write(f"创建空标签: {'是' if create_empty_labels else '否'}\n")
     
+    # 自动生成/补全 dataset.yaml
+    _auto_generate_dataset_yaml_for_split(
+        source_dir=images_path.parent,
+        output_dir=output_path,
+        task=task
+    )
+    
     print_success(f"数据集划分完成！输出目录: {output_path}")
 
 
@@ -717,7 +724,103 @@ def _split_classify_dataset(
     
     print_success(f"✓ 类别列表已保存: {classes_file}")
     print_success(f"✓ 统计信息已保存: {stats_file}")
+    
+    # 自动生成/补全 dataset.yaml
+    _auto_generate_dataset_yaml_for_split(
+        source_dir=source_path,
+        output_dir=output_path,
+        task='classify'
+    )
+    
     print_success(f"✓ 分类数据集划分完成！输出目录: {output_path}")
+
+
+def _auto_generate_dataset_yaml_for_split(source_dir: Path, output_dir: Path, task: str):
+    """数据拆分后自动生成/补全 dataset.yaml
+    
+    Args:
+        source_dir: 源数据目录（可能包含 dataset.yaml）
+        output_dir: 输出目录（拆分后的数据集目录）
+        task: 任务类型
+    """
+    print_info("\n自动生成 dataset.yaml...")
+    
+    # 读取标签信息的优先级：
+    # 1. 源目录的 dataset.yaml
+    # 2. classes.txt
+    
+    label_config = {}
+    source_found = False
+    
+    # 优先级1: 源目录的 dataset.yaml
+    source_yaml = source_dir / 'dataset.yaml'
+    if source_yaml.exists():
+        try:
+            with open(source_yaml, 'r', encoding='utf-8') as f:
+                source_data = yaml.safe_load(f)
+            
+            # 提取标签信息
+            if source_data:
+                if 'nc' in source_data:
+                    label_config['nc'] = source_data['nc']
+                if 'names' in source_data:
+                    label_config['names'] = source_data['names']
+                if 'kpt_shape' in source_data:
+                    label_config['kpt_shape'] = source_data['kpt_shape']
+                if 'keypoint_names' in source_data:
+                    label_config['keypoint_names'] = source_data['keypoint_names']
+                if 'flip_idx' in source_data:
+                    label_config['flip_idx'] = source_data['flip_idx']
+                
+                if label_config:
+                    print_info(f"✓ 从源目录 dataset.yaml 读取标签信息")
+                    source_found = True
+        except Exception as e:
+            print_warning(f"读取源 dataset.yaml 失败: {e}")
+    
+    # 优先级2: 尝试从 classes.txt 读取
+    if not source_found:
+        classes_file = source_dir / 'classes.txt'
+        if not classes_file.exists():
+            classes_file = output_dir / 'classes.txt'
+        
+        if classes_file.exists():
+            try:
+                with open(classes_file, 'r', encoding='utf-8') as f:
+                    classes = [line.strip() for line in f if line.strip()]
+                label_config['nc'] = len(classes)
+                label_config['names'] = {i: name for i, name in enumerate(classes)}
+                print_info(f"✓ 从 classes.txt 读取类别信息")
+                source_found = True
+            except Exception as e:
+                print_warning(f"读取 classes.txt 失败: {e}")
+    
+    if not source_found or not label_config:
+        print_warning("未找到标签信息，跳过生成 dataset.yaml")
+        return
+    
+    # 补全路径信息
+    yaml_config = {
+        'path': str(output_dir),
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+    }
+    yaml_config.update(label_config)
+    
+    # 保存完整的 dataset.yaml
+    dataset_yaml_path = output_dir / 'dataset.yaml'
+    with open(dataset_yaml_path, 'w', encoding='utf-8') as f:
+        f.write("# YOLO Dataset Configuration (Complete)\n")
+        f.write("# 此文件在数据拆分后自动生成，包含完整的路径和标签信息\n\n")
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"✓ dataset.yaml 已生成: {dataset_yaml_path}")
+    
+    # 显示关键信息
+    print_info(f"  类别数: {yaml_config.get('nc', 'N/A')}")
+    if task == 'pose' and 'keypoint_names' in yaml_config:
+        print_info(f"  关键点: {yaml_config['keypoint_names']}")
 
 
 @app.command("generate-yaml")
@@ -820,62 +923,105 @@ def generate_yaml(
     
     # Pose任务需要额外的配置
     if task == 'pose':
-        # 尝试从标签文件中检测关键点数量
-        kpt_count = 17  # 默认
-        detected_kpt_count = None
+        # 优先级1: 从已有的 dataset.yaml 读取标签信息
+        existing_yaml = data_path / 'dataset.yaml'
+        existing_label_config = None
+        if existing_yaml.exists() and existing_yaml != Path(output):
+            try:
+                with open(existing_yaml, 'r', encoding='utf-8') as f:
+                    existing_data = yaml.safe_load(f)
+                if existing_data and 'kpt_shape' in existing_data:
+                    existing_label_config = {
+                        'kpt_shape': existing_data.get('kpt_shape'),
+                        'keypoint_names': existing_data.get('keypoint_names'),
+                        'flip_idx': existing_data.get('flip_idx'),
+                    }
+                    yaml_config.update(existing_label_config)
+                    print_info(f"✓ 从已有 dataset.yaml 读取 Pose 配置")
+                    print_info(f"  关键点名称: {existing_label_config.get('keypoint_names')}")
+            except Exception as e:
+                print_warning(f"读取已有 dataset.yaml 失败: {e}")
         
-        # 检查第一个标签文件来确定关键点数量
-        if train_path.exists():
-            label_files = list((data_path / 'labels' / 'train').glob('*.txt'))
-            if not label_files:
-                label_files = list(train_path.parent.parent.glob('labels/train/*.txt'))
+        # 优先级2: 从标签文件中检测关键点数量
+        if not existing_label_config:
+            kpt_count = 17  # 默认
+            detected_kpt_count = None
+            
+            # 多种路径查找策略，确保能找到标签文件
+            label_files = []
+            possible_label_paths = [
+                data_path / 'labels' / 'train',  # 相对路径: data_path/labels/train
+                data_path / 'labels',             # 相对路径: data_path/labels
+                train_path.parent.parent / 'labels' / 'train',  # 从 images/train 推断
+                train_path.parent.parent / 'labels',            # 从 images 推断
+            ]
+            
+            for label_path in possible_label_paths:
+                if label_path.exists() and label_path.is_dir():
+                    found_files = list(label_path.glob('*.txt'))
+                    if found_files:
+                        label_files = found_files
+                        print_info(f"找到标签文件目录: {label_path}")
+                        break
             
             if label_files:
-                try:
-                    with open(label_files[0], 'r') as f:
-                        first_line = f.readline().strip()
-                        if first_line:
-                            parts = first_line.split()
-                            # YOLO Pose 格式: class_id x y w h kp1_x kp1_y kp1_v ...
-                            # 总列数 = 1 (class) + 4 (bbox) + N*3 (keypoints)
-                            if len(parts) > 5:
-                                kpt_data_count = len(parts) - 5
-                                if kpt_data_count % 3 == 0:
-                                    detected_kpt_count = kpt_data_count // 3
-                                    kpt_count = detected_kpt_count
-                except Exception:
-                    pass
-        
-        yaml_config['kpt_shape'] = [kpt_count, 3]
-        
-        # 根据关键点数量设置 flip_idx 和关键点名称
-        if kpt_count == 17:
-            # COCO 17 关键点的对称索引
-            yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
-            yaml_config['keypoint_names'] = [
-                'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
-                'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-                'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-                'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
-            ]
-        elif kpt_count == 4:
-            # 4个关键点（如您的模板：strat, end, center, pointer）
-            # 假设没有对称关系，使用原始顺序
-            yaml_config['flip_idx'] = [0, 1, 2, 3]
-            yaml_config['keypoint_names'] = ['strat', 'end', 'center', 'pointer']
-        else:
-            # 其他数量，使用原始顺序
-            yaml_config['flip_idx'] = list(range(kpt_count))
-            yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
-        
-        if detected_kpt_count:
-            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
-        else:
-            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
-        
-        # 显示关键点名称
-        if 'keypoint_names' in yaml_config:
-            print_info(f"关键点名称: {yaml_config['keypoint_names']}")
+                # 尝试多个文件，因为第一个可能是空的
+                for label_file in label_files[:10]:  # 检查前10个文件
+                    try:
+                        with open(label_file, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                parts = line.split()
+                                # YOLO Pose 格式: class_id x y w h kp1_x kp1_y kp1_v ...
+                                # 总列数 = 1 (class) + 4 (bbox) + N*3 (keypoints)
+                                if len(parts) > 5:
+                                    kpt_data_count = len(parts) - 5
+                                    if kpt_data_count % 3 == 0:
+                                        detected_kpt_count = kpt_data_count // 3
+                                        kpt_count = detected_kpt_count
+                                        print_info(f"从标签文件检测到 {kpt_count} 个关键点")
+                                        break
+                            
+                            if detected_kpt_count:
+                                break
+                    except Exception as e:
+                        continue
+            else:
+                print_warning("未找到标签文件，使用默认配置")
+            
+            yaml_config['kpt_shape'] = [kpt_count, 3]
+            
+            # 根据关键点数量设置 flip_idx 和关键点名称
+            if kpt_count == 17:
+                # COCO 17 关键点的对称索引
+                yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                yaml_config['keypoint_names'] = [
+                    'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                    'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                    'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                    'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+                ]
+            elif kpt_count == 4:
+                # 4个关键点（start, end, center, pointer）
+                # 假设没有对称关系，使用原始顺序
+                yaml_config['flip_idx'] = [0, 1, 2, 3]
+                yaml_config['keypoint_names'] = ['start', 'end', 'center', 'pointer']
+            else:
+                # 其他数量，使用原始顺序
+                yaml_config['flip_idx'] = list(range(kpt_count))
+                yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
+            
+            if detected_kpt_count:
+                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
+            else:
+                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
+            
+            # 显示关键点名称
+            if 'keypoint_names' in yaml_config:
+                print_info(f"关键点名称: {yaml_config['keypoint_names']}")
     
     # 保存YAML文件
     output_path = Path(output)
@@ -1890,13 +2036,59 @@ def convert_labelstudio(
         for class_name in sorted(class_stats.keys()):
             print_info(f"  {class_name}: {class_stats[class_name]} 张")
     
-    # 保存classes.txt
+    # 保存classes.txt（按 class ID 顺序，而不是字母顺序）
     classes_file = output_path / 'classes.txt'
+    # 反转映射: {class_id: class_name}
+    id_to_name = {idx: name for name, idx in class_mapping.items()}
     with open(classes_file, 'w', encoding='utf-8') as f:
-        for class_name in sorted(class_mapping.keys()):
-            f.write(f"{class_name}\n")
+        for idx in sorted(id_to_name.keys()):
+            f.write(f"{id_to_name[idx]}\n")
     
     print_success(f"✓ 保存类别列表: {classes_file}")
+    
+    # 生成 dataset.yaml 的标签部分（不包含路径信息，等待数据拆分后补全）
+    # 构建类别字典 {class_id: class_name}
+    classes_dict = {i: name for i, name in enumerate(sorted(class_mapping.keys()))}
+    
+    yaml_config = {
+        'nc': len(classes_dict),
+        'names': classes_dict,
+    }
+    
+    # 提取关键点信息（如果是 pose 任务）
+    if task == 'pose' and parsed_data:
+        keypoint_names = None
+        # 从第一个有关键点的样本中提取关键点顺序
+        for item in parsed_data:
+            for ann in item.get('annotations', []):
+                if ann.get('type') == 'pose' and ann.get('keypoints'):
+                    keypoint_names = [kp.get('label', f'kp_{i}') for i, kp in enumerate(ann['keypoints'])]
+                    break
+            if keypoint_names:
+                break
+        
+        if keypoint_names:
+            num_kpts = len(keypoint_names)
+            yaml_config['kpt_shape'] = [num_kpts, 3]
+            yaml_config['keypoint_names'] = keypoint_names
+            
+            # 设置 flip_idx
+            if num_kpts == 17:
+                yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            elif num_kpts == 4:
+                yaml_config['flip_idx'] = [0, 1, 2, 3]
+            else:
+                yaml_config['flip_idx'] = list(range(num_kpts))
+    
+    dataset_yaml_path = output_path / 'dataset.yaml'
+    with open(dataset_yaml_path, 'w', encoding='utf-8') as f:
+        f.write("# YOLO Dataset Configuration (Labels Only)\n")
+        f.write("# 此文件由 Label Studio 导出自动生成\n")
+        f.write("# 数据集拆分后会自动补全 path, train, val, test 路径信息\n\n")
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"✓ 生成 dataset.yaml (标签部分): {dataset_yaml_path}")
+    print_info("  数据集拆分后会自动补全路径信息")
     
     # 保存转换日志
     log_file = output_path / 'convert_log.txt'

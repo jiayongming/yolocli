@@ -641,7 +641,7 @@ class LabelStudioConverter:
                     print(f"   {list(order)}: {cnt} 次", file=sys.stderr)
         else:
             # 回退到预定义顺序
-            expected_order = ['strat', 'end', 'center', 'pointer']
+            expected_order = ['start', 'end', 'center', 'pointer']
             keypoint_order = expected_order
             print(f"⚠ 无法检测实际顺序，使用默认顺序: {expected_order}", file=sys.stderr)
         
@@ -848,30 +848,36 @@ class LabelStudioConverter:
             
         Returns:
             Dict[str, int]: {'class_name': class_id}
+        
+        注意: 
+            类别顺序按照在数据中首次出现的顺序，而不是字母顺序
+            这样可以保持与 Label Studio 中定义的类别顺序一致
         """
-        class_names = set()
+        class_names_ordered = []  # 使用列表保持顺序
+        class_names_set = set()   # 使用集合去重
         
         if task_type in ['detect', 'pose']:
-            # 从检测/姿势标注中收集类别
+            # 从检测/姿势标注中收集类别（保持首次出现的顺序）
             for item in parsed_data:
                 for ann in item['annotations']:
                     labels = ann.get('labels', [])
-                    class_names.update(labels)
+                    for label in labels:
+                        if label not in class_names_set:
+                            class_names_ordered.append(label)
+                            class_names_set.add(label)
         else:  # classify
-            # 从分类标注中收集类别
+            # 从分类标注中收集类别（保持首次出现的顺序）
             for item in parsed_data:
-                if item['category']:
-                    class_names.add(item['category'])
+                if item['category'] and item['category'] not in class_names_set:
+                    class_names_ordered.append(item['category'])
+                    class_names_set.add(item['category'])
         
         # 如果没有找到类别，为 Pose 任务添加默认类别
-        if not class_names and task_type == 'pose':
-            class_names.add('object')
+        if not class_names_ordered and task_type == 'pose':
+            class_names_ordered.append('object')
         
-        # 按字母顺序排序
-        sorted_classes = sorted(class_names)
-        
-        # 创建映射
-        class_mapping = {name: idx for idx, name in enumerate(sorted_classes)}
+        # 创建映射（按照首次出现的顺序，而不是字母顺序）
+        class_mapping = {name: idx for idx, name in enumerate(class_names_ordered)}
         
         return class_mapping
     
