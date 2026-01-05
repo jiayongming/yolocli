@@ -612,13 +612,107 @@ class FiftyOneManager:
         except:
             return (False, 0)
     
+    def _detect_segment_format(self, label_file_path: Path) -> bool:
+        """检测标签文件是否为 Segment 格式
+        
+        Segment 格式：class_id x1 y1 x2 y2 x3 y3 ... (多边形点，通常>6个点)
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            bool: 是否为Segment格式
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return False
+                
+                parts = first_line.split()
+                # Segment格式：class_id + 多个坐标点 (至少3个点，即6个坐标值)
+                # 通常多边形会有更多点，例如 class_id x1 y1 x2 y2 x3 y3 x4 y4 ...
+                if len(parts) >= 7:  # class_id + 至少3个点(6个值)
+                    # 检查除了第一个值（class_id）外，其他值的个数是否为偶数（x,y配对）
+                    coords_count = len(parts) - 1
+                    if coords_count % 2 == 0 and coords_count >= 6:
+                        # 进一步验证：所有值应该都能解析为数字
+                        try:
+                            for val in parts:
+                                float(val)
+                            return True
+                        except ValueError:
+                            return False
+                
+                return False
+        except:
+            return False
+    
+    def _detect_classify_format(self, label_file_path: Path) -> bool:
+        """检测标签文件是否为 Classify 格式
+        
+        Classify 格式：class_id (只有一个值)
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            bool: 是否为Classify格式
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return False
+                
+                parts = first_line.split()
+                # Classify格式：只有一个class_id
+                if len(parts) == 1:
+                    try:
+                        int(parts[0])  # 应该是整数
+                        return True
+                    except ValueError:
+                        return False
+                
+                return False
+        except:
+            return False
+    
+    def _detect_task_type(self, label_file_path: Path) -> Tuple[str, dict]:
+        """自动检测标签文件的任务类型
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            Tuple[str, dict]: (任务类型, 额外信息)
+                任务类型: 'pose', 'segment', 'classify', 'detect'
+                额外信息: {'num_keypoints': int} for pose, {} for others
+        """
+        # 1. 检测 Classify（最简单，只有1个值）
+        if self._detect_classify_format(label_file_path):
+            return ('classify', {})
+        
+        # 2. 检测 Segment（多边形点）
+        if self._detect_segment_format(label_file_path):
+            return ('segment', {})
+        
+        # 3. 检测 Pose（有关键点）
+        is_pose, num_keypoints = self._detect_pose_format(label_file_path)
+        if is_pose:
+            return ('pose', {'num_keypoints': num_keypoints})
+        
+        # 4. 默认为 Detect（标准bbox格式）
+        return ('detect', {})
+    
     def add_predictions_to_dataset(
         self,
         dataset_name: str,
         predictions_dir: str,
         classes: Optional[List[str]] = None,
         field_name: str = "predictions",
-        conf_threshold: float = 0.0
+        conf_threshold: float = 0.0,
+        task_type: Optional[str] = None
     ) -> Tuple[bool, Dict[str, int], str]:
         """将 YOLO 预测结果添加到 FiftyOne 数据集
         
@@ -628,6 +722,7 @@ class FiftyOneManager:
             classes: 类别列表（可选，不提供则自动读取）
             field_name: 预测结果字段名，默认"predictions"
             conf_threshold: 置信度阈值，过滤低置信度预测
+            task_type: 任务类型 ('detect', 'segment', 'pose', 'classify')，不指定则自动检测
             
         Returns:
             Tuple[bool, Dict[str, int], str]: (是否成功, 统计信息, 错误信息)
@@ -670,12 +765,40 @@ class FiftyOneManager:
                 # 如果没有labels子目录，尝试直接使用predictions_dir
                 labels_dir = predictions_path
             
-            # 检测是否为 Pose 格式（检查第一个标签文件）
-            is_pose = False
-            num_keypoints = 0
-            for label_file in labels_dir.glob('*.txt'):
-                is_pose, num_keypoints = self._detect_pose_format(label_file)
-                break  # 只检查第一个文件
+            # 检测任务类型
+            detected_task_type = 'detect'
+            task_info = {}
+            
+            if task_type:
+                # 用户指定了任务类型
+                detected_task_type = task_type.lower()
+                from ..ui.display import print_info
+                print_info(f"使用指定任务类型: {detected_task_type}")
+                
+                # 如果用户指定了pose任务，仍需要检测关键点数量
+                if detected_task_type == 'pose':
+                    for label_file in labels_dir.glob('*.txt'):
+                        if label_file.name == 'classes.txt':
+                            continue  # 跳过 classes.txt
+                        is_pose_detected, num_kpts = self._detect_pose_format(label_file)
+                        if is_pose_detected:
+                            task_info['num_keypoints'] = num_kpts
+                            break  # 找到有效文件后退出
+            else:
+                # 自动检测任务类型（检查第一个标签文件）
+                for label_file in labels_dir.glob('*.txt'):
+                    if label_file.name == 'classes.txt':
+                        continue  # 跳过 classes.txt
+                    detected_task_type, task_info = self._detect_task_type(label_file)
+                    break  # 只检查第一个文件
+                
+                from ..ui.display import print_info
+                print_info(f"检测到任务类型: {detected_task_type}")
+            
+            is_pose = detected_task_type == 'pose'
+            is_segment = detected_task_type == 'segment'
+            is_classify = detected_task_type == 'classify'
+            num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
             
             # 获取关键点标签（尝试从数据集的 ground_truth_keypoints 中提取）
             keypoint_labels = None
@@ -722,6 +845,9 @@ class FiftyOneManager:
                 # 读取预测结果
                 detections = []
                 keypoints = []
+                polylines = []  # for segment
+                classifications = []  # for classify
+                
                 with open(label_file, 'r') as f:
                     for line in f:
                         line = line.strip()
@@ -729,6 +855,41 @@ class FiftyOneManager:
                             continue
                         
                         parts = line.split()
+                        
+                        # Classify 格式: class_id
+                        if is_classify and len(parts) == 1:
+                            class_id = int(parts[0])
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            classification = self.fo.Classification(label=label)
+                            classifications.append(classification)
+                            stats['total_predictions'] += 1
+                            continue
+                        
+                        # Segment 格式: class_id x1 y1 x2 y2 x3 y3 ...
+                        if is_segment and len(parts) >= 7:
+                            class_id = int(parts[0])
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            
+                            # 提取多边形点
+                            coords = [float(x) for x in parts[1:]]
+                            points = []
+                            for i in range(0, len(coords), 2):
+                                if i + 1 < len(coords):
+                                    points.append((coords[i], coords[i + 1]))
+                            
+                            if len(points) >= 3:  # 至少需要3个点形成多边形
+                                # FiftyOne使用Polyline表示分割
+                                polyline = self.fo.Polyline(
+                                    label=label,
+                                    points=[points],  # 闭合的多边形
+                                    closed=True,
+                                    filled=True
+                                )
+                                polylines.append(polyline)
+                                stats['total_predictions'] += 1
+                            continue
+                        
+                        # Detect/Pose 格式: class_id x y w h [conf] [keypoints...]
                         if len(parts) >= 5:
                             # YOLO格式: class_id x_center y_center width height [confidence] [keypoints...]
                             class_id = int(parts[0])
@@ -793,8 +954,7 @@ class FiftyOneManager:
                                             # 为每个关键点创建独立的 Keypoint 对象
                                             keypoint = self.fo.Keypoint(
                                                 label=kpt_label,  # 使用关键点的标签
-                                                points=[[kpt_x, kpt_y]],  # 只包含一个点
-                                                confidence=confidence
+                                                points=[[kpt_x, kpt_y]]  # 只包含一个点
                                             )
                                             keypoints.append(keypoint)
                             
@@ -807,10 +967,30 @@ class FiftyOneManager:
                             stats['total_predictions'] += 1
                 
                 # 添加预测结果到样本
+                updated = False
+                
+                if is_classify and classifications:
+                    # Classify: 使用Classification字段
+                    if len(classifications) == 1:
+                        sample[field_name] = classifications[0]
+                    else:
+                        # 多个分类，保存为Classifications
+                        sample[field_name] = self.fo.Classifications(classifications=classifications)
+                    updated = True
+                
+                if is_segment and polylines:
+                    # Segment: 使用Polylines字段
+                    sample[field_name] = self.fo.Polylines(polylines=polylines)
+                    updated = True
+                
                 if detections:
+                    # Detect/Pose: 使用Detections字段
                     sample[field_name] = self.fo.Detections(detections=detections)
                     if is_pose and keypoints:
                         sample[f"{field_name}_keypoints"] = self.fo.Keypoints(keypoints=keypoints)
+                    updated = True
+                
+                if updated:
                     sample.save()
                     stats['updated_samples'] += 1
             
@@ -826,7 +1006,9 @@ class FiftyOneManager:
         classes: Optional[List[str]] = None,
         dataset_name: Optional[str] = None,
         conf_threshold: float = 0.0,
-        persistent: bool = True
+        persistent: bool = True,
+        keypoint_labels: Optional[List[str]] = None,
+        task_type: Optional[str] = None
     ) -> Tuple[bool, Optional[str], str]:
         """从图片和预测结果创建FiftyOne数据集（纯预测，无ground truth）
         
@@ -837,6 +1019,8 @@ class FiftyOneManager:
             dataset_name: 数据集名称
             conf_threshold: 置信度阈值
             persistent: 是否持久化
+            keypoint_labels: 关键点标签列表（可选，用于pose任务）
+            task_type: 任务类型 ('detect', 'segment', 'pose', 'classify')，不指定则自动检测
             
         Returns:
             Tuple[bool, Optional[str], str]: (是否成功, 数据集名称, 错误信息)
@@ -883,6 +1067,59 @@ class FiftyOneManager:
             if not labels_dir.exists():
                 labels_dir = predictions_path
             
+            # 检测任务类型
+            detected_task_type = 'detect'
+            task_info = {}
+            
+            if task_type:
+                # 用户指定了任务类型
+                detected_task_type = task_type.lower()
+                from ..ui.display import print_info
+                print_info(f"使用指定任务类型: {detected_task_type}")
+                
+                # 如果用户指定了pose任务，仍需要检测关键点数量
+                if detected_task_type == 'pose':
+                    for label_file in labels_dir.glob('*.txt'):
+                        if label_file.name == 'classes.txt':
+                            continue  # 跳过 classes.txt
+                        is_pose_detected, num_kpts = self._detect_pose_format(label_file)
+                        if is_pose_detected:
+                            task_info['num_keypoints'] = num_kpts
+                            break  # 找到有效文件后退出
+            else:
+                # 自动检测任务类型（检查第一个标签文件）
+                for label_file in labels_dir.glob('*.txt'):
+                    if label_file.name == 'classes.txt':
+                        continue  # 跳过 classes.txt
+                    detected_task_type, task_info = self._detect_task_type(label_file)
+                    break  # 只检查第一个文件
+                
+                from ..ui.display import print_info
+                print_info(f"检测到任务类型: {detected_task_type}")
+            
+            is_pose = detected_task_type == 'pose'
+            is_segment = detected_task_type == 'segment'
+            is_classify = detected_task_type == 'classify'
+            num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
+            
+            # 如果是pose任务且没有提供关键点标签，使用默认标签
+            if is_pose and not keypoint_labels:
+                if num_keypoints == 4:
+                    keypoint_labels = ['strat', 'end', 'center', 'pointer']
+                elif num_keypoints == 17:
+                    keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                     'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                     'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                     'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                else:
+                    keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+            
+            # 打印任务类型信息
+            if is_pose:
+                from ..ui.display import print_info
+                print_info(f"检测到 Pose 任务，关键点数量: {num_keypoints}")
+                print_info(f"关键点标签: {keypoint_labels}")
+            
             # 遍历图片文件
             image_files = []
             for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.JPG', '.JPEG', '.PNG', '.BMP']:
@@ -899,6 +1136,10 @@ class FiftyOneManager:
                 
                 # 读取预测
                 detections = []
+                keypoints = []
+                polylines = []  # for segment
+                classifications = []  # for classify
+                
                 if label_file.exists():
                     with open(label_file, 'r') as f:
                         for line in f:
@@ -907,17 +1148,69 @@ class FiftyOneManager:
                                 continue
                             
                             parts = line.split()
+                            
+                            # Classify 格式: class_id
+                            if is_classify and len(parts) == 1:
+                                class_id = int(parts[0])
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                classification = self.fo.Classification(label=label)
+                                classifications.append(classification)
+                                continue
+                            
+                            # Segment 格式: class_id x1 y1 x2 y2 x3 y3 ...
+                            if is_segment and len(parts) >= 7:
+                                class_id = int(parts[0])
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                
+                                # 提取多边形点
+                                coords = [float(x) for x in parts[1:]]
+                                points = []
+                                for i in range(0, len(coords), 2):
+                                    if i + 1 < len(coords):
+                                        points.append((coords[i], coords[i + 1]))
+                                
+                                if len(points) >= 3:  # 至少需要3个点形成多边形
+                                    # FiftyOne使用Polyline表示分割
+                                    polyline = self.fo.Polyline(
+                                        label=label,
+                                        points=[points],  # 闭合的多边形
+                                        closed=True,
+                                        filled=True
+                                    )
+                                    polylines.append(polyline)
+                                continue
+                            
+                            # Detect/Pose 格式: class_id x y w h [conf] [keypoints...]
                             if len(parts) >= 5:
+                                # YOLO格式: class_id x_center y_center width height [confidence] [keypoints...]
                                 class_id = int(parts[0])
                                 x_center = float(parts[1])
                                 y_center = float(parts[2])
                                 width = float(parts[3])
                                 height = float(parts[4])
-                                confidence = float(parts[5]) if len(parts) > 5 else 1.0
                                 
+                                # 判断是否有置信度值和关键点数据
+                                if is_pose:
+                                    # Pose 格式可能有置信度，检查数据长度
+                                    extra_values = len(parts) - 5
+                                    if (extra_values - 1) % 3 == 0 and extra_values > 3:
+                                        # 有置信度
+                                        confidence = float(parts[5])
+                                        kpt_start_idx = 6
+                                    else:
+                                        # 没有置信度
+                                        confidence = 1.0
+                                        kpt_start_idx = 5
+                                else:
+                                    # 普通检测格式
+                                    confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                                    kpt_start_idx = 6
+                                
+                                # 过滤低置信度预测
                                 if confidence < conf_threshold:
                                     continue
                                 
+                                # 转换为FiftyOne格式 [x, y, width, height]，左上角坐标
                                 bbox = [
                                     x_center - width / 2,
                                     y_center - height / 2,
@@ -927,6 +1220,34 @@ class FiftyOneManager:
                                 
                                 label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
                                 
+                                # 处理关键点数据
+                                if is_pose and len(parts) > kpt_start_idx:
+                                    kpt_data = parts[kpt_start_idx:]
+                                    expected_kpt_values = num_keypoints * 3
+                                    
+                                    if len(kpt_data) >= expected_kpt_values:
+                                        # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                        for i in range(0, expected_kpt_values, 3):
+                                            kpt_x = float(kpt_data[i])
+                                            kpt_y = float(kpt_data[i + 1])
+                                            kpt_v = float(kpt_data[i + 2])
+                                            kpt_idx = i // 3
+                                            
+                                            # 只添加可见的关键点
+                                            if kpt_v > 0:
+                                                # 获取关键点标签
+                                                if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                    kpt_label = keypoint_labels[kpt_idx]
+                                                else:
+                                                    kpt_label = f'kp_{kpt_idx}'
+                                                
+                                                # 为每个关键点创建独立的 Keypoint 对象
+                                                keypoint = self.fo.Keypoint(
+                                                    label=kpt_label,  # 使用关键点的标签
+                                                    points=[[kpt_x, kpt_y]]  # 只包含一个点
+                                                )
+                                                keypoints.append(keypoint)
+                                
                                 detection = self.fo.Detection(
                                     label=label,
                                     bounding_box=bbox,
@@ -935,7 +1256,23 @@ class FiftyOneManager:
                                 detections.append(detection)
                 
                 # 添加预测结果
-                sample['predictions'] = self.fo.Detections(detections=detections)
+                if is_classify and classifications:
+                    # Classify: 使用Classification字段
+                    if len(classifications) == 1:
+                        sample['predictions'] = classifications[0]
+                    else:
+                        sample['predictions'] = self.fo.Classifications(classifications=classifications)
+                
+                if is_segment and polylines:
+                    # Segment: 使用Polylines字段
+                    sample['predictions'] = self.fo.Polylines(polylines=polylines)
+                
+                if detections:
+                    # Detect/Pose: 使用Detections字段
+                    sample['predictions'] = self.fo.Detections(detections=detections)
+                    if is_pose and keypoints:
+                        sample['predictions_keypoints'] = self.fo.Keypoints(keypoints=keypoints)
+                
                 dataset.add_sample(sample)
                 sample_count += 1
             

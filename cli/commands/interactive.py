@@ -14,7 +14,8 @@ from ..ui.prompts import (
     build_training_config, input_text, input_path, input_number,
     confirm_action,
     select_labelstudio_operation, select_labelstudio_project, input_labelstudio_config,
-    select_fiftyone_operation, select_fiftyone_dataset
+    select_fiftyone_operation, select_fiftyone_dataset,
+    select_task_type_for_predict
 )
 from ..ui.display import (
     print_logo, clear_screen, print_section_header,
@@ -1528,6 +1529,9 @@ def run_fiftyone_operations():
                 predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
                 dataset_name = input_text("数据集名称:", default="predictions")
                 
+                # 选择任务类型
+                task_type = select_task_type_for_predict()
+                
                 # 检查是否有 classes.txt
                 from pathlib import Path
                 classes_file = Path(predictions_dir) / 'classes.txt'
@@ -1549,7 +1553,8 @@ def run_fiftyone_operations():
                     classes=classes,
                     dataset_name=dataset_name,
                     conf_threshold=conf_threshold,
-                    persistent=True
+                    persistent=True,
+                    task_type=task_type
                 )
                 
                 if success:
@@ -1584,6 +1589,9 @@ def run_fiftyone_operations():
                 
                 predictions_dir = input_path("预测结果目录（包含labels文件夹或txt文件）:", must_exist=True)
                 
+                # 选择任务类型
+                task_type = select_task_type_for_predict()
+                
                 # 检查是否有 classes.txt
                 from pathlib import Path
                 classes_file = Path(predictions_dir) / 'classes.txt'
@@ -1607,7 +1615,8 @@ def run_fiftyone_operations():
                     predictions_dir=predictions_dir,
                     classes=classes,
                     field_name=field_name,
-                    conf_threshold=conf_threshold
+                    conf_threshold=conf_threshold,
+                    task_type=task_type
                 )
                 
                 if success:
