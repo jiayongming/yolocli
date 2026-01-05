@@ -163,6 +163,47 @@ def run_data_operations():
                     console.print()
                     include_negative = confirm_action("包含无标注图片作为负样本?", default=True)
                 
+                # 数据筛选选项 🆕
+                console.print()
+                print_info("📊 部分数据集下载选项（可选）：")
+                print_info("   - 限制下载数量（适合快速测试）")
+                print_info("   - 指定任务ID或范围")
+                print_info("   - 按标签筛选")
+                console.print()
+                
+                use_filters = confirm_action("是否使用数据筛选?", default=False)
+                
+                max_tasks = None
+                task_ids = None
+                task_range = None
+                filter_labels = None
+                
+                if use_filters:
+                    from ..ui.prompts import select_option
+                    console.print()
+                    filter_type = select_option(
+                        "选择筛选方式:",
+                        [
+                            "限制下载数量 (如: 前50个任务)",
+                            "指定任务ID列表 (如: 100,200,300)",
+                            "指定任务ID范围 (如: 100-500)",
+                            "按标签筛选 (如: person,car)",
+                        ]
+                    )
+                    
+                    if "限制下载数量" in filter_type:
+                        max_tasks = input_number("最大下载任务数:", default=50, min_value=1)
+                        print_info(f"将下载前 {max_tasks} 个任务")
+                    elif "任务ID列表" in filter_type:
+                        task_ids = input_text("任务ID列表（逗号分隔）:", default="100,200,300")
+                        print_info(f"将下载指定ID的任务: {task_ids}")
+                    elif "任务ID范围" in filter_type:
+                        task_range = input_text("任务ID范围:", default="100-200")
+                        print_info(f"将下载ID范围内的任务: {task_range}")
+                    elif "按标签筛选" in filter_type:
+                        filter_labels = input_text("标签列表（逗号分隔）:", default="person,car")
+                        print_info(f"将下载包含这些标签的任务: {filter_labels}")
+                
                 if confirm_action(f"确认转换 {task_type} 数据?"):
                     from ..commands.data import convert_labelstudio
                     convert_labelstudio(
@@ -173,8 +214,12 @@ def run_data_operations():
                         task=task_type,
                         format_type='auto',
                         skip_existing=True,
-                        max_workers=max_workers,
-                        include_negative=include_negative
+                        max_workers=int(max_workers) if max_workers else 4,
+                        include_negative=include_negative,
+                        max_tasks=int(max_tasks) if max_tasks else None,
+                        task_ids=task_ids,
+                        task_range=task_range,
+                        filter_labels=filter_labels
                     )
             
             elif operation == 'split':
@@ -1252,12 +1297,58 @@ def run_labelstudio_operations():
                     console.print()
                     include_negative = confirm_action("包含无标注图片作为负样本?", default=True)
                 
+                # 数据筛选选项 🆕
+                console.print()
+                print_info("📊 部分数据集下载选项（可选）：")
+                print_info("   - 限制下载数量（适合快速测试）")
+                print_info("   - 指定任务ID或范围")
+                print_info("   - 按标签筛选")
+                console.print()
+                
+                use_filters = confirm_action("是否使用数据筛选?", default=False)
+                
+                max_tasks = None
+                task_ids = None
+                task_range = None
+                filter_labels = None
+                
+                if use_filters:
+                    console.print()
+                    filter_type = select_option(
+                        "选择筛选方式:",
+                        [
+                            "限制下载数量 (如: 前50个任务)",
+                            "指定任务ID列表 (如: 100,200,300)",
+                            "指定任务ID范围 (如: 100-500)",
+                            "按标签筛选 (如: person,car)",
+                        ]
+                    )
+                    
+                    if "限制下载数量" in filter_type:
+                        max_tasks = input_number("最大下载任务数:", default=50, min_value=1)
+                        print_info(f"将下载前 {max_tasks} 个任务")
+                    elif "任务ID列表" in filter_type:
+                        task_ids = input_text("任务ID列表（逗号分隔）:", default="100,200,300")
+                        print_info(f"将下载指定ID的任务: {task_ids}")
+                    elif "任务ID范围" in filter_type:
+                        task_range = input_text("任务ID范围:", default="100-200")
+                        print_info(f"将下载ID范围内的任务: {task_range}")
+                    elif "按标签筛选" in filter_type:
+                        filter_labels = input_text("标签列表（逗号分隔）:", default="person,car")
+                        print_info(f"将下载包含这些标签的任务: {filter_labels}")
+                
                 console.print()
                 print_info("将执行以下操作:")
                 print_info(f"  1. 导出项目 {project_id} 的标注数据")
-                print_info(f"  2. 下载所有图片 (并发数: {int(max_workers)})")
-                print_info(f"  3. 转换为YOLO {task_type} 格式")
-                print_info(f"  4. 保存到: {output_dir}")
+                if use_filters:
+                    print_info(f"  2. 应用数据筛选条件")
+                    print_info(f"  3. 下载筛选后的图片 (并发数: {int(max_workers)})")
+                    print_info(f"  4. 转换为YOLO {task_type} 格式")
+                    print_info(f"  5. 保存到: {output_dir}")
+                else:
+                    print_info(f"  2. 下载所有图片 (并发数: {int(max_workers)})")
+                    print_info(f"  3. 转换为YOLO {task_type} 格式")
+                    print_info(f"  4. 保存到: {output_dir}")
                 console.print()
                 
                 if not confirm_action("确认开始?", default=True):
@@ -1284,22 +1375,114 @@ def run_labelstudio_operations():
                 print_success(f"✓ 导出完成: {len(data)} 个任务")
                 print_info(f"  JSON已保存: {export_json_path}")
                 
-                # 2. 下载图片
-                print_section_header("步骤2: 下载图片")
+                # 2. 应用筛选并下载图片
+                if use_filters:
+                    print_section_header("步骤2: 应用数据筛选")
+                else:
+                    print_section_header("步骤2: 下载图片")
+                
                 images_dir = output_path / "images"
                 images_dir.mkdir(parents=True, exist_ok=True)
-                
-                print_info(f"正在下载图片到: {images_dir}")
                 
                 # 准备下载列表
                 from ..converters.labelstudio import LabelStudioConverter
                 converter = LabelStudioConverter()
+                
+                # 加载原始 JSON 数据
+                with open(export_json_path, 'r', encoding='utf-8') as f:
+                    original_data = json.load(f)
+                
                 parsed_data = converter.parse_json(export_json_path, include_negative=True)
+                
+                # 应用筛选条件（在下载之前）
+                if use_filters:
+                    original_count = len(parsed_data)
+                    print_info(f"原始任务数: {original_count}")
+                    
+                    # 创建 filename 到原始 task 的映射
+                    filename_to_task = {}
+                    for task in original_data:
+                        image_path = task.get('data', {}).get('image', '')
+                        if image_path:
+                            filename = Path(image_path).name
+                            filename_to_task[filename] = task
+                    
+                    # 创建 task_id 到原始 task 的映射（用于 ID 筛选）
+                    task_id_to_task = {task.get('id'): task for task in original_data}
+                    
+                    # 1. 按任务ID列表筛选
+                    if task_ids:
+                        id_list = [int(tid.strip()) for tid in task_ids.split(',')]
+                        id_set = set(id_list)
+                        # 从原始数据中筛选
+                        filtered_tasks = [task for task in original_data if task.get('id') in id_set]
+                        # 更新 parsed_data
+                        filtered_filenames = {Path(t.get('data', {}).get('image', '')).name for t in filtered_tasks}
+                        parsed_data = [item for item in parsed_data if item.get('filename') in filtered_filenames]
+                        print_info(f"按任务ID筛选: {len(id_list)} 个指定ID，匹配到 {len(parsed_data)} 个任务")
+                    
+                    # 2. 按任务ID范围筛选
+                    elif task_range:
+                        range_parts = task_range.split('-')
+                        if len(range_parts) == 2:
+                            start_id = int(range_parts[0].strip())
+                            end_id = int(range_parts[1].strip())
+                            # 从原始数据中筛选
+                            filtered_tasks = [task for task in original_data if start_id <= task.get('id', 0) <= end_id]
+                            # 更新 parsed_data
+                            filtered_filenames = {Path(t.get('data', {}).get('image', '')).name for t in filtered_tasks}
+                            parsed_data = [item for item in parsed_data if item.get('filename') in filtered_filenames]
+                            print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
+                    
+                    # 3. 按标签筛选
+                    if filter_labels:
+                        label_list = [label.strip() for label in filter_labels.split(',')]
+                        label_set = set(label_list)
+                        
+                        def has_matching_label(item):
+                            for ann in item.get('annotations', []):
+                                item_labels = ann.get('labels', [])
+                                if any(label in label_set for label in item_labels):
+                                    return True
+                            if item.get('category') in label_set:
+                                return True
+                            return False
+                        
+                        parsed_data = [item for item in parsed_data if has_matching_label(item)]
+                        print_info(f"按标签筛选: {', '.join(label_list)}，匹配到 {len(parsed_data)} 个任务")
+                    
+                    # 4. 限制最大任务数
+                    if max_tasks and max_tasks < len(parsed_data):
+                        parsed_data = parsed_data[:int(max_tasks)]
+                        print_info(f"限制任务数: 取前 {int(max_tasks)} 个任务")
+                    
+                    print_success(f"✓ 筛选后: {len(parsed_data)}/{original_count} 个任务将被处理")
+                    
+                    # 保存筛选后的原始 JSON 数据（用于后续转换）
+                    filtered_filenames = {item.get('filename') for item in parsed_data}
+                    filtered_original_data = [
+                        task for task in original_data 
+                        if Path(task.get('data', {}).get('image', '')).name in filtered_filenames
+                    ]
+                    
+                    filtered_json_path = output_path / f"project_{project_id}_filtered.json"
+                    with open(filtered_json_path, 'w', encoding='utf-8') as f:
+                        json.dump(filtered_original_data, f, ensure_ascii=False, indent=2)
+                    print_info(f"  筛选后的数据已保存: {filtered_json_path}")
+                    
+                    # 更新导出文件路径为筛选后的文件
+                    export_json_path = filtered_json_path
+                    console.print()
+                
+                print_info(f"正在下载图片到: {images_dir}")
                 download_list = converter.prepare_download_list(parsed_data, images_dir)
                 
                 print_info(f"共 {len(download_list)} 张图片需要下载")
                 
                 # 批量下载（使用进度条）
+                if use_filters:
+                    print_section_header("步骤3: 下载筛选后的图片")
+                
                 from ..ui.display import create_progress_bar
                 
                 with create_progress_bar() as progress:
@@ -1322,13 +1505,15 @@ def run_labelstudio_operations():
                 if stats['failed'] > 0:
                     print_warning(f"  失败: {stats['failed']}")
                 
-                # 3. 转换为YOLO格式
-                print_section_header("步骤3: 转换为YOLO格式")
+                # 4/3. 转换为YOLO格式
+                step_num = 4 if use_filters else 3
+                print_section_header(f"步骤{step_num}: 转换为YOLO格式")
                 
                 # 调用现有的转换命令
                 from ..commands.data import convert_labelstudio
                 
                 try:
+                    # 如果使用了筛选，数据已经被筛选并保存为新文件，不需要再传筛选参数
                     convert_labelstudio(
                         input_file=str(export_json_path),
                         url=default_url,
@@ -1338,7 +1523,11 @@ def run_labelstudio_operations():
                         format_type='json',
                         skip_existing=True,
                         max_workers=int(max_workers),
-                        include_negative=include_negative
+                        include_negative=include_negative,
+                        max_tasks=None,  # 已在步骤2筛选，不需要再限制
+                        task_ids=None,
+                        task_range=None,
+                        filter_labels=None
                     )
                     
                     print_success("✓ 转换完成")
@@ -1387,8 +1576,11 @@ def run_labelstudio_operations():
                         
                         moved_count = 0
                         for item in output_path.iterdir():
-                            # 跳过非数据文件
-                            if item.name.startswith('.') or item.name.endswith('.json') or item.name.endswith('.yaml'):
+                            # 跳过隐藏文件
+                            if item.name.startswith('.'):
+                                continue
+                            # 保留 dataset.yaml，但跳过其他 yaml/json 文件
+                            if item.name != 'dataset.yaml' and (item.name.endswith('.json') or item.name.endswith('.yaml')):
                                 continue
                             
                             dest_path = raw_data_dir / item.name

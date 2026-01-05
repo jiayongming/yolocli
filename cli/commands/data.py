@@ -1759,11 +1759,34 @@ def convert_labelstudio(
     skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip", help="跳过已下载的图片"),
     max_workers: int = typer.Option(4, "--max-workers", "-w", help="并发下载线程数"),
     include_negative: bool = typer.Option(True, "--include-negative/--no-negative", help="包含无标注图片作为负样本（检测任务）"),
+    max_tasks: Optional[int] = typer.Option(None, "--max-tasks", "-m", help="限制下载的最大任务数（用于测试或部分下载）"),
+    task_ids: Optional[str] = typer.Option(None, "--task-ids", help="指定要下载的任务ID列表（逗号分隔，如: 100,200,300）"),
+    task_range: Optional[str] = typer.Option(None, "--task-range", help="指定任务ID范围（如: 100-200）"),
+    filter_labels: Optional[str] = typer.Option(None, "--filter-labels", help="只下载包含指定标签的任务（逗号分隔，如: person,car）"),
 ):
     """从Label Studio导出数据转换为YOLO格式
     
     对于检测任务，无标注的图片将作为负样本被下载并创建空标签文件。
     负样本有助于减少误报，提高模型鲁棒性（推荐包含10-20%负样本）。
+    
+    部分数据集下载选项:
+        --max-tasks: 限制下载数量（如：--max-tasks 100 只下载前100个任务）
+        --task-ids: 指定任务ID（如：--task-ids 100,200,300）
+        --task-range: 指定ID范围（如：--task-range 100-200）
+        --filter-labels: 按标签筛选（如：--filter-labels person,car）
+    
+    示例:
+        # 只下载前50个任务（快速测试）
+        python yolo_cli.py data convert-labelstudio -i export.json --max-tasks 50
+        
+        # 下载特定任务
+        python yolo_cli.py data convert-labelstudio -i export.json --task-ids 100,200,300
+        
+        # 下载ID范围的任务
+        python yolo_cli.py data convert-labelstudio -i export.json --task-range 100-500
+        
+        # 只下载包含特定标签的任务
+        python yolo_cli.py data convert-labelstudio -i export.json --filter-labels person,car
     """
     
     print_section_header("Label Studio 数据转换")
@@ -1819,17 +1842,81 @@ def convert_labelstudio(
             print_error("未找到有效的标注数据")
             raise typer.Exit(1)
         
+        print_success(f"✓ 解析完成：找到 {len(parsed_data)} 个任务")
+        
+        # 应用筛选条件
+        original_count = len(parsed_data)
+        
+        # 1. 按任务ID列表筛选
+        if task_ids:
+            id_list = [int(tid.strip()) for tid in task_ids.split(',')]
+            id_set = set(id_list)
+            parsed_data = [item for item in parsed_data if item.get('task_id') in id_set]
+            print_info(f"按任务ID筛选: {len(id_list)} 个指定ID，匹配到 {len(parsed_data)} 个任务")
+        
+        # 2. 按任务ID范围筛选
+        elif task_range:
+            try:
+                range_parts = task_range.split('-')
+                if len(range_parts) != 2:
+                    print_error("任务ID范围格式错误，应为: start-end (如: 100-200)")
+                    raise typer.Exit(1)
+                start_id = int(range_parts[0].strip())
+                end_id = int(range_parts[1].strip())
+                if start_id > end_id:
+                    print_error(f"任务ID范围错误: 起始ID ({start_id}) 大于结束ID ({end_id})")
+                    raise typer.Exit(1)
+                parsed_data = [item for item in parsed_data if start_id <= item.get('task_id', 0) <= end_id]
+                print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
+            except ValueError as e:
+                print_error(f"任务ID范围解析错误: {e}")
+                raise typer.Exit(1)
+        
+        # 3. 按标签筛选
+        if filter_labels:
+            label_list = [label.strip() for label in filter_labels.split(',')]
+            label_set = set(label_list)
+            
+            def has_matching_label(item):
+                """检查任务是否包含指定的标签"""
+                for ann in item.get('annotations', []):
+                    item_labels = ann.get('labels', [])
+                    if any(label in label_set for label in item_labels):
+                        return True
+                # 对于分类任务
+                if item.get('category') in label_set:
+                    return True
+                return False
+            
+            parsed_data = [item for item in parsed_data if has_matching_label(item)]
+            print_info(f"按标签筛选: {', '.join(label_list)}，匹配到 {len(parsed_data)} 个任务")
+        
+        # 4. 限制最大任务数
+        if max_tasks and max_tasks < len(parsed_data):
+            max_tasks_int = int(max_tasks)
+            parsed_data = parsed_data[:max_tasks_int]
+            print_info(f"限制任务数: 取前 {max_tasks_int} 个任务")
+        
+        if not parsed_data:
+            print_warning("应用筛选条件后没有匹配的任务")
+            print_info(f"原始任务数: {original_count}")
+            raise typer.Exit(1)
+        
+        if original_count > len(parsed_data):
+            print_success(f"✓ 筛选后: {len(parsed_data)}/{original_count} 个任务将被处理")
+        
         # 统计正负样本
         positive_count = sum(1 for item in parsed_data if not item.get('is_negative', False))
         negative_count = sum(1 for item in parsed_data if item.get('is_negative', False))
         
-        print_success(f"✓ 解析完成：找到 {len(parsed_data)} 个任务")
         if task == 'detect':
             print_info(f"  正样本（有标注）: {positive_count}")
             if include_negative:
                 print_info(f"  负样本（无标注）: {negative_count}")
                 if negative_count > 0:
                     print_info(f"  负样本比例: {negative_count/len(parsed_data)*100:.1f}%")
+    except typer.Exit:
+        raise
     except Exception as e:
         print_error(f"解析失败: {str(e)}")
         raise typer.Exit(1)
