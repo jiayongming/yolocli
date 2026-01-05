@@ -1495,6 +1495,10 @@ def run_fiftyone_operations():
                 
                 yaml_path = input_path("dataset.yaml路径:", default="data/processed/dataset.yaml", must_exist=True)
                 dataset_name = input_text("数据集名称 (留空自动生成):", default="")
+                
+                # 选择任务类型
+                task_type = select_task_type_for_predict()
+                
                 copy_dataset = confirm_action("是否将数据集复制到 datasets 目录统一管理?", default=True)
                 
                 if not dataset_name:
@@ -1507,7 +1511,8 @@ def run_fiftyone_operations():
                     data_yaml_path=yaml_path,
                     dataset_name=dataset_name,
                     persistent=True,
-                    copy_to_datasets=copy_dataset
+                    copy_to_datasets=copy_dataset,
+                    task_type=task_type
                 )
                 
                 if success:
