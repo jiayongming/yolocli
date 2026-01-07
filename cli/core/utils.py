@@ -455,6 +455,62 @@ def get_model_name_with_task(base_model: str, task: str) -> str:
         return f"{base}{suffix}"
 
 
+def resolve_model_path(model: str, task: Optional[str] = None) -> Tuple[str, bool]:
+    """
+    解析模型路径，自动查找已下载的模型
+    
+    此函数会按以下顺序查找模型：
+    1. 如果model是绝对路径或相对路径且文件存在，直接使用
+    2. 在 models/weights/ 目录中查找
+    3. 返回模型名称（让YOLO自动下载）
+    
+    Args:
+        model: 模型名称或路径（如 'yolo11s.pt', 'path/to/model.pt'）
+        task: 任务类型（可选，用于确定正确的模型文件名）
+        
+    Returns:
+        Tuple[str, bool]: (解析后的模型路径或名称, 是否找到本地文件)
+        
+    Examples:
+        >>> resolve_model_path('yolo11s.pt', 'pose')
+        ('models/weights/yolo11s-pose.pt', True)  # 如果文件存在
+        >>> resolve_model_path('yolo11s.pt', 'detect')
+        ('yolo11s.pt', False)  # 如果文件不存在，返回模型名
+    """
+    model_path = Path(model)
+    
+    # 1. 如果是路径且文件存在，直接使用
+    if model_path.exists():
+        return (str(model_path), True)
+    
+    # 2. 在 models/weights/ 目录中查找
+    try:
+        from .config import ConfigManager
+        config = ConfigManager()
+        weights_dir = config.get_path('models', absolute=True) / 'weights'
+        
+        # 如果提供了任务类型，确保模型名包含正确的后缀
+        if task:
+            model_with_task = get_model_name_with_task(model_path.name if model_path.suffix else model, task)
+        else:
+            model_with_task = model_path.name if model_path.suffix else model
+        
+        weights_model_path = weights_dir / model_with_task
+        
+        if weights_model_path.exists():
+            return (str(weights_model_path), True)
+    except Exception:
+        pass
+    
+    # 3. 没有找到本地文件，返回模型名称（让YOLO自动下载）
+    if task:
+        model_name = get_model_name_with_task(model_path.name if model_path.suffix else model, task)
+    else:
+        model_name = model_path.name if model_path.suffix else model
+    
+    return (model_name, False)
+
+
 def parse_model_name(model_name: str) -> Tuple[str, str]:
     """
     解析模型名称，提取任务类型

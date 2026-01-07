@@ -14,7 +14,7 @@ import shutil
 from ..core.config import ConfigManager
 from ..core.utils import (
     detect_device, get_device_name, ensure_dir, find_files,
-    TaskType, validate_task_type, parse_model_name
+    TaskType, validate_task_type, parse_model_name, resolve_model_path
 )
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
@@ -176,7 +176,11 @@ def predict_image(
     
     print_section_header("图片预测")
     
-    # 验证文件存在
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model, task)
+    if found_local:
+        print_info(f"✓ 使用已下载的模型: {model}")
+    
     model_path = Path(model)
     if not model_path.exists():
         print_error(f"模型不存在: {model}")
@@ -458,7 +462,11 @@ def detect_batch(
     
     print_section_header("批量检测")
     
-    # 验证模型
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model)
+    if found_local:
+        print_info(f"✓ 使用已下载的模型: {model}")
+    
     model_path = Path(model)
     if not model_path.exists():
         print_error(f"模型不存在: {model}")
@@ -719,7 +727,11 @@ def detect_video(
     
     print_section_header("视频检测")
     
-    # 验证模型
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model)
+    if found_local:
+        print_info(f"✓ 使用已下载的模型: {model}")
+    
     model_path = Path(model)
     if not model_path.exists():
         print_error(f"模型不存在: {model}")
@@ -810,7 +822,11 @@ def detect_webcam(
     
     print_section_header("摄像头检测")
     
-    # 验证模型
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model)
+    if found_local:
+        print_info(f"✓ 使用已下载的模型: {model}")
+    
     model_path = Path(model)
     if not model_path.exists():
         print_error(f"模型不存在: {model}")

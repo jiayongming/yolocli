@@ -13,7 +13,7 @@ from ..core.config import ConfigManager
 from ..core.version import YOLOVersionManager
 from ..core.utils import (
     detect_device, get_device_name, ensure_dir,
-    TaskType, validate_task_type, get_model_name_with_task
+    TaskType, validate_task_type, get_model_name_with_task, resolve_model_path
 )
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
@@ -280,12 +280,12 @@ def start_training(
         model_name = Path(model).stem
         name = f"{model_name}_{timestamp}"
     
-    # 确保模型名称包含正确的任务后缀
-    model_path = Path(model)
-    if not model_path.exists():
-        # 如果是模型名称而非路径，添加任务后缀
-        model = get_model_name_with_task(model, task)
-        print_info(f"使用模型: {model}")
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model, task)
+    if found_local:
+        print_success(f"✓ 使用已下载的模型: {model}")
+    else:
+        print_info(f"使用模型: {model} (将自动下载)")
     
     # 获取数据增强配置
     # Pose任务使用专用的数据增强预设
