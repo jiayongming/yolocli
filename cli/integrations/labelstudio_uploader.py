@@ -600,8 +600,14 @@ class LabelStudioUploader:
         # 转换为Label Studio格式
         predictions = []
         if self.task_type == 'pose':
-            # Pose任务：转换关键点
+            # Pose任务：同时转换边界框和关键点
             for anno in yolo_annotations:
+                # 1. 添加边界框标注
+                bbox = self._yolo_to_labelstudio_bbox(anno[:5], img_width, img_height)  # 只取前5个值（class_id + bbox）
+                if bbox:
+                    predictions.append(bbox)
+                
+                # 2. 添加关键点标注
                 keypoints = self._yolo_to_labelstudio_pose(anno, img_width, img_height)
                 if keypoints:
                     # pose返回的是关键点列表，需要展开
@@ -833,9 +839,13 @@ class LabelStudioUploader:
                 for i, kp in enumerate(self.keypoint_names)
             ])
             
+            # Pose任务：包含矩形框（用于框住整个对象）和关键点
             labeling_config = f"""
 <View>
   <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <RectangleLabels name="label" toName="image" strokeWidth="3" opacity="0.9">
+    {self._generate_label_tags()}
+  </RectangleLabels>
   <KeyPointLabels name="keypoint" toName="image" opacity="0.9">
     {keypoint_labels}
   </KeyPointLabels>
@@ -932,19 +942,22 @@ class LabelStudioUploader:
                 
                 # 根据任务类型验证
                 if self.task_type == 'pose':
-                    # Pose任务：原始标注数是对象数，上传的标注数是可见关键点数
+                    # Pose任务：每个对象上传 1个边界框 + N个可见关键点
                     # 注意：只有visibility>0的关键点才会被上传
-                    print_info(f"  原始对象数: {anno_count}, 上传的可见关键点数: {pred_count}")
+                    print_info(f"  原始对象数: {anno_count}, 上传的标注数: {pred_count}")
                     
                     if self.keypoint_names:
-                        expected_total = anno_count * len(self.keypoint_names)
-                        print_info(f"  说明: 每个对象有{len(self.keypoint_names)}个关键点，实际上传{pred_count}个（不可见的关键点未上传）")
+                        # 每个对象: 1个bbox + 最多N个关键点
+                        min_expected = anno_count  # 至少有边界框
+                        max_expected = anno_count * (1 + len(self.keypoint_names))  # bbox + 所有关键点
+                        print_info(f"  说明: 每个对象包含1个边界框 + 最多{len(self.keypoint_names)}个关键点")
+                        print_info(f"  期望标注数: {min_expected}~{max_expected}（不可见的关键点未上传）")
                         
-                        # 简单验证：关键点数应该在合理范围内
-                        if pred_count > 0 and pred_count <= expected_total:
+                        # 验证：标注数应该在合理范围内
+                        if pred_count >= min_expected and pred_count <= max_expected:
                             print_success("  ✓ 标注验证通过")
                         else:
-                            print_warning(f"  ⚠️  关键点数量异常（期望≤{expected_total}，实际{pred_count}）")
+                            print_warning(f"  ⚠️  标注数量异常（期望{min_expected}~{max_expected}，实际{pred_count}）")
                     else:
                         print_warning("  ⚠️  无法验证（缺少关键点信息）")
                 else:
