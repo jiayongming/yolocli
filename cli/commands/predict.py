@@ -179,11 +179,19 @@ def predict_image(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model, task)
     if found_local:
-        print_info(f"✓ 使用已下载的模型: {model}")
-    
-    model_path = Path(model)
-    if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        print_success(f"✓ 使用已下载的模型: {model}")
+        model_path = Path(model)
+        if not model_path.exists():
+            print_error(f"模型文件损坏或不可访问: {model}")
+            raise typer.Exit(1)
+    else:
+        # 模型不在 models/weights/ 目录中
+        print_warning(f"未找到本地模型: {model}")
+        print_info(f"请先下载模型：")
+        print_info(f"  yolo-cli model download --version yolo11 --size s --task {task}")
+        print_info(f"")
+        print_info(f"或者使用已训练的模型路径：")
+        print_info(f"  --model /path/to/your/model.pt")
         raise typer.Exit(1)
     
     image_path = Path(image)
@@ -465,11 +473,19 @@ def detect_batch(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
-        print_info(f"✓ 使用已下载的模型: {model}")
-    
-    model_path = Path(model)
-    if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        print_success(f"✓ 使用已下载的模型: {model}")
+        model_path = Path(model)
+        if not model_path.exists():
+            print_error(f"模型文件损坏或不可访问: {model}")
+            raise typer.Exit(1)
+    else:
+        # 模型不在 models/weights/ 目录中
+        print_warning(f"未找到本地模型: {model}")
+        print_info(f"请先下载模型：")
+        print_info(f"  yolo-cli model download --version yolo11 --size s --task detect")
+        print_info(f"")
+        print_info(f"或者使用已训练的模型路径：")
+        print_info(f"  --model /path/to/your/model.pt")
         raise typer.Exit(1)
     
     # 验证源
@@ -730,11 +746,19 @@ def detect_video(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
-        print_info(f"✓ 使用已下载的模型: {model}")
-    
-    model_path = Path(model)
-    if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        print_success(f"✓ 使用已下载的模型: {model}")
+        model_path = Path(model)
+        if not model_path.exists():
+            print_error(f"模型文件损坏或不可访问: {model}")
+            raise typer.Exit(1)
+    else:
+        # 模型不在 models/weights/ 目录中
+        print_warning(f"未找到本地模型: {model}")
+        print_info(f"请先下载模型：")
+        print_info(f"  yolo-cli model download --version yolo11 --size s --task detect")
+        print_info(f"")
+        print_info(f"或者使用已训练的模型路径：")
+        print_info(f"  --model /path/to/your/model.pt")
         raise typer.Exit(1)
     
     # 验证视频
@@ -825,11 +849,19 @@ def detect_webcam(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
-        print_info(f"✓ 使用已下载的模型: {model}")
-    
-    model_path = Path(model)
-    if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        print_success(f"✓ 使用已下载的模型: {model}")
+        model_path = Path(model)
+        if not model_path.exists():
+            print_error(f"模型文件损坏或不可访问: {model}")
+            raise typer.Exit(1)
+    else:
+        # 模型不在 models/weights/ 目录中
+        print_warning(f"未找到本地模型: {model}")
+        print_info(f"请先下载模型：")
+        print_info(f"  yolo-cli model download --version yolo11 --size s --task detect")
+        print_info(f"")
+        print_info(f"或者使用已训练的模型路径：")
+        print_info(f"  --model /path/to/your/model.pt")
         raise typer.Exit(1)
     
     # 自动检测设备

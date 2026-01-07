@@ -78,25 +78,41 @@ def download(
                 progress.update(task, description=f"下载 {model_name}")
                 
                 try:
-                    # 使用YOLO类会自动下载模型
+                    target_path = output_dir / model_name
+                    
+                    # 如果已存在，跳过
+                    if target_path.exists():
+                        print_warning(f"⚠ {model_name} 已存在，跳过")
+                        progress.advance(task)
+                        continue
+                    
+                    # 使用YOLO类会自动下载模型到缓存或当前目录
                     model = YOLO(model_name)
                     
-                    # 查找下载的模型文件
-                    # YOLO会下载到当前目录或cache目录
-                    model_path = Path(model_name)
-                    if model_path.exists():
-                        # 移动到输出目录
-                        target_path = output_dir / model_name
-                        if not target_path.exists():
-                            model_path.rename(target_path)
-                            print_success(f"✓ {model_name} 已下载到 {target_path}")
-                        else:
-                            print_warning(f"⚠ {model_name} 已存在，跳过")
-                            if model_path.exists():
-                                model_path.unlink()  # 删除临时文件
+                    # 查找模型文件的可能位置
+                    possible_locations = [
+                        Path(model_name),  # 当前目录
+                        Path.home() / '.cache' / 'ultralytics' / model_name,  # YOLO缓存目录
+                        Path.home() / '.ultralytics' / model_name,  # 旧版缓存目录
+                    ]
+                    
+                    source_path = None
+                    for location in possible_locations:
+                        if location.exists():
+                            source_path = location
+                            break
+                    
+                    if source_path:
+                        # 复制（而不是移动）到目标目录，保留缓存
+                        import shutil
+                        shutil.copy2(source_path, target_path)
+                        print_success(f"✓ {model_name} 已下载到 {target_path}")
+                        
+                        # 如果是当前目录的临时文件，删除它
+                        if source_path == Path(model_name):
+                            source_path.unlink()
                     else:
-                        # 模型可能已经在cache中
-                        print_success(f"✓ {model_name} 已准备就绪")
+                        print_warning(f"⚠ {model_name} 下载成功但未找到文件（可能在其他位置）")
                 
                 except Exception as e:
                     print_error(f"✗ {model_name} 下载失败: {e}")
