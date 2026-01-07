@@ -666,6 +666,13 @@ class LabelStudioConverter:
                 continue
             
             # 有关键点，合并为 Pose 格式
+            # 首先尝试从矩形框标注中获取类别标签
+            object_labels = []
+            rectangles = [ann for ann in item['annotations'] if ann.get('type') == 'rectangle']
+            if rectangles:
+                # 如果有矩形框标注，使用它的类别标签
+                object_labels = rectangles[0].get('labels', [])
+            
             # 创建一个字典来存储每个标签的关键点
             kp_dict = {}
             actual_labels = []  # 记录实际标注的顺序
@@ -708,8 +715,17 @@ class LabelStudioConverter:
                         'label': label
                     })
             
-            # 计算包含所有关键点的边界框
-            if all_x and all_y:
+            # 如果没有从矩形框获取到类别，尝试从关键点周围计算边界框
+            # 并检查是否有矩形框标注提供边界框信息
+            if rectangles and not object_labels:
+                # 使用矩形框的边界框
+                rect = rectangles[0]
+                bbox_x = rect['x']
+                bbox_y = rect['y']
+                bbox_w = rect['width']
+                bbox_h = rect['height']
+            elif all_x and all_y:
+                # 计算包含所有关键点的边界框
                 min_x = min(all_x)
                 max_x = max(all_x)
                 min_y = min(all_y)
@@ -730,6 +746,10 @@ class LabelStudioConverter:
                 bbox_w = 100
                 bbox_h = 100
             
+            # 如果还是没有获取到类别标签，使用默认值
+            if not object_labels:
+                object_labels = ['object']
+            
             # 创建 Pose 格式的标注
             pose_annotation = {
                 'type': 'pose',
@@ -738,7 +758,7 @@ class LabelStudioConverter:
                 'width': bbox_w,
                 'height': bbox_h,
                 'keypoints': ordered_keypoints,
-                'labels': ['object'],  # 默认类别
+                'labels': object_labels,  # 使用从矩形框获取的类别标签
             }
             
             # 替换原来的关键点标注

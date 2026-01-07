@@ -342,7 +342,22 @@ def _split_detect_segment_dataset(
                 if _validate_pose_label(label_file):
                     pairs.append((img_file, label_file, False))  # False = 非负样本
                 else:
-                    print_warning(f"Pose标签格式无效: {img_file.name}")
+                    # 提供详细的错误信息
+                    try:
+                        with open(label_file, 'r') as f:
+                            line = f.readline().strip()
+                            parts = line.split() if line else []
+                            if len(parts) < 5:
+                                print_warning(f"Pose标签格式无效: {img_file.name} (缺少边界框数据，需要至少5个字段)")
+                            elif len(parts) < 8:
+                                print_warning(f"Pose标签格式无效: {img_file.name} (缺少关键点数据，只有 {len(parts)} 个字段，至少需要8个)")
+                            elif (len(parts) - 5) % 3 != 0:
+                                kpt_values = len(parts) - 5
+                                print_warning(f"Pose标签格式无效: {img_file.name} (关键点数据不完整，有 {kpt_values} 个值，应为3的倍数)")
+                            else:
+                                print_warning(f"Pose标签格式无效: {img_file.name} (坐标值超出范围或其他格式错误)")
+                    except:
+                        print_warning(f"Pose标签格式无效: {img_file.name}")
             else:
                 pairs.append((img_file, label_file, False))  # False = 非负样本
         else:
@@ -2134,8 +2149,8 @@ def convert_labelstudio(
     print_success(f"✓ 保存类别列表: {classes_file}")
     
     # 生成 dataset.yaml 的标签部分（不包含路径信息，等待数据拆分后补全）
-    # 构建类别字典 {class_id: class_name}
-    classes_dict = {i: name for i, name in enumerate(sorted(class_mapping.keys()))}
+    # 构建类别字典 {class_id: class_name}（保持与 class_mapping 相同的顺序）
+    classes_dict = {idx: name for name, idx in class_mapping.items()}
     
     yaml_config = {
         'nc': len(classes_dict),
