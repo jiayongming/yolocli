@@ -449,8 +449,9 @@ class LabelStudioConverter:
         Returns:
             List[Dict]: 解析后的数据列表
                 [{
-                    'image_path': str,  # Label Studio中的路径
-                    'filename': str,    # 文件名
+                    'task_id': int,        # Label Studio任务ID
+                    'image_path': str,     # Label Studio中的路径
+                    'filename': str,       # 文件名
                     'annotations': [...],  # 检测任务的标注
                     'category': str,       # 分类任务的类别
                     'image_width': int,
@@ -472,6 +473,7 @@ class LabelStudioConverter:
             filename = Path(image_path).name
             
             item = {
+                'task_id': task.get('id'),  # 保存任务ID用于筛选
                 'image_path': image_path,
                 'filename': filename,
                 'annotations': [],
@@ -802,7 +804,16 @@ class LabelStudioConverter:
                 
                 filename = Path(image_path).name
                 
+                # 从CSV读取的id需要转换为int
+                task_id = None
+                if 'id' in row and row['id']:
+                    try:
+                        task_id = int(row['id'])
+                    except (ValueError, TypeError):
+                        pass
+                
                 item = {
+                    'task_id': task_id,  # 保存任务ID用于筛选
                     'image_path': image_path,
                     'filename': filename,
                     'annotations': [],

@@ -198,8 +198,10 @@ def run_data_operations():
                         task_ids = input_text("任务ID列表（逗号分隔）:", default="100,200,300")
                         print_info(f"将下载指定ID的任务: {task_ids}")
                     elif "任务ID范围" in filter_type:
-                        task_range = input_text("任务ID范围:", default="100-200")
-                        print_info(f"将下载ID范围内的任务: {task_range}")
+                        from ..ui.prompts import input_task_range
+                        start_id, end_id = input_task_range()
+                        task_range = [start_id, end_id]  # 改为列表
+                        print_info(f"将下载ID范围内的任务: {start_id}-{end_id}")
                     elif "按标签筛选" in filter_type:
                         filter_labels = input_text("标签列表（逗号分隔）:", default="person,car")
                         print_info(f"将下载包含这些标签的任务: {filter_labels}")
@@ -1549,8 +1551,10 @@ def run_labelstudio_operations():
                         task_ids = input_text("任务ID列表（逗号分隔）:", default="100,200,300")
                         print_info(f"将下载指定ID的任务: {task_ids}")
                     elif "任务ID范围" in filter_type:
-                        task_range = input_text("任务ID范围:", default="100-200")
-                        print_info(f"将下载ID范围内的任务: {task_range}")
+                        from ..ui.prompts import input_task_range
+                        start_id, end_id = input_task_range()
+                        task_range = (start_id, end_id)  # 保存为元组
+                        print_info(f"将下载ID范围内的任务: {start_id}-{end_id}")
                     elif "按标签筛选" in filter_type:
                         filter_labels = input_text("标签列表（逗号分隔）:", default="person,car")
                         print_info(f"将下载包含这些标签的任务: {filter_labels}")
@@ -1642,16 +1646,13 @@ def run_labelstudio_operations():
                     
                     # 2. 按任务ID范围筛选
                     elif task_range:
-                        range_parts = task_range.split('-')
-                        if len(range_parts) == 2:
-                            start_id = int(range_parts[0].strip())
-                            end_id = int(range_parts[1].strip())
-                            # 从原始数据中筛选
-                            filtered_tasks = [task for task in original_data if start_id <= task.get('id', 0) <= end_id]
-                            # 更新 parsed_data
-                            filtered_filenames = {Path(t.get('data', {}).get('image', '')).name for t in filtered_tasks}
-                            parsed_data = [item for item in parsed_data if item.get('filename') in filtered_filenames]
-                            print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
+                        start_id, end_id = task_range  # 直接使用元组
+                        # 从原始数据中筛选
+                        filtered_tasks = [task for task in original_data if start_id <= task.get('id', 0) <= end_id]
+                        # 更新 parsed_data
+                        filtered_filenames = {Path(t.get('data', {}).get('image', '')).name for t in filtered_tasks}
+                        parsed_data = [item for item in parsed_data if item.get('filename') in filtered_filenames]
+                        print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
                     
                     # 3. 按标签筛选
                     if filter_labels:

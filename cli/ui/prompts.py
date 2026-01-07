@@ -908,9 +908,9 @@ def select_task_filter_mode() -> str:
         str: 筛选方式 ('ids', 'range', 'unlabeled')
     """
     choices = [
-        "按任务ID列表筛选",
-        "按任务ID范围筛选",
-        "预测所有未标注的任务",
+        "按任务ID列表筛选（输入多个ID，逗号分隔）",
+        "按任务ID范围筛选（输入起始ID和结束ID）",
+        "仅处理未标注的任务",
     ]
     
     result = select_option("选择任务筛选方式:", choices)

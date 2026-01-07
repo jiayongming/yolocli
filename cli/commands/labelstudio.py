@@ -436,7 +436,7 @@ def batch_annotate_command(
     target: str = typer.Option("annotation", "--target", help="目标类型: annotation（正式标注）, prediction（预测结果）"),
     merge_mode: str = typer.Option("add", "--merge-mode", "-m", help="合并模式: add（追加）, skip（跳过已标注）, overwrite_same_type（覆盖同类型）"),
     task_ids: Optional[List[int]] = typer.Option(None, "--task-ids", help="指定task ID列表"),
-    task_range: Optional[str] = typer.Option(None, "--task-range", help="task ID范围，如 100-200"),
+    task_range: Optional[List[int]] = typer.Option(None, "--task-range", help="task ID范围 (start end)"),
     unlabeled: bool = typer.Option(False, "--unlabeled", help="仅处理未标注的tasks"),
     dry_run: bool = typer.Option(False, "--dry-run", help="试运行，不实际创建"),
     max_workers: int = typer.Option(4, "--workers", "-w", help="并发数"),
@@ -453,7 +453,7 @@ def batch_annotate_command(
           --type rectangle \\
           --target annotation \\
           --merge-mode add \\
-          --task-range 100-200
+          --task-range 100 200
         
         # 只标注空白tasks
         yolo-cli labelstudio batch-annotate \\
@@ -551,12 +551,14 @@ def batch_annotate_command(
     if task_ids:
         task_filter = {'mode': 'ids', 'task_ids': task_ids}
     elif task_range:
-        try:
-            start, end = map(int, task_range.split('-'))
-            task_filter = {'mode': 'range', 'task_range': (start, end)}
-        except:
-            print_error(f"无效的task范围格式: {task_range}（应为: 100-200）")
+        if len(task_range) != 2:
+            print_error(f"task范围需要两个参数: --task-range <起始ID> <结束ID>")
             raise typer.Exit(1)
+        start, end = task_range[0], task_range[1]
+        if start > end:
+            print_error(f"起始ID ({start}) 不能大于结束ID ({end})")
+            raise typer.Exit(1)
+        task_filter = {'mode': 'range', 'task_range': (start, end)}
     elif unlabeled:
         task_filter = {'mode': 'unlabeled'}
     

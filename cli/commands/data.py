@@ -1776,7 +1776,7 @@ def convert_labelstudio(
     include_negative: bool = typer.Option(True, "--include-negative/--no-negative", help="包含无标注图片作为负样本（检测任务）"),
     max_tasks: Optional[int] = typer.Option(None, "--max-tasks", "-m", help="限制下载的最大任务数（用于测试或部分下载）"),
     task_ids: Optional[str] = typer.Option(None, "--task-ids", help="指定要下载的任务ID列表（逗号分隔，如: 100,200,300）"),
-    task_range: Optional[str] = typer.Option(None, "--task-range", help="指定任务ID范围（如: 100-200）"),
+    task_range: Optional[List[int]] = typer.Option(None, "--task-range", help="指定任务ID范围 (start end)"),
     filter_labels: Optional[str] = typer.Option(None, "--filter-labels", help="只下载包含指定标签的任务（逗号分隔，如: person,car）"),
 ):
     """从Label Studio导出数据转换为YOLO格式
@@ -1787,7 +1787,7 @@ def convert_labelstudio(
     部分数据集下载选项:
         --max-tasks: 限制下载数量（如：--max-tasks 100 只下载前100个任务）
         --task-ids: 指定任务ID（如：--task-ids 100,200,300）
-        --task-range: 指定ID范围（如：--task-range 100-200）
+        --task-range: 指定ID范围（如：--task-range 100 500）
         --filter-labels: 按标签筛选（如：--filter-labels person,car）
     
     示例:
@@ -1798,7 +1798,7 @@ def convert_labelstudio(
         python yolo_cli.py data convert-labelstudio -i export.json --task-ids 100,200,300
         
         # 下载ID范围的任务
-        python yolo_cli.py data convert-labelstudio -i export.json --task-range 100-500
+        python yolo_cli.py data convert-labelstudio -i export.json --task-range 100 500
         
         # 只下载包含特定标签的任务
         python yolo_cli.py data convert-labelstudio -i export.json --filter-labels person,car
@@ -1871,21 +1871,25 @@ def convert_labelstudio(
         
         # 2. 按任务ID范围筛选
         elif task_range:
-            try:
-                range_parts = task_range.split('-')
-                if len(range_parts) != 2:
-                    print_error("任务ID范围格式错误，应为: start-end (如: 100-200)")
-                    raise typer.Exit(1)
-                start_id = int(range_parts[0].strip())
-                end_id = int(range_parts[1].strip())
-                if start_id > end_id:
-                    print_error(f"任务ID范围错误: 起始ID ({start_id}) 大于结束ID ({end_id})")
-                    raise typer.Exit(1)
-                parsed_data = [item for item in parsed_data if start_id <= item.get('task_id', 0) <= end_id]
-                print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
-            except ValueError as e:
-                print_error(f"任务ID范围解析错误: {e}")
+            if len(task_range) != 2:
+                print_error("任务ID范围需要两个参数: --task-range <起始ID> <结束ID>")
                 raise typer.Exit(1)
+            start_id = task_range[0]
+            end_id = task_range[1]
+            if start_id > end_id:
+                print_error(f"任务ID范围错误: 起始ID ({start_id}) 大于结束ID ({end_id})")
+                raise typer.Exit(1)
+            
+            # 调试：显示任务ID范围
+            task_ids_in_data = [item.get('task_id', 0) for item in parsed_data if item.get('task_id')]
+            if task_ids_in_data:
+                min_id = min(task_ids_in_data)
+                max_id = max(task_ids_in_data)
+                print_info(f"数据集中的任务ID范围: {min_id} - {max_id}")
+                print_info(f"筛选ID范围: {start_id} - {end_id}")
+            
+            parsed_data = [item for item in parsed_data if start_id <= item.get('task_id', 0) <= end_id]
+            print_info(f"按任务ID范围筛选: {start_id}-{end_id}，匹配到 {len(parsed_data)} 个任务")
         
         # 3. 按标签筛选
         if filter_labels:
