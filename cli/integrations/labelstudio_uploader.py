@@ -1208,9 +1208,65 @@ class LabelStudioUploader:
                         
                         progress.update(task_progress, advance=1)
             else:
-                # 使用prediction API (复用现有的upload_prediction方法)
-                print_warning("Prediction模式暂不支持，请使用annotation模式")
-                return stats
+                # 使用prediction API
+                def create_prediction_for_task(task_id, annotation_data):
+                    """为单个任务创建prediction"""
+                    try:
+                        # 确保annotation_data是列表格式（支持单个dict或list）
+                        result_list = [annotation_data] if isinstance(annotation_data, dict) else annotation_data
+                        
+                        # 创建prediction数据
+                        prediction_data = {
+                            "task": task_id,
+                            "result": result_list,
+                            "score": 0.9,  # 批量打标签时使用默认分数
+                            "model_version": "yolocli_batch_annotate"
+                        }
+                        
+                        # 发送POST请求创建prediction
+                        create_url = f"{self.url}/api/predictions/"
+                        response = requests.post(
+                            create_url,
+                            headers=self.headers,
+                            json=prediction_data,
+                            timeout=10
+                        )
+                        
+                        if response.status_code in [200, 201]:
+                            return True, None
+                        else:
+                            error_msg = f"HTTP {response.status_code}"
+                            try:
+                                error_detail = response.json()
+                                error_msg += f": {error_detail}"
+                            except:
+                                error_msg += f": {response.text[:200]}"
+                            return False, error_msg
+                    except Exception as e:
+                        return False, f"创建prediction失败: {str(e)}"
+                
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            create_prediction_for_task,
+                            task['id'],
+                            annotation_data
+                        ): task['id']
+                        for task in tasks
+                    }
+                    
+                    for future in as_completed(futures):
+                        task_id = futures[future]
+                        success, error = future.result()
+                        
+                        if success:
+                            stats['success'] += 1
+                        else:
+                            stats['failed'] += 1
+                            if error:
+                                failed_details.append((task_id, error))
+                        
+                        progress.update(task_progress, advance=1)
         
         # 3. 显示统计
         print()
