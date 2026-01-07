@@ -715,17 +715,16 @@ class LabelStudioConverter:
                         'label': label
                     })
             
-            # 如果没有从矩形框获取到类别，尝试从关键点周围计算边界框
-            # 并检查是否有矩形框标注提供边界框信息
-            if rectangles and not object_labels:
-                # 使用矩形框的边界框
+            # 确定边界框：优先使用矩形框标注的边界框，否则从关键点计算
+            if rectangles:
+                # 如果有矩形框标注，直接使用它的边界框（框住整个表盘）
                 rect = rectangles[0]
                 bbox_x = rect['x']
                 bbox_y = rect['y']
                 bbox_w = rect['width']
                 bbox_h = rect['height']
             elif all_x and all_y:
-                # 计算包含所有关键点的边界框
+                # 没有矩形框标注，从关键点计算边界框
                 min_x = min(all_x)
                 max_x = max(all_x)
                 min_y = min(all_y)
@@ -740,7 +739,7 @@ class LabelStudioConverter:
                 bbox_w = min(100, max_x + margin_x) - bbox_x
                 bbox_h = min(100, max_y + margin_y) - bbox_y
             else:
-                # 如果没有有效的关键点，使用默认边界框
+                # 既没有矩形框也没有有效关键点，使用默认边界框
                 bbox_x = 0
                 bbox_y = 0
                 bbox_w = 100
