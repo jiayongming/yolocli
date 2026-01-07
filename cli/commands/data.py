@@ -990,15 +990,15 @@ def generate_yaml(
                                     continue
                                 
                                 parts = line.split()
-                                # YOLO Pose 格式: class_id x y w h kp1_x kp1_y kp1_v ...
-                                # 总列数 = 1 (class) + 4 (bbox) + N*3 (keypoints)
-                                if len(parts) > 5:
-                                    kpt_data_count = len(parts) - 5
-                                    if kpt_data_count % 3 == 0:
-                                        detected_kpt_count = kpt_data_count // 3
-                                        kpt_count = detected_kpt_count
-                                        print_info(f"从标签文件检测到 {kpt_count} 个关键点")
-                                        break
+                            # YOLO Pose 格式: class_id x y w h kp1_x kp1_y kp1_v ...
+                            # 总列数 = 1 (class) + 4 (bbox) + N*3 (keypoints)
+                            if len(parts) > 5:
+                                kpt_data_count = len(parts) - 5
+                                if kpt_data_count % 3 == 0:
+                                    detected_kpt_count = kpt_data_count // 3
+                                    kpt_count = detected_kpt_count
+                                    print_info(f"从标签文件检测到 {kpt_count} 个关键点")
+                                    break
                             
                             if detected_kpt_count:
                                 break
@@ -1006,37 +1006,37 @@ def generate_yaml(
                         continue
             else:
                 print_warning("未找到标签文件，使用默认配置")
-            
-            yaml_config['kpt_shape'] = [kpt_count, 3]
-            
-            # 根据关键点数量设置 flip_idx 和关键点名称
-            if kpt_count == 17:
-                # COCO 17 关键点的对称索引
-                yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
-                yaml_config['keypoint_names'] = [
-                    'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
-                    'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-                    'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-                    'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
-                ]
-            elif kpt_count == 4:
-                # 4个关键点（start, end, center, pointer）
-                # 假设没有对称关系，使用原始顺序
-                yaml_config['flip_idx'] = [0, 1, 2, 3]
-                yaml_config['keypoint_names'] = ['start', 'end', 'center', 'pointer']
-            else:
-                # 其他数量，使用原始顺序
-                yaml_config['flip_idx'] = list(range(kpt_count))
-                yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
-            
-            if detected_kpt_count:
-                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
-            else:
-                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
-            
-            # 显示关键点名称
-            if 'keypoint_names' in yaml_config:
-                print_info(f"关键点名称: {yaml_config['keypoint_names']}")
+        
+        yaml_config['kpt_shape'] = [kpt_count, 3]
+        
+        # 根据关键点数量设置 flip_idx 和关键点名称
+        if kpt_count == 17:
+            # COCO 17 关键点的对称索引
+            yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            yaml_config['keypoint_names'] = [
+                'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+            ]
+        elif kpt_count == 4:
+            # 4个关键点（start, end, center, pointer）
+            # 假设没有对称关系，使用原始顺序
+            yaml_config['flip_idx'] = [0, 1, 2, 3]
+            yaml_config['keypoint_names'] = ['start', 'end', 'center', 'pointer']
+        else:
+            # 其他数量，使用原始顺序
+            yaml_config['flip_idx'] = list(range(kpt_count))
+            yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
+        
+        if detected_kpt_count:
+            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
+        else:
+            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
+        
+        # 显示关键点名称
+        if 'keypoint_names' in yaml_config:
+            print_info(f"关键点名称: {yaml_config['keypoint_names']}")
     
     # 保存YAML文件
     output_path = Path(output)

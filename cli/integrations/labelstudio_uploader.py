@@ -14,8 +14,9 @@ import json
 import base64
 import yaml
 import requests
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -903,6 +904,565 @@ class LabelStudioUploader:
             "E63946", "F1FAEE", "A8DADC", "457B9D", "1D3557"
         ]
         return colors[index % len(colors)]
+    
+    @staticmethod
+    def normalize_to_labelstudio_bbox(
+        center_x: float,
+        center_y: float,
+        width: float,
+        height: float
+    ) -> Dict[str, float]:
+        """
+        将归一化的中心点+宽高转换为Label Studio格式（左上角+宽高，百分比）
+        
+        Args:
+            center_x: 中心点X坐标 (0-1)
+            center_y: 中心点Y坐标 (0-1)
+            width: 宽度 (0-1)
+            height: 高度 (0-1)
+        
+        Returns:
+            {'x': 35.0, 'y': 40.0, 'width': 30.0, 'height': 20.0}  # 百分比
+        """
+        x = (center_x - width / 2) * 100
+        y = (center_y - height / 2) * 100
+        w = width * 100
+        h = height * 100
+        
+        return {
+            'x': float(x),
+            'y': float(y),
+            'width': float(w),
+            'height': float(h)
+        }
+    
+    @staticmethod
+    def normalize_to_labelstudio_keypoint(x: float, y: float) -> Dict[str, float]:
+        """
+        将归一化的关键点坐标转换为Label Studio格式（百分比）
+        
+        Args:
+            x: X坐标 (0-1)
+            y: Y坐标 (0-1)
+        
+        Returns:
+            {'x': 50.0, 'y': 50.0}  # 百分比
+        """
+        return {
+            'x': float(x * 100),
+            'y': float(y * 100)
+        }
+    
+    def parse_labeling_config(self) -> Dict[str, Any]:
+        """
+        解析项目的XML标签配置，提取可用的标注控件
+        
+        Returns:
+            {
+                'rectanglelabels': {
+                    'from_name': 'label',
+                    'to_name': 'image',
+                    'labels': ['circle_meter', 'gauge']
+                },
+                'keypointlabels': {
+                    'from_name': 'keypoint',
+                    'to_name': 'image',
+                    'labels': ['start', 'end', 'center', 'pointer']
+                }
+            }
+        """
+        print_info("正在解析项目标签配置...")
+        
+        # 获取项目配置
+        url = f"{self.url}/api/projects/{self.project_id}"
+        
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                print_error(f"✗ 获取项目配置失败: {response.status_code}")
+                return {}
+            
+            project = response.json()
+            label_config_xml = project.get('label_config', '')
+            
+            if not label_config_xml:
+                print_warning("项目没有标签配置")
+                return {}
+            
+            # 解析XML
+            try:
+                root = ET.fromstring(label_config_xml)
+            except ET.ParseError as e:
+                print_error(f"✗ XML解析失败: {str(e)}")
+                return {}
+            
+            config = {}
+            
+            # 查找RectangleLabels控件
+            for rect_elem in root.findall('.//RectangleLabels'):
+                from_name = rect_elem.get('name', 'label')
+                to_name = rect_elem.get('toName', 'image')
+                labels = [label.get('value') for label in rect_elem.findall('.//Label') if label.get('value')]
+                
+                if labels:
+                    config['rectanglelabels'] = {
+                        'from_name': from_name,
+                        'to_name': to_name,
+                        'labels': labels
+                    }
+                    print_info(f"  ✓ 找到矩形框标注: {len(labels)} 个类别")
+            
+            # 查找KeyPointLabels控件
+            for kp_elem in root.findall('.//KeyPointLabels'):
+                from_name = kp_elem.get('name', 'keypoint')
+                to_name = kp_elem.get('toName', 'image')
+                labels = [label.get('value') for label in kp_elem.findall('.//Label') if label.get('value')]
+                
+                if labels:
+                    config['keypointlabels'] = {
+                        'from_name': from_name,
+                        'to_name': to_name,
+                        'labels': labels
+                    }
+                    print_info(f"  ✓ 找到关键点标注: {len(labels)} 个关键点")
+            
+            if not config:
+                print_warning("未找到支持的标注控件（RectangleLabels或KeyPointLabels）")
+            
+            return config
+            
+        except Exception as e:
+            print_error(f"✗ 解析配置异常: {str(e)}")
+            return {}
+    
+    def create_annotation(
+        self,
+        task_id: int,
+        annotation_data: Dict[str, Any],
+        merge_mode: str = 'add'
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        为task创建或更新annotation
+        
+        Args:
+            task_id: 任务ID
+            annotation_data: 标注数据（result格式）
+            merge_mode: 合并模式 ('add', 'skip', 'overwrite_same_type')
+        
+        Returns:
+            (是否成功, 错误信息)
+        """
+        # 1. 获取task及其现有annotations
+        task_url = f"{self.url}/api/tasks/{task_id}/"
+        
+        try:
+            response = requests.get(
+                task_url,
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                return False, f"获取task失败: {response.status_code}"
+            
+            task = response.json()
+            existing_annotations = task.get('annotations', [])
+            
+            # 2. 根据merge_mode决定操作
+            if merge_mode == 'skip' and len(existing_annotations) > 0:
+                return False, "跳过（已有标注）"
+            
+            # 获取现有的result数组
+            existing_results = []
+            annotation_id = None
+            if existing_annotations:
+                annotation_id = existing_annotations[0]['id']
+                existing_results = existing_annotations[0].get('result', [])
+            
+            # 3. 合并result
+            new_result = annotation_data
+            new_type = new_result.get('type')
+            
+            if merge_mode == 'add':
+                # 追加：保留所有已有标注，添加新标注
+                merged_results = existing_results + [new_result]
+            elif merge_mode == 'overwrite_same_type':
+                # 只删除同类型，保留其他类型
+                filtered = [r for r in existing_results if r.get('type') != new_type]
+                merged_results = filtered + [new_result]
+            else:  # skip模式已在前面处理
+                merged_results = existing_results + [new_result]
+            
+            # 4. 更新或创建annotation
+            if annotation_id:
+                # 更新现有annotation
+                anno_url = f"{self.url}/api/annotations/{annotation_id}/"
+                response = requests.patch(
+                    anno_url,
+                    headers=self.headers,
+                    json={'result': merged_results},
+                    timeout=10
+                )
+            else:
+                # 创建新annotation
+                anno_url = f"{self.url}/api/tasks/{task_id}/annotations/"
+                response = requests.post(
+                    anno_url,
+                    headers=self.headers,
+                    json={'result': [new_result]},
+                    timeout=10
+                )
+            
+            if response.status_code in [200, 201]:
+                return True, None
+            else:
+                return False, f"API错误 ({response.status_code}): {response.text[:100]}"
+                
+        except Exception as e:
+            return False, f"异常: {str(e)}"
+    
+    def batch_annotate_tasks(
+        self,
+        annotation_data: Dict[str, Any],
+        target_type: str,
+        task_filter: Dict[str, Any],
+        merge_mode: str = 'add',
+        dry_run: bool = False,
+        max_workers: int = 4
+    ) -> Dict[str, int]:
+        """
+        批量给tasks添加标注
+        
+        Args:
+            annotation_data: 标注数据（result格式）
+            target_type: 'annotation' 或 'prediction'
+            task_filter: 筛选条件 {'mode': 'all'|'ids'|'range'|'unlabeled', ...}
+            merge_mode: 合并模式 ('add', 'skip', 'overwrite_same_type')
+            dry_run: 试运行模式
+            max_workers: 并发数
+        
+        Returns:
+            {'total': N, 'success': N, 'failed': N, 'skipped': N}
+        """
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        
+        print_info("\n开始批量打标签...")
+        
+        # 1. 根据filter获取tasks
+        tasks = self._get_tasks_by_filter(task_filter)
+        
+        if not tasks:
+            print_warning("未找到符合条件的tasks")
+            return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0}
+        
+        print_info(f"找到 {len(tasks)} 个任务")
+        
+        if dry_run:
+            print_info("【试运行模式】不会实际创建标注")
+            return {'total': len(tasks), 'success': 0, 'failed': 0, 'skipped': len(tasks)}
+        
+        # 2. 批量处理
+        stats = {'total': len(tasks), 'success': 0, 'failed': 0, 'skipped': 0}
+        failed_details = []
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+        ) as progress:
+            
+            task_progress = progress.add_task("处理进度", total=len(tasks))
+            
+            if target_type == 'annotation':
+                # 使用annotation API
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            self.create_annotation,
+                            task['id'],
+                            annotation_data,
+                            merge_mode
+                        ): task['id']
+                        for task in tasks
+                    }
+                    
+                    for future in as_completed(futures):
+                        task_id = futures[future]
+                        success, error = future.result()
+                        
+                        if success:
+                            stats['success'] += 1
+                        elif error and "跳过" in error:
+                            stats['skipped'] += 1
+                        else:
+                            stats['failed'] += 1
+                            if error:
+                                failed_details.append((task_id, error))
+                        
+                        progress.update(task_progress, advance=1)
+            else:
+                # 使用prediction API (复用现有的upload_prediction方法)
+                print_warning("Prediction模式暂不支持，请使用annotation模式")
+                return stats
+        
+        # 3. 显示统计
+        print()
+        print_success(f"✓ 成功: {stats['success']} 个任务")
+        if stats['failed'] > 0:
+            print_error(f"✗ 失败: {stats['failed']} 个任务")
+            if failed_details[:3]:  # 显示前3个失败详情
+                print_error("\n失败详情（前3个）:")
+                for task_id, error in failed_details[:3]:
+                    print_error(f"  Task #{task_id}: {error}")
+        if stats['skipped'] > 0:
+            print_info(f"ℹ 跳过: {stats['skipped']} 个任务")
+        
+        return stats
+    
+    def _get_tasks_by_filter(self, task_filter: Dict[str, Any]) -> List[Dict]:
+        """根据筛选条件获取tasks"""
+        mode = task_filter.get('mode', 'all')
+        
+        if mode == 'ids':
+            task_ids = task_filter.get('task_ids', [])
+            return self._get_tasks_by_ids(task_ids)
+        elif mode == 'range':
+            task_range = task_filter.get('task_range')
+            if task_range and len(task_range) == 2:
+                start_id, end_id = task_range
+                return self._get_tasks_by_range(start_id, end_id)
+            else:
+                print_warning(f"⚠ task_range格式错误: {task_range}")
+                print_warning(f"⚠ task_filter内容: {task_filter}")
+                return []
+        elif mode == 'unlabeled':
+            return self._get_unlabeled_tasks()
+        else:  # 'all'
+            return self._get_all_project_tasks()
+    
+    def _get_tasks_by_ids(self, task_ids: List[int]) -> List[Dict]:
+        """根据ID列表获取tasks（优化版：批量获取后过滤）"""
+        if not task_ids:
+            return []
+        
+        print_info(f"正在批量获取任务（{len(task_ids)} 个ID）...")
+        
+        # 使用Label Studio的export API获取所有任务（更快）
+        try:
+            export_url = f"{self.url}/api/projects/{self.project_id}/export"
+            response = requests.get(
+                export_url,
+                headers=self.headers,
+                params={'exportType': 'JSON'},
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                all_tasks = response.json()
+                task_id_set = set(task_ids)
+                tasks = [task for task in all_tasks if task.get('id') in task_id_set]
+                
+                print_success(f"✓ 找到 {len(tasks)}/{len(task_ids)} 个任务")
+                return tasks
+        except Exception as e:
+            print_warning(f"使用export API失败，切换到逐个获取: {str(e)}")
+        
+        # 降级方案：逐个获取
+        tasks = []
+        for task_id in task_ids:
+            try:
+                url = f"{self.url}/api/tasks/{task_id}"
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    tasks.append(response.json())
+            except Exception:
+                continue
+        
+        print_success(f"✓ 找到 {len(tasks)}/{len(task_ids)} 个任务")
+        return tasks
+    
+    def _get_tasks_by_range(self, start_id: int, end_id: int) -> List[Dict]:
+        """根据ID范围获取tasks（优化版：批量获取后过滤）"""
+        url = f"{self.url}/api/projects/{self.project_id}/tasks"
+        tasks = []
+        page = 1
+        
+        print_info(f"正在批量获取任务（ID范围: {start_id}-{end_id}）...")
+        
+        # 使用Label Studio的export API获取所有任务（更快）
+        try:
+            export_url = f"{self.url}/api/projects/{self.project_id}/export"
+            print_info(f"尝试使用 export API: {export_url}")
+            response = requests.get(
+                export_url,
+                headers=self.headers,
+                params={'exportType': 'JSON'},
+                timeout=60
+            )
+            
+            print_info(f"Export API 响应状态: {response.status_code}")
+            
+            if response.status_code == 200:
+                all_tasks = response.json()
+                print_info(f"Export API 返回了 {len(all_tasks)} 个任务")
+                
+                # 过滤ID范围内的tasks
+                for task in all_tasks:
+                    task_id = task.get('id')
+                    if task_id and start_id <= task_id <= end_id:
+                        tasks.append(task)
+                
+                print_success(f"✓ 找到 {len(tasks)} 个任务（ID范围: {start_id}-{end_id}）")
+                return tasks
+            else:
+                print_warning(f"Export API 返回非200状态: {response.status_code}")
+        except Exception as e:
+            print_warning(f"使用export API失败，切换到分页获取: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        
+        # 降级方案：使用分页获取
+        print_info(f"使用分页API获取: {url}")
+        found_any = False
+        
+        while True:
+            try:
+                print_info(f"正在获取第 {page} 页...")
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params={'page': page, 'page_size': 100},
+                    timeout=30
+                )
+                
+                print_info(f"第 {page} 页响应状态: {response.status_code}")
+                
+                if response.status_code != 200:
+                    print_warning(f"分页API返回非200状态: {response.status_code}")
+                    break
+                
+                data = response.json()
+                
+                # 处理不同的响应格式
+                if isinstance(data, dict):
+                    page_tasks = data.get('tasks', data.get('results', []))
+                    print_info(f"第 {page} 页返回了 {len(page_tasks)} 个任务")
+                else:
+                    page_tasks = data if isinstance(data, list) else []
+                    print_info(f"第 {page} 页返回了 {len(page_tasks)} 个任务（列表格式）")
+                
+                if not page_tasks:
+                    print_info(f"第 {page} 页没有任务，停止获取")
+                    break
+                
+                found_any = True
+                
+                # 过滤ID范围内的tasks
+                page_matched = 0
+                for task in page_tasks:
+                    task_id = task.get('id')
+                    if task_id and start_id <= task_id <= end_id:
+                        tasks.append(task)
+                        page_matched += 1
+                
+                print_info(f"第 {page} 页匹配了 {page_matched} 个任务")
+                
+                # 检查是否还有更多页
+                if isinstance(data, dict):
+                    has_next = data.get('next')
+                    print_info(f"是否有下一页: {bool(has_next)}")
+                    if not has_next:
+                        break
+                else:
+                    # 如果是列表格式，且数量不足100，说明没有更多了
+                    if len(page_tasks) < 100:
+                        break
+                
+                page += 1
+                
+            except Exception as e:
+                print_warning(f"获取第{page}页时出错: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                break
+        
+        if not found_any:
+            print_warning("分页获取没有返回任何任务！")
+        
+        print_success(f"✓ 找到 {len(tasks)} 个任务（ID范围: {start_id}-{end_id}）")
+        return tasks
+    
+    def _get_all_project_tasks(self) -> List[Dict]:
+        """获取项目所有tasks"""
+        url = f"{self.url}/api/projects/{self.project_id}/tasks"
+        tasks = []
+        page = 1
+        
+        while True:
+            try:
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params={'page': page, 'page_size': 100},
+                    timeout=30
+                )
+                
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                if isinstance(data, list):
+                    tasks.extend(data)
+                    if len(data) < 100:
+                        break
+                else:
+                    tasks.extend(data.get('tasks', []))
+                    if not data.get('next'):
+                        break
+                
+                page += 1
+                
+            except Exception:
+                break
+        
+        return tasks
+    
+    def _get_unlabeled_tasks(self) -> List[Dict]:
+        """获取未标注的tasks"""
+        url = f"{self.url}/api/tasks"
+        
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                params={
+                    'project': self.project_id,
+                    'annotations__isnull': 'true',
+                    'page_size': 1000
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data if isinstance(data, list) else data.get('tasks', [])
+            
+        except Exception:
+            pass
+        
+        return []
     
     def verify_uploaded_tasks(self, num_samples: int = 5) -> bool:
         """验证上传的任务"""

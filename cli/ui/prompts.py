@@ -784,6 +784,7 @@ def select_labelstudio_operation() -> str:
     """
     choices = [
         "upload - 上传数据集到Label Studio",
+        "batch-annotate - 批量打标签",
         "predict - 使用本地模型预测任务",
         "audit - 审计标注质量",
         "list - 列出所有项目",
@@ -997,3 +998,181 @@ def select_task_type_for_predict() -> Optional[str]:
         return 'pose'
     else:
         return 'classify'
+
+
+def select_annotation_type() -> str:
+    """
+    选择标注类型（矩形框或关键点）
+    
+    Returns:
+        str: 'rectangle' 或 'keypoint'
+    """
+    choices = [
+        "矩形框标注 (RectangleLabels)",
+        "关键点标注 (KeyPointLabels)",
+    ]
+    
+    result = select_option("选择要添加的标注类型:", choices)
+    
+    return 'rectangle' if "矩形框" in result else 'keypoint'
+
+
+def select_target_type() -> str:
+    """
+    选择目标类型（annotation or prediction）
+    
+    Returns:
+        str: 'annotation' 或 'prediction'
+    """
+    choices = [
+        "Annotation - 正式标注（用于训练，可直接导出）",
+        "Prediction - 预测结果（需要人工审核后才能作为标注）",
+    ]
+    
+    result = select_option("选择标注目标类型:", choices)
+    
+    return 'annotation' if "Annotation" in result else 'prediction'
+
+
+def select_merge_mode(has_existing_annotations: bool = False) -> str:
+    """
+    选择标注合并模式
+    
+    Args:
+        has_existing_annotations: 是否检测到已有标注的tasks
+    
+    Returns:
+        str: 'add', 'skip', 或 'overwrite_same_type'
+    """
+    from .display import print_warning
+    
+    if has_existing_annotations:
+        print_warning("\n⚠️  检测到部分tasks已有标注")
+    
+    choices = [
+        "追加模式 - 在已有标注基础上添加新标注（推荐） ✅",
+        "跳过模式 - 跳过所有已有标注的tasks",
+        "覆盖同类型 - 替换同类型标注，保留其他类型",
+    ]
+    
+    result = select_option("选择标注合并模式:", choices)
+    
+    if "追加" in result:
+        return 'add'
+    elif "跳过" in result:
+        return 'skip'
+    else:
+        return 'overwrite_same_type'
+
+
+def input_rectangle_annotation(available_labels: List[str]) -> Dict[str, Any]:
+    """
+    交互式输入矩形框标注
+    
+    Args:
+        available_labels: 可用的标签列表
+    
+    Returns:
+        {
+            'label': 'circle_meter',
+            'center_x': 0.5,
+            'center_y': 0.5,
+            'width': 0.3,
+            'height': 0.2
+        }
+    """
+    from .display import print_info
+    
+    print_info("\n📐 请输入矩形框标注信息（坐标为归一化值，范围0-1）")
+    print_info("提示：0.5表示图片中心，0表示左/上边缘，1表示右/下边缘\n")
+    
+    label = select_option("选择类别:", available_labels)
+    
+    center_x = input_number(
+        "中心点X坐标（0-1）:",
+        min_value=0.0,
+        max_value=1.0,
+        default=0.5
+    )
+    
+    center_y = input_number(
+        "中心点Y坐标（0-1）:",
+        min_value=0.0,
+        max_value=1.0,
+        default=0.5
+    )
+    
+    width = input_number(
+        "矩形框宽度（0-1）:",
+        min_value=0.0,
+        max_value=1.0,
+        default=0.3
+    )
+    
+    height = input_number(
+        "矩形框高度（0-1）:",
+        min_value=0.0,
+        max_value=1.0,
+        default=0.2
+    )
+    
+    return {
+        'label': label,
+        'center_x': center_x,
+        'center_y': center_y,
+        'width': width,
+        'height': height
+    }
+
+
+def input_keypoint_annotations(keypoint_labels: List[str]) -> List[Dict[str, Any]]:
+    """
+    交互式输入关键点标注
+    
+    Args:
+        keypoint_labels: 关键点标签列表
+    
+    Returns:
+        [
+            {'label': 'start', 'x': 0.3, 'y': 0.4, 'visible': True},
+            {'label': 'end', 'x': 0.7, 'y': 0.4, 'visible': True},
+            ...
+        ]
+    """
+    from .display import print_info
+    
+    print_info(f"\n🎯 请为 {len(keypoint_labels)} 个关键点输入坐标（归一化值，范围0-1）\n")
+    
+    keypoints = []
+    for i, kp_label in enumerate(keypoint_labels, 1):
+        print_info(f"关键点 {i}/{len(keypoint_labels)}: {kp_label}")
+        
+        x = input_number(
+            f"  X坐标（0-1）:",
+            min_value=0.0,
+            max_value=1.0,
+            default=0.5
+        )
+        
+        y = input_number(
+            f"  Y坐标（0-1）:",
+            min_value=0.0,
+            max_value=1.0,
+            default=0.5
+        )
+        
+        visible = confirm(
+            f"  该关键点是否可见？",
+            default=True
+        )
+        
+        keypoints.append({
+            'label': kp_label,
+            'x': x,
+            'y': y,
+            'visible': visible
+        })
+        
+        print()  # 空行分隔
+    
+    return keypoints

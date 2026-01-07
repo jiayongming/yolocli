@@ -903,6 +903,224 @@ def run_labelstudio_operations():
                     import traceback
                     traceback.print_exc()
             
+            elif operation == 'batch-annotate':
+                # 批量打标签
+                print_section_header("Label Studio 批量打标签")
+                
+                # 确保有连接配置
+                if not default_url or not default_token:
+                    print_warning("请先配置Label Studio连接")
+                    continue
+                
+                # 输入项目ID
+                project_id = int(input_number("Label Studio项目ID:", min_value=1))
+                
+                # 连接并获取项目配置
+                from ..integrations.labelstudio_uploader import LabelStudioUploader
+                
+                try:
+                    uploader = LabelStudioUploader(
+                        url=default_url,
+                        api_key=default_token,
+                        project_id=project_id,
+                        task_type='detect'  # 默认值，batch-annotate会自动解析项目配置
+                    )
+                    
+                    # 测试连接
+                    print_info("\n连接到 Label Studio...")
+                    if not uploader.test_connection():
+                        print_error("连接失败，请检查URL和Token")
+                        continue
+                    print_success("✓ 连接成功")
+                    
+                    # 解析项目标签配置
+                    print_info("\n解析项目标签模板...")
+                    labeling_config = uploader.parse_labeling_config()
+                    
+                    if not labeling_config:
+                        print_error("无法解析项目标签配置，请确保项目已配置标签模板")
+                        continue
+                    
+                    print_success(f"✓ 找到 {len(labeling_config)} 种标注类型")
+                    
+                    # 选择标注类型
+                    from ..ui.prompts import select_annotation_type
+                    annotation_type = select_annotation_type()
+                    
+                    # 检查项目是否支持该类型
+                    config_key = f"{annotation_type}labels"
+                    if config_key not in labeling_config:
+                        print_error(f"项目不支持 {annotation_type} 标注类型")
+                        print_info(f"可用类型: {', '.join(labeling_config.keys())}")
+                        continue
+                    
+                    # 选择目标类型（annotation或prediction）
+                    from ..ui.prompts import select_target_type
+                    target_type = select_target_type()
+                    
+                    # 选择任务筛选方式
+                    from ..ui.prompts import select_task_filter_mode, input_task_ids, input_task_range
+                    filter_mode = select_task_filter_mode()
+                    
+                    task_ids = None
+                    task_range = None
+                    unlabeled = False
+                    
+                    if filter_mode == 'ids':
+                        task_ids = input_task_ids()
+                        filter_desc = f"任务ID: {', '.join(map(str, task_ids[:5]))}" + ('...' if len(task_ids) > 5 else '')
+                    elif filter_mode == 'range':
+                        task_range = input_task_range()
+                        filter_desc = f"ID范围: {task_range[0]}-{task_range[1]}"
+                    else:  # unlabeled
+                        unlabeled = True
+                        filter_desc = "所有未标注任务"
+                    
+                    # 构建task_filter
+                    task_filter = {
+                        'mode': filter_mode,
+                        'task_ids': task_ids,
+                        'task_range': task_range,
+                        'unlabeled': unlabeled
+                    }
+                    
+                    # 预先获取tasks，检查是否有已标注的
+                    print_info("\n获取任务列表...")
+                    
+                    # 使用 uploader 的内部方法获取tasks
+                    tasks = uploader._get_tasks_by_filter(task_filter)
+                    
+                    if not tasks:
+                        print_warning("没有找到匹配的任务")
+                        continue
+                    
+                    print_success(f"✓ 找到 {len(tasks)} 个任务")
+                    
+                    # 检查是否有已标注的
+                    has_annotations = any(len(t.get('annotations', [])) > 0 for t in tasks)
+                    
+                    # 选择合并策略
+                    from ..ui.prompts import select_merge_mode
+                    merge_mode = select_merge_mode(has_existing_annotations=has_annotations)
+                    
+                    # 交互式输入标签
+                    console.print()
+                    annotation_data = None
+                    
+                    if annotation_type == 'rectangle':
+                        from ..ui.prompts import input_rectangle_annotation
+                        available_labels = labeling_config[config_key]['labels']
+                        rect_data = input_rectangle_annotation(available_labels)
+                        
+                        # 转换为Label Studio格式
+                        from_name = labeling_config[config_key]['from_name']
+                        to_name = labeling_config[config_key]['to_name']
+                        
+                        # 坐标转换：归一化 -> 百分比
+                        x = (rect_data['center_x'] - rect_data['width'] / 2) * 100
+                        y = (rect_data['center_y'] - rect_data['height'] / 2) * 100
+                        w = rect_data['width'] * 100
+                        h = rect_data['height'] * 100
+                        
+                        annotation_data = {
+                            'type': 'rectanglelabels',
+                            'from_name': from_name,
+                            'to_name': to_name,
+                            'value': {
+                                'x': x,
+                                'y': y,
+                                'width': w,
+                                'height': h,
+                                'rotation': 0,
+                                'rectanglelabels': [rect_data['label']]
+                            }
+                        }
+                    
+                    elif annotation_type == 'keypoint':
+                        from ..ui.prompts import input_keypoint_annotations
+                        keypoint_labels = labeling_config[config_key]['labels']
+                        kp_data = input_keypoint_annotations(keypoint_labels)
+                        
+                        # 转换为Label Studio格式
+                        from_name = labeling_config[config_key]['from_name']
+                        to_name = labeling_config[config_key]['to_name']
+                        
+                        # 每个关键点是一个单独的result
+                        annotation_data = []
+                        for kp in kp_data:
+                            kp_result = {
+                                'type': 'keypointlabels',
+                                'from_name': from_name,
+                                'to_name': to_name,
+                                'value': {
+                                    'x': kp['x'] * 100,  # 归一化 -> 百分比
+                                    'y': kp['y'] * 100,
+                                    'width': 0.5,  # 关键点默认宽度
+                                    'keypointlabels': [kp['label']]
+                                }
+                            }
+                            if not kp['visible']:
+                                kp_result['value']['hidden'] = True
+                            annotation_data.append(kp_result)
+                    
+                    # 预览标注内容
+                    console.print()
+                    print_info("=" * 60)
+                    print_info("标注内容预览")
+                    print_info("=" * 60)
+                    print_info(f"标注类型: {annotation_type}")
+                    print_info(f"目标类型: {target_type}")
+                    print_info(f"合并模式: {merge_mode}")
+                    print_info(f"将影响: {len(tasks)} 个tasks ({filter_desc})")
+                    console.print()
+                    
+                    import json
+                    if isinstance(annotation_data, list):
+                        print_info(f"将添加 {len(annotation_data)} 个标注:")
+                        for i, data in enumerate(annotation_data[:3], 1):  # 只显示前3个
+                            print(json.dumps(data, indent=2, ensure_ascii=False))
+                            if i < min(len(annotation_data), 3):
+                                console.print()
+                        if len(annotation_data) > 3:
+                            print_info(f"... 还有 {len(annotation_data) - 3} 个标注")
+                    else:
+                        print(json.dumps(annotation_data, indent=2, ensure_ascii=False))
+                    
+                    print_info("=" * 60)
+                    console.print()
+                    
+                    # 确认执行
+                    if not confirm_action("确认批量创建？", default=True):
+                        print_info("已取消")
+                        continue
+                    
+                    # 执行批量标注
+                    console.print()
+                    print_info("开始批量创建...")
+                    
+                    stats = uploader.batch_annotate_tasks(
+                        annotation_data=annotation_data,
+                        target_type=target_type,
+                        task_filter=task_filter,
+                        merge_mode=merge_mode,
+                        dry_run=False,
+                        max_workers=4
+                    )
+                    
+                    # 显示统计
+                    console.print()
+                    print_section_header("批量标注完成")
+                    print_success(f"✓ 成功: {stats['success']} 个任务")
+                    if stats['failed'] > 0:
+                        print_error(f"✗ 失败: {stats['failed']} 个任务")
+                    if stats.get('skipped', 0) > 0:
+                        print_info(f"ℹ 跳过: {stats['skipped']} 个任务")
+                    
+                except Exception as e:
+                    print_error(f"批量标注失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+            
             elif operation == 'audit':
                 # 审计标注质量
                 print_section_header("Label Studio 标注审计")
@@ -1349,6 +1567,7 @@ def run_labelstudio_operations():
                     print_info(f"  2. 下载所有图片 (并发数: {int(max_workers)})")
                     print_info(f"  3. 转换为YOLO {task_type} 格式")
                     print_info(f"  4. 保存到: {output_dir}")
+                
                 console.print()
                 
                 if not confirm_action("确认开始?", default=True):

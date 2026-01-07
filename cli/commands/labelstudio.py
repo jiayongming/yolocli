@@ -427,6 +427,166 @@ def predict_tasks(
         raise typer.Exit(1)
 
 
+@app.command("batch-annotate")
+def batch_annotate_command(
+    url: str = typer.Option(..., "--url", "-u", help="Label Studio服务器URL"),
+    api_key: str = typer.Option(..., "--api-key", "-k", help="Label Studio API密钥"),
+    project_id: int = typer.Option(..., "--project-id", "-p", help="Label Studio项目ID"),
+    annotation_type: str = typer.Option(..., "--type", "-t", help="标注类型: rectangle, keypoint"),
+    target: str = typer.Option("annotation", "--target", help="目标类型: annotation（正式标注）, prediction（预测结果）"),
+    merge_mode: str = typer.Option("add", "--merge-mode", "-m", help="合并模式: add（追加）, skip（跳过已标注）, overwrite_same_type（覆盖同类型）"),
+    task_ids: Optional[List[int]] = typer.Option(None, "--task-ids", help="指定task ID列表"),
+    task_range: Optional[str] = typer.Option(None, "--task-range", help="task ID范围，如 100-200"),
+    unlabeled: bool = typer.Option(False, "--unlabeled", help="仅处理未标注的tasks"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="试运行，不实际创建"),
+    max_workers: int = typer.Option(4, "--workers", "-w", help="并发数"),
+):
+    """
+    批量给Label Studio tasks添加标注
+    
+    示例:
+        # 给已有关键点的tasks添加矩形框（不影响关键点）
+        yolo-cli labelstudio batch-annotate \\
+          --url http://10.105.3.39/ \\
+          --api-key xxx \\
+          --project-id 9 \\
+          --type rectangle \\
+          --target annotation \\
+          --merge-mode add \\
+          --task-range 100-200
+        
+        # 只标注空白tasks
+        yolo-cli labelstudio batch-annotate \\
+          --url http://10.105.3.39/ \\
+          --project-id 9 \\
+          --type rectangle \\
+          --merge-mode skip \\
+          --unlabeled
+        
+        # 试运行预览
+        yolo-cli labelstudio batch-annotate \\
+          --url http://10.105.3.39/ \\
+          --project-id 9 \\
+          --type rectangle \\
+          --dry-run
+    """
+    print_section_header("批量打标签到 Label Studio")
+    
+    print_info(f"Label Studio: {url}")
+    print_info(f"项目ID: {project_id}")
+    print_info(f"标注类型: {annotation_type}")
+    print_info(f"目标类型: {target}")
+    print_info(f"合并模式: {merge_mode}")
+    
+    # 初始化上传器
+    try:
+        uploader = LabelStudioUploader(url, api_key, project_id)
+    except Exception as e:
+        print_error(f"初始化失败: {str(e)}")
+        raise typer.Exit(1)
+    
+    # 测试连接
+    print_info("\n测试连接...")
+    if not uploader.test_connection():
+        print_error("连接失败，请检查URL和API密钥")
+        raise typer.Exit(1)
+    
+    # 解析项目标签配置
+    print_info("\n解析项目标签配置...")
+    labeling_config = uploader.parse_labeling_config()
+    
+    if not labeling_config:
+        print_error("无法解析项目标签配置")
+        raise typer.Exit(1)
+    
+    # 验证标注类型是否可用
+    if annotation_type == 'rectangle' and 'rectanglelabels' not in labeling_config:
+        print_error("项目中没有配置RectangleLabels标注控件")
+        raise typer.Exit(1)
+    
+    if annotation_type == 'keypoint' and 'keypointlabels' not in labeling_config:
+        print_error("项目中没有配置KeyPointLabels标注控件")
+        raise typer.Exit(1)
+    
+    # 交互式输入标注内容
+    from ..ui.prompts import input_rectangle_annotation, input_keypoint_annotations
+    
+    if annotation_type == 'rectangle':
+        config = labeling_config['rectanglelabels']
+        annotation_input = input_rectangle_annotation(config['labels'])
+        
+        # 转换为Label Studio格式
+        bbox = uploader.normalize_to_labelstudio_bbox(
+            annotation_input['center_x'],
+            annotation_input['center_y'],
+            annotation_input['width'],
+            annotation_input['height']
+        )
+        
+        annotation_data = {
+            'original_width': 100,  # 将由实际图片尺寸动态调整
+            'original_height': 100,
+            'image_rotation': 0,
+            'value': {
+                **bbox,
+                'rotation': 0,
+                'rectanglelabels': [annotation_input['label']]
+            },
+            'from_name': config['from_name'],
+            'to_name': config['to_name'],
+            'type': 'rectanglelabels'
+        }
+    else:  # keypoint
+        config = labeling_config['keypointlabels']
+        keypoints_input = input_keypoint_annotations(config['labels'])
+        
+        # 暂时不支持批量关键点标注（因为每个图片的关键点位置不同）
+        print_warning("批量关键点标注暂未实现（每个图片的关键点位置通常不同）")
+        print_info("建议使用交互模式或模型预测方式")
+        raise typer.Exit(0)
+    
+    # 构建task filter
+    task_filter = {'mode': 'all'}
+    
+    if task_ids:
+        task_filter = {'mode': 'ids', 'task_ids': task_ids}
+    elif task_range:
+        try:
+            start, end = map(int, task_range.split('-'))
+            task_filter = {'mode': 'range', 'task_range': (start, end)}
+        except:
+            print_error(f"无效的task范围格式: {task_range}（应为: 100-200）")
+            raise typer.Exit(1)
+    elif unlabeled:
+        task_filter = {'mode': 'unlabeled'}
+    
+    # 执行批量标注
+    try:
+        stats = uploader.batch_annotate_tasks(
+            annotation_data=annotation_data,
+            target_type=target,
+            task_filter=task_filter,
+            merge_mode=merge_mode,
+            dry_run=dry_run,
+            max_workers=max_workers
+        )
+        
+        print_section_header("批量标注完成")
+        
+        if stats['total'] > 0:
+            print_success(f"\n✅ 成功: {stats['success']} 个任务")
+            if stats['failed'] > 0:
+                print_error(f"❌ 失败: {stats['failed']} 个任务")
+            if stats['skipped'] > 0:
+                print_info(f"ℹ️  跳过: {stats['skipped']} 个任务")
+        
+    except Exception as e:
+        print_error(f"批量标注失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 def _resolve_dataset_path(dataset: str) -> Path:
     """
     解析数据集路径
