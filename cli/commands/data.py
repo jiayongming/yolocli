@@ -16,6 +16,7 @@ from ..core.utils import (
     TaskType, validate_task_type
 )
 from ..core.deduplicator import ImageDeduplicator
+from ..core.label_scaler import LabelScaler
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_dataset_info, print_section_header, print_table,
@@ -2809,6 +2810,383 @@ def _merge_datasets_impl(
     print_table("合并后数据集统计", columns, rows, show_lines=True)
     
     print_success(f"数据集合并完成！输出目录: {output_path}")
+
+
+@app.command()
+def scale_labels(
+    dataset_dir: str = typer.Option(..., "--dataset", "-d", help="数据集目录"),
+    output_dir: str = typer.Option(..., "--output", "-o", help="输出目录"),
+    scale: float = typer.Option(..., "--scale", "-s", help="缩放比例 (>0)，如0.8表示缩小到80%，1.2表示放大到120%"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/pose)"),
+    splits: Optional[str] = typer.Option(None, "--splits", help="处理的子集，逗号分隔 (如: train,val)"),
+    classes: Optional[str] = typer.Option(None, "--classes", help="处理的类别ID，逗号分隔 (如: 0,2,5)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="预览模式，不实际修改文件"),
+):
+    """批量调整标注框大小（保持中心点不变）
+    
+    适用场景：
+    - 标注框过大/过小导致模型效果不佳
+    - 需要统一调整标注风格
+    
+    示例:
+    \b
+      # 缩小所有标注到80%
+      yolo-cli data scale-labels \\
+        --dataset datasets/original \\
+        --output datasets/scaled_0.8 \\
+        --scale 0.8 \\
+        --task detect
+    
+    \b
+      # 放大训练集标注到120%，只处理类别0和1
+      yolo-cli data scale-labels \\
+        --dataset datasets/original \\
+        --output datasets/scaled \\
+        --scale 1.2 \\
+        --splits train \\
+        --classes 0,1
+    """
+    
+    print_section_header("批量调整标注大小")
+    
+    # 1. 验证参数
+    dataset_path = Path(dataset_dir)
+    output_path = Path(output_dir)
+    
+    if not dataset_path.exists():
+        print_error(f"数据集目录不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    if scale <= 0:
+        print_error(f"缩放比例必须 > 0，当前值: {scale}")
+        raise typer.Exit(1)
+    
+    if scale < 0.1 or scale > 2.0:
+        print_warning(f"缩放比例 {scale} 超出推荐范围 [0.1, 2.0]，可能导致标注质量问题")
+        if not typer.confirm("确认继续？"):
+            raise typer.Exit(0)
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    
+    # 解析子集
+    split_list = None
+    if splits:
+        split_list = [s.strip() for s in splits.split(',')]
+        for split in split_list:
+            if split not in ['train', 'val', 'valid', 'test']:
+                print_error(f"无效的子集名称: {split}")
+                raise typer.Exit(1)
+    
+    # 解析类别
+    target_classes = None
+    if classes:
+        try:
+            target_classes = set(int(c.strip()) for c in classes.split(','))
+        except ValueError:
+            print_error(f"无效的类别ID格式: {classes}")
+            raise typer.Exit(1)
+    
+    # 显示配置
+    console.print()
+    print_info("📋 配置信息:")
+    print_info(f"  数据集: {dataset_path}")
+    print_info(f"  输出: {output_path}")
+    print_info(f"  任务类型: {task}")
+    print_info(f"  缩放比例: {scale} ({'缩小' if scale < 1 else '放大' if scale > 1 else '不变'})")
+    print_info(f"  处理子集: {', '.join(split_list) if split_list else '全部'}")
+    print_info(f"  处理类别: {', '.join(map(str, sorted(target_classes))) if target_classes else '全部'}")
+    print_info(f"  模式: {'预览' if dry_run else '正式'}")
+    console.print()
+    
+    if dry_run:
+        print_warning("⚠️  预览模式：将显示处理结果但不会实际修改文件")
+        console.print()
+    
+    # 2. 初始化缩放器
+    scaler = LabelScaler()
+    
+    # 3. 检测目录结构并确定要处理的子集
+    # 结构1: dataset/images/split/, dataset/labels/split/
+    # 结构2: dataset/split/images/, dataset/split/labels/
+    use_structure_1 = False
+    
+    if not split_list:
+        split_list = []
+        for split in ['train', 'val', 'valid', 'test']:
+            # 先检查结构1
+            if (dataset_path / 'images' / split).exists():
+                split_list.append(split)
+                use_structure_1 = True
+            # 再检查结构2
+            elif (dataset_path / split / 'images').exists():
+                split_list.append(split)
+    else:
+        # 用户指定了子集，检测第一个子集的结构
+        for split in split_list:
+            if (dataset_path / 'images' / split).exists():
+                use_structure_1 = True
+                break
+    
+    if not split_list:
+        print_error("未找到任何数据子集（train/val/test）")
+        raise typer.Exit(1)
+    
+    structure_type = "结构1 (images/split)" if use_structure_1 else "结构2 (split/images)"
+    print_info(f"找到 {len(split_list)} 个子集: {', '.join(split_list)}")
+    print_info(f"检测到目录结构: {structure_type}")
+    console.print()
+    
+    # 4. 创建输出目录结构（保持与输入相同）
+    if not dry_run:
+        if use_structure_1:
+            # 结构1: dataset/images/split/, dataset/labels/split/
+            ensure_dir(output_path / 'images')
+            ensure_dir(output_path / 'labels')
+            for split in split_list:
+                ensure_dir(output_path / 'images' / split)
+                ensure_dir(output_path / 'labels' / split)
+        else:
+            # 结构2: dataset/split/images/, dataset/split/labels/
+            for split in split_list:
+                ensure_dir(output_path / split / 'images')
+                ensure_dir(output_path / split / 'labels')
+    
+    # 5. 处理每个子集
+    print_section_header("处理标注文件")
+    split_stats = {}
+    
+    for split in split_list:
+        print_info(f"处理子集: {split}")
+        
+        # 确定目录结构
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        if not img_dir.exists():
+            print_warning(f"  跳过：未找到图片目录")
+            continue
+        
+        # 获取所有图片文件
+        image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png', '.bmp']))
+        
+        if not image_files:
+            print_warning(f"  跳过：未找到图片文件")
+            continue
+        
+        print_info(f"  找到 {len(image_files)} 张图片")
+        
+        # 处理每个标注文件
+        processed_count = 0
+        annotation_count = 0
+        
+        with create_progress_bar() as progress:
+            task_id = progress.add_task(f"  处理 {split}", total=len(image_files))
+            
+            for img_file in image_files:
+                # 标注文件路径
+                label_file = label_dir / f"{img_file.stem}.txt"
+                
+                # 确定输出路径（根据目录结构）
+                if use_structure_1:
+                    # 结构1: dataset/images/split/
+                    dst_img = output_path / 'images' / split / img_file.name
+                    output_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                else:
+                    # 结构2: dataset/split/images/
+                    dst_img = output_path / split / 'images' / img_file.name
+                    output_label = output_path / split / 'labels' / f"{img_file.stem}.txt"
+                
+                if not label_file.exists():
+                    # 没有标注，只复制图片
+                    if not dry_run:
+                        shutil.copy2(img_file, dst_img)
+                    progress.update(task_id, advance=1)
+                    continue
+                
+                # 处理标注文件
+                if not dry_run:
+                    count = scaler.process_label_file(
+                        label_file,
+                        output_label,
+                        scale,
+                        task,
+                        target_classes
+                    )
+                    annotation_count += count
+                    
+                    # 复制图片
+                    shutil.copy2(img_file, dst_img)
+                else:
+                    # 预览模式：只统计
+                    if label_file.exists():
+                        with open(label_file, 'r') as f:
+                            lines = [line.strip() for line in f if line.strip()]
+                            annotation_count += len(lines)
+                
+                processed_count += 1
+                progress.update(task_id, advance=1)
+        
+        split_stats[split] = {
+            'files': processed_count,
+            'annotations': annotation_count
+        }
+        
+        print_success(f"  ✓ 完成：{processed_count} 文件，{annotation_count} 标注")
+    
+    # 6. 生成配置文件
+    console.print()
+    print_section_header("生成配置文件")
+    
+    if not dry_run:
+        # 读取原始 YAML 获取类别和其他配置
+        yaml_data = None
+        for yaml_name in ['data.yaml', 'dataset.yaml']:
+            yaml_file = dataset_path / yaml_name
+            if yaml_file.exists():
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    yaml_data = yaml.safe_load(f)
+                break
+        
+        if yaml_data:
+            # 生成新的 dataset.yaml
+            # 使用相对路径（相对于当前工作目录）
+            new_yaml_config = {
+                'path': str(output_path),
+            }
+            
+            # 添加子集路径（根据实际存在的子集和目录结构）
+            for split in split_list:
+                # 检查目录是否存在
+                if use_structure_1:
+                    split_img_dir = output_path / 'images' / split
+                else:
+                    split_img_dir = output_path / split / 'images'
+                
+                if split_img_dir.exists():
+                    # 使用相对路径
+                    if use_structure_1:
+                        # 结构1: images/train
+                        yaml_key = 'val' if split == 'valid' else split
+                        new_yaml_config[yaml_key] = f'images/{split}'
+                    else:
+                        # 结构2: train/images
+                        if split == 'valid':
+                            new_yaml_config['val'] = 'valid/images'
+                        else:
+                            new_yaml_config[split] = f'{split}/images'
+            
+            # 复制类别信息
+            if 'names' in yaml_data:
+                new_yaml_config['names'] = yaml_data['names']
+            if 'nc' in yaml_data:
+                new_yaml_config['nc'] = yaml_data['nc']
+            
+            # 对于姿态估计任务，复制关键点配置
+            if task == 'pose':
+                if 'kpt_shape' in yaml_data:
+                    new_yaml_config['kpt_shape'] = yaml_data['kpt_shape']
+                if 'flip_idx' in yaml_data:
+                    new_yaml_config['flip_idx'] = yaml_data['flip_idx']
+            
+            # 写入新的 dataset.yaml
+            output_yaml = output_path / 'dataset.yaml'
+            with open(output_yaml, 'w', encoding='utf-8') as f:
+                f.write("# YOLO 数据集配置文件\n")
+                f.write(f"# 由 scale-labels 命令生成\n")
+                f.write(f"# 缩放比例: {scale}\n\n")
+                yaml.dump(new_yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            
+            print_success(f"✓ 已生成: dataset.yaml")
+        
+        # 复制 classes.txt
+        classes_file = dataset_path / 'classes.txt'
+        if classes_file.exists():
+            shutil.copy2(classes_file, output_path / 'classes.txt')
+            print_success(f"✓ 已复制: classes.txt")
+    
+    # 7. 生成报告
+    if not dry_run:
+        console.print()
+        print_section_header("生成处理报告")
+        
+        scaler.generate_report(
+            output_path,
+            str(dataset_path),
+            str(output_path),
+            scale,
+            task,
+            split_list,
+            list(target_classes) if target_classes else None,
+            split_stats
+        )
+        
+        report_file = output_path / 'adjustment_report.txt'
+        print_success(f"✓ 报告已生成: {report_file}")
+    
+    # 8. 显示统计信息
+    console.print()
+    print_section_header("处理完成" if not dry_run else "预览结果")
+    
+    stats = scaler.get_statistics()
+    
+    if dry_run:
+        # 预览模式统计
+        total_files = sum(s['files'] for s in split_stats.values())
+        total_annotations = sum(s['annotations'] for s in split_stats.values())
+        
+        print_info(f"总文件数: {total_files}")
+        print_info(f"总标注数: {total_annotations}")
+    else:
+        # 正式模式统计
+        print_info(f"总文件数: {stats['total_files']}")
+        print_info(f"处理的文件数: {stats['processed_files']}")
+        print_info(f"总标注数: {stats['total_annotations']}")
+        print_info(f"缩放的标注数: {stats['scaled_annotations']}")
+        
+        if target_classes:
+            print_info(f"跳过的标注数: {stats['skipped_annotations']} (非目标类别)")
+    
+    console.print()
+    
+    # 子集统计表
+    columns = ["子集", "文件数", "标注数"]
+    rows = []
+    for split_name, split_stat in split_stats.items():
+        rows.append([split_name, split_stat['files'], split_stat['annotations']])
+    
+    total_files = sum(s['files'] for s in split_stats.values())
+    total_annotations = sum(s['annotations'] for s in split_stats.values())
+    rows.append(["总计", total_files, total_annotations])
+    
+    print_table("处理统计", columns, rows, show_lines=True)
+    
+    # 警告信息
+    if not dry_run and stats['warnings']:
+        console.print()
+        print_warning(f"⚠️  发现 {len(stats['warnings'])} 个警告")
+        for warning in stats['warnings'][:5]:
+            print_warning(f"  • {warning}")
+        if len(stats['warnings']) > 5:
+            print_warning(f"  ... 还有 {len(stats['warnings']) - 5} 个警告，详见报告文件")
+    
+    console.print()
+    
+    if dry_run:
+        print_success("✓ 预览完成！使用 --no-dry-run 执行实际处理")
+    else:
+        print_success(f"✓ 标注调整完成！输出目录: {output_path}")
+        
+        # 后续步骤提示
+        console.print()
+        print_section_header("后续步骤")
+        print_info("1. 检查调整后的标注是否符合预期")
+        print_info("2. 使用新数据集训练模型并对比效果")
+        console.print(f"   python yolo_cli.py train --data {output_path / 'data.yaml'}")
 
 
 if __name__ == "__main__":

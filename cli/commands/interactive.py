@@ -8,7 +8,7 @@ from pathlib import Path
 from ..ui.prompts import (
     select_main_menu, select_model_operation, select_data_operation,
     select_train_operation, select_detect_operation, select_validate_operation,
-    select_validation_split, select_option,
+    select_validation_split, select_option, select_multiple,
     select_yolo_version, select_task_type, select_model_size, select_device,
     select_augmentation_preset, select_optimizer, select_export_formats,
     build_training_config, input_text, input_path, input_number,
@@ -179,7 +179,6 @@ def run_data_operations():
                 filter_labels = None
                 
                 if use_filters:
-                    from ..ui.prompts import select_option
                     console.print()
                     filter_type = select_option(
                         "选择筛选方式:",
@@ -234,7 +233,6 @@ def run_data_operations():
                 output_dir = input_path("输出目录:", default="data/processed", must_exist=False)
                 
                 # 选择划分方式
-                from ..ui.prompts import select_option
                 console.print()
                 print_info("📊 数据集划分方式：")
                 print_info("   • 按比例划分：使用全部数据，按比例自动计算样本数")
@@ -269,7 +267,6 @@ def run_data_operations():
                     similarity_threshold_classify = 8
                     if deduplicate_classify:
                         console.print()
-                        from ..ui.prompts import select_option
                         print_info("📋 去重模式：")
                         print_info("   • 完全相同：只删除文件内容完全相同的图片（快速，推荐）")
                         print_info("   • 相似图片：删除视觉上相似的图片（较慢，需要imagehash库）")
@@ -392,7 +389,6 @@ def run_data_operations():
                     similarity_threshold = 8
                     if deduplicate:
                         console.print()
-                        from ..ui.prompts import select_option
                         print_info("📋 去重模式：")
                         print_info("   • 完全相同：只删除文件内容完全相同的图片（快速，推荐）")
                         print_info("   • 相似图片：删除视觉上相似的图片（较慢，需要imagehash库）")
@@ -470,6 +466,9 @@ def run_data_operations():
                     "数据集路径列表（逗号分隔）:",
                     default="datasets/dataset1,datasets/dataset2"
                 )
+                if not datasets_input:
+                    print_warning("操作已取消")
+                    continue
                 
                 # 输出目录
                 output_dir = input_path(
@@ -477,6 +476,9 @@ def run_data_operations():
                     default="datasets/merged",
                     must_exist=False
                 )
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
                 
                 # 重复文件处理
                 console.print()
@@ -486,7 +488,6 @@ def run_data_operations():
                 print_info("   • 报错：遇到重复文件名时停止并报错")
                 console.print()
                 
-                from ..ui.prompts import select_option
                 duplicate_choice = select_option(
                     "选择重复文件处理方式:",
                     choices=[
@@ -535,6 +536,150 @@ def run_data_operations():
                         deduplicate=deduplicate
                     )
             
+            elif operation == 'scale-labels':
+                # 批量调整标注大小
+                print_section_header("批量调整标注大小")
+                
+                console.print()
+                print_info("📐 标注缩放功能：")
+                print_info("   - 调整标注框大小，保持中心点不变")
+                print_info("   - 适用场景：标注框过大/过小导致模型效果不佳")
+                print_info("   - 缩放比例：<1表示缩小，>1表示放大，=1不变")
+                console.print()
+                
+                # 输入数据集目录
+                dataset_dir = input_path("数据集目录:", default="data/processed", must_exist=True)
+                if not dataset_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 智能生成默认输出目录
+                dataset_path = Path(dataset_dir)
+                parent_dir = dataset_path.parent
+                default_output = parent_dir / f"{dataset_path.name}_scaled"
+                output_dir = input_path("输出目录:", default=str(default_output), must_exist=False)
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
+                # 输入缩放比例
+                console.print()
+                print_info("💡 缩放比例说明：")
+                print_info("   • 0.8 = 缩小到80%（推荐用于标注框过大）")
+                print_info("   • 1.0 = 保持不变")
+                print_info("   • 1.2 = 放大到120%（推荐用于标注框过小）")
+                console.print()
+                
+                scale_factor = input_number(
+                    "缩放比例:", 
+                    default=0.8, 
+                    min_value=0.1, 
+                    max_value=2.0
+                )
+                
+                # 询问是否选择特定子集（多选）
+                console.print()
+                if confirm_action("是否只处理特定子集?", default=False):
+                    print_info("💡 使用空格键选择/取消选择，回车确认")
+                    available_splits = ['train', 'val', 'test']
+                    selected_splits = select_multiple(
+                        "选择要处理的子集:",
+                        choices=available_splits
+                    )
+                    if selected_splits:
+                        splits = ','.join(selected_splits)
+                    else:
+                        print_warning("未选择任何子集，将处理全部")
+                        splits = None
+                else:
+                    splits = None
+                
+                # 询问是否只处理特定类别
+                console.print()
+                if confirm_action("是否只处理特定类别?", default=False):
+                    # 尝试读取类别信息
+                    from pathlib import Path as PathLib
+                    import yaml
+                    dataset_path_obj = PathLib(dataset_dir)
+                    class_names = []
+                    
+                    # 尝试从 data.yaml 或 dataset.yaml 读取类别
+                    for yaml_name in ['data.yaml', 'dataset.yaml']:
+                        yaml_file = dataset_path_obj / yaml_name
+                        if yaml_file.exists():
+                            try:
+                                with open(yaml_file, 'r', encoding='utf-8') as f:
+                                    yaml_data = yaml.safe_load(f)
+                                    if yaml_data and 'names' in yaml_data:
+                                        names = yaml_data['names']
+                                        if isinstance(names, list):
+                                            class_names = names
+                                        elif isinstance(names, dict):
+                                            class_names = [names[i] for i in sorted(names.keys())]
+                                        break
+                            except Exception:
+                                pass
+                    
+                    if class_names:
+                        # 有类别信息，使用多选
+                        print_info(f"检测到 {len(class_names)} 个类别")
+                        print_info("💡 使用空格键选择/取消选择，回车确认")
+                        console.print()
+                        
+                        # 构建选项列表（ID + 名称）
+                        class_choices = [f"{i} - {name}" for i, name in enumerate(class_names)]
+                        selected_classes = select_multiple(
+                            "选择要处理的类别:",
+                            choices=class_choices
+                        )
+                        
+                        if selected_classes:
+                            # 提取类别ID
+                            class_ids = [choice.split(' - ')[0] for choice in selected_classes]
+                            classes = ','.join(class_ids)
+                        else:
+                            print_warning("未选择任何类别，将处理全部")
+                            classes = None
+                    else:
+                        # 没有类别信息，手动输入
+                        print_warning("未找到类别信息，请手动输入")
+                        classes = input_text(
+                            "类别ID列表（逗号分隔，如: 0,1,2）:", 
+                            default="0"
+                        )
+                else:
+                    classes = None
+                
+                # 显示配置摘要
+                console.print()
+                print_section_header("配置摘要")
+                print_info(f"数据集: {dataset_dir}")
+                print_info(f"输出: {output_dir}")
+                print_info(f"任务类型: {task_type}")
+                print_info(f"缩放比例: {scale_factor} ({'缩小' if scale_factor < 1 else '放大' if scale_factor > 1 else '不变'})")
+                print_info(f"处理子集: {splits or '全部'}")
+                print_info(f"处理类别: {classes or '全部'}")
+                console.print()
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                if confirm_action("确认调整标注?"):
+                    from ..commands.data import scale_labels
+                    scale_labels(
+                        dataset_dir=dataset_dir,
+                        output_dir=output_dir,
+                        scale=scale_factor,
+                        task=task_type,
+                        splits=splits,
+                        classes=classes,
+                        dry_run=False
+                    )
+            
             elif operation == 'generate-yaml':
                 # 生成dataset.yaml
                 print_section_header("生成 dataset.yaml")
@@ -576,7 +721,6 @@ def run_data_operations():
                 # 如果是分类任务且需要详细统计，让用户选择正类
                 positive_classes_str = None
                 if task_type == 'classify' and detailed:
-                    from pathlib import Path
                     data_path_obj = Path(data_path)
                     
                     # 获取所有类别
@@ -597,8 +741,6 @@ def run_data_operations():
                         console.print()
                         
                         if confirm_action("是否选择正类进行正负样本统计?", default=True):
-                            from ..ui.prompts import select_multiple
-                            
                             console.print()
                             print_info("📋 操作说明：")
                             print_info("   1. 使用 ↑↓ 键移动")
@@ -731,7 +873,6 @@ def run_quick_train():
         console.print()
         
         # 步骤1: 选择数据集划分方式 (前移到第一步)
-        from ..ui.prompts import select_option
         console.print()
         print_section_header("步骤1: 数据集划分配置")
         print_info("📊 数据集划分方式：")
@@ -2248,7 +2389,6 @@ def run_fiftyone_operations():
                 task_type = select_task_type_for_predict()
                 
                 # 检查是否有 classes.txt
-                from pathlib import Path
                 classes_file = Path(predictions_dir) / 'classes.txt'
                 if classes_file.exists():
                     print_success(f"✓ 找到类别文件: {classes_file}")
@@ -2308,7 +2448,6 @@ def run_fiftyone_operations():
                 task_type = select_task_type_for_predict()
                 
                 # 检查是否有 classes.txt
-                from pathlib import Path
                 classes_file = Path(predictions_dir) / 'classes.txt'
                 if classes_file.exists():
                     print_success(f"✓ 找到类别文件: {classes_file}")
