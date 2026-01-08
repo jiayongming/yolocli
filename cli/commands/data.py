@@ -15,6 +15,7 @@ from ..core.utils import (
     ensure_dir, get_dataset_info, parse_ratio_string, find_files,
     TaskType, validate_task_type
 )
+from ..core.deduplicator import ImageDeduplicator
 from ..ui.display import (
     print_success, print_error, print_info, print_warning,
     print_dataset_info, print_section_header, print_table,
@@ -180,6 +181,7 @@ def split_dataset(
     seed: int = typer.Option(42, "--seed", help="随机种子"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     create_empty_labels: bool = typer.Option(False, "--create-empty-labels/--no-empty-labels", help="为缺失标签的图片创建空标签（负样本）"),
+    deduplicate: bool = typer.Option(False, "--deduplicate", "-d", help="拆分前去除完全相同的图片（推荐，避免数据泄露）"),
 ):
     """划分数据集为训练集、验证集、测试集
     
@@ -236,14 +238,14 @@ def split_dataset(
             print_warning("分类任务不需要 --images 和 --labels 参数，将被忽略")
         if create_empty_labels:
             print_warning("分类任务不支持 --create-empty-labels 参数，将被忽略")
-        return _split_classify_dataset(source_dir, output_dir, split_param, seed, split_mode)
+        return _split_classify_dataset(source_dir, output_dir, split_param, seed, split_mode, deduplicate)
     else:
         if not images_dir or not labels_dir:
             print_error("检测/分割任务需要指定 --images 和 --labels 参数")
             raise typer.Exit(1)
         if source_dir:
             print_warning("检测/分割任务不需要 --source 参数，将被忽略")
-        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, split_param, seed, task, create_empty_labels, split_mode)
+        return _split_detect_segment_dataset(images_dir, labels_dir, output_dir, split_param, seed, task, create_empty_labels, split_mode, deduplicate)
 
 
 def _split_detect_segment_dataset(
@@ -255,11 +257,13 @@ def _split_detect_segment_dataset(
     task: str,
     create_empty_labels: bool = False,
     split_mode: str = "ratios",
+    deduplicate: bool = False,
 ):
     """检测/分割任务的数据集划分
     
     Args:
         split_mode: "ratios" 按比例划分, "counts" 按样本数划分
+        deduplicate: 是否在拆分前去重
     """
     
     images_path = Path(images_dir)
@@ -323,6 +327,48 @@ def _split_detect_segment_dataset(
         ensure_dir(output_path / 'images' / split)
         ensure_dir(output_path / 'labels' / split)
     
+    # 数据去重（如果启用）
+    removed_images = set()
+    if deduplicate:
+        print_section_header("数据去重")
+        deduplicator = ImageDeduplicator()
+        
+        # 收集所有图像文件
+        print_info("收集图像文件...")
+        image_files = list(find_files(images_path, ['.jpg', '.jpeg', '.png']))
+        original_count = len(image_files)
+        print_info(f"找到 {original_count} 张图片")
+        
+        # 查找重复
+        print_info("扫描重复图片...")
+        duplicates_map = deduplicator.find_duplicates(image_files)
+        
+        if duplicates_map:
+            # 统计
+            total_duplicates = sum(len(files) - 1 for files in duplicates_map.values())
+            print_warning(f"发现 {len(duplicates_map)} 组重复图片，共 {total_duplicates} 个重复文件")
+            
+            # 删除重复
+            removed_files = deduplicator.remove_duplicates(
+                duplicates_map, 
+                labels_dir=labels_path
+            )
+            removed_images = set(removed_files)
+            
+            # 生成报告
+            report_path = output_path / 'deduplication_report.json'
+            deduplicator.generate_report(duplicates_map, report_path, original_count)
+            
+            stats = deduplicator.get_statistics()
+            print_success(f"✓ 已删除 {stats['removed_count']} 个重复文件")
+            print_info(f"  节省空间: {stats['space_saved_mb']} MB")
+            print_info(f"  去重报告: {report_path}")
+            print_info(f"  去重后剩余: {original_count - stats['removed_count']} 张图片")
+        else:
+            print_success("✓ 未发现重复图片")
+        
+        console.print()
+    
     # 收集图像-标签对
     print_info("扫描图像和标签文件...")
     pairs = []
@@ -330,6 +376,9 @@ def _split_detect_segment_dataset(
     created_labels = []
     
     for img_file in find_files(images_path, ['.jpg', '.jpeg', '.png']):
+        # 跳过已删除的重复图片
+        if img_file in removed_images:
+            continue
         label_file = labels_path / f"{img_file.stem}.txt"
         if label_file.exists():
             # 验证标签格式
@@ -523,11 +572,13 @@ def _split_classify_dataset(
     split_param: str,
     seed: int,
     split_mode: str = "ratios",
+    deduplicate: bool = False,
 ):
     """分类任务的数据集划分
     
     Args:
         split_mode: "ratios" 按比例划分, "counts" 按样本数划分
+        deduplicate: 是否在拆分前去重
     """
     
     source_path = Path(source_dir)
@@ -591,6 +642,54 @@ def _split_classify_dataset(
     # 设置随机种子
     random.seed(seed)
     
+    # 数据去重（如果启用）
+    removed_images = set()
+    if deduplicate:
+        print_section_header("数据去重")
+        deduplicator = ImageDeduplicator()
+        
+        # 收集所有图像文件
+        print_info("收集图像文件...")
+        all_image_files = []
+        for class_name in classes:
+            class_dir = source_path / class_name
+            images = list(class_dir.glob('*'))
+            images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+            all_image_files.extend(images)
+        
+        original_count = len(all_image_files)
+        print_info(f"找到 {original_count} 张图片")
+        
+        # 查找重复
+        print_info("扫描重复图片...")
+        duplicates_map = deduplicator.find_duplicates(all_image_files)
+        
+        if duplicates_map:
+            # 统计
+            total_duplicates = sum(len(files) - 1 for files in duplicates_map.values())
+            print_warning(f"发现 {len(duplicates_map)} 组重复图片，共 {total_duplicates} 个重复文件")
+            
+            # 删除重复（分类任务没有单独的labels目录）
+            removed_files = deduplicator.remove_duplicates(
+                duplicates_map, 
+                labels_dir=None
+            )
+            removed_images = set(removed_files)
+            
+            # 生成报告
+            report_path = output_path / 'deduplication_report.json'
+            deduplicator.generate_report(duplicates_map, report_path, original_count)
+            
+            stats_dedup = deduplicator.get_statistics()
+            print_success(f"✓ 已删除 {stats_dedup['removed_count']} 个重复文件")
+            print_info(f"  节省空间: {stats_dedup['space_saved_mb']} MB")
+            print_info(f"  去重报告: {report_path}")
+            print_info(f"  去重后剩余: {original_count - stats_dedup['removed_count']} 张图片")
+        else:
+            print_success("✓ 未发现重复图片")
+        
+        console.print()
+    
     # 创建输出目录结构 - 统一使用 images/ 目录
     for split in ['train', 'val', 'test']:
         for class_name in classes:
@@ -604,14 +703,15 @@ def _split_classify_dataset(
     
     # 如果是按样本数划分，需要先收集所有图片并计算总数
     if split_mode == "counts":
-        # 收集所有图片
+        # 收集所有图片（跳过去重时删除的）
         all_images = []
         for class_name in classes:
             class_dir = source_path / class_name
             images = list(class_dir.glob('*'))
             images = [img for img in images if img.is_file() and not img.name.startswith('.')]
             for img in images:
-                all_images.append((img, class_name))
+                if img not in removed_images:  # 跳过已删除的重复图片
+                    all_images.append((img, class_name))
         
         total_available = len(all_images)
         total_requested = train_count + val_count + test_count
@@ -667,6 +767,8 @@ def _split_classify_dataset(
             class_dir = source_path / class_name
             images = list(class_dir.glob('*'))
             images = [img for img in images if img.is_file() and not img.name.startswith('.')]
+            # 跳过去重时删除的图片
+            images = [img for img in images if img not in removed_images]
             
             # 打乱顺序
             random.shuffle(images)

@@ -255,6 +255,15 @@ def run_data_operations():
                     # 分类任务
                     source_dir = input_path("源目录 (已按类别组织):", default="data/raw/images", must_exist=False)
                     
+                    # 询问是否去重（分类任务）
+                    console.print()
+                    print_info("🧹 数据去重：")
+                    print_info("   - 检测并删除完全相同的图片（基于文件哈希）")
+                    print_info("   - 避免训练/验证/测试集之间的数据泄露")
+                    print_info("   - 推荐在拆分前进行去重")
+                    console.print()
+                    deduplicate_classify = confirm_action("是否在拆分前去除重复图片?", default=True)
+                    
                     if use_counts:
                         console.print()
                         print_info("💡 按样本数划分说明：")
@@ -280,7 +289,8 @@ def run_data_operations():
                                 ratios=None,
                                 counts=counts,
                                 seed=42,
-                                task=task_type
+                                task=task_type,
+                                deduplicate=deduplicate_classify
                             )
                     else:
                         ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
@@ -302,7 +312,8 @@ def run_data_operations():
                                 ratios=ratios,
                                 counts=None,
                                 seed=42,
-                                task=task_type
+                                task=task_type,
+                                deduplicate=deduplicate_classify
                             )
                 else:
                     # 检测/分割任务
@@ -328,6 +339,15 @@ def run_data_operations():
                     console.print()
                     create_empty = confirm_action("为缺失标签的图片创建空标签文件?", default=False)
                     
+                    # 询问是否去重
+                    console.print()
+                    print_info("🧹 数据去重：")
+                    print_info("   - 检测并删除完全相同的图片（基于文件哈希）")
+                    print_info("   - 避免训练/验证/测试集之间的数据泄露")
+                    print_info("   - 推荐在拆分前进行去重")
+                    console.print()
+                    deduplicate = confirm_action("是否在拆分前去除重复图片?", default=True)
+                    
                     console.print()
                     print_info(f"将划分数据到: {output_dir}")
                     
@@ -346,7 +366,8 @@ def run_data_operations():
                             counts=counts if use_counts else None,
                             seed=42,
                             task=task_type,
-                            create_empty_labels=create_empty
+                            create_empty_labels=create_empty,
+                            deduplicate=deduplicate
                         )
             
             elif operation == 'generate-yaml':
