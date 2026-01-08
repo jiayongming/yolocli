@@ -258,11 +258,46 @@ def run_data_operations():
                     # 询问是否去重（分类任务）
                     console.print()
                     print_info("🧹 数据去重：")
-                    print_info("   - 检测并删除完全相同的图片（基于文件哈希）")
+                    print_info("   - 检测并删除重复/相似的图片")
                     print_info("   - 避免训练/验证/测试集之间的数据泄露")
                     print_info("   - 推荐在拆分前进行去重")
                     console.print()
                     deduplicate_classify = confirm_action("是否在拆分前去除重复图片?", default=True)
+                    
+                    # 如果启用去重，询问去重模式
+                    dedup_mode_classify = "exact"
+                    similarity_threshold_classify = 8
+                    if deduplicate_classify:
+                        console.print()
+                        from ..ui.prompts import select_option
+                        print_info("📋 去重模式：")
+                        print_info("   • 完全相同：只删除文件内容完全相同的图片（快速，推荐）")
+                        print_info("   • 相似图片：删除视觉上相似的图片（较慢，需要imagehash库）")
+                        console.print()
+                        
+                        mode_choice = select_option(
+                            "选择去重模式:",
+                            choices=[
+                                "完全相同检测 (推荐，快速)",
+                                "相似图片检测 (检测不同压缩质量、轻微编辑的图片)",
+                            ]
+                        )
+                        
+                        if "相似" in mode_choice:
+                            dedup_mode_classify = "similar"
+                            console.print()
+                            print_info("💡 相似度阈值说明：")
+                            print_info("   • 0-5:  几乎相同（不同压缩质量）")
+                            print_info("   • 6-10: 很相似（轻微编辑、裁剪）")
+                            print_info("   • 11-15: 相似（明显编辑）")
+                            print_info("   • 推荐值：8（平衡准确性和召回率）")
+                            console.print()
+                            similarity_threshold_classify = input_number(
+                                "相似度阈值 (0-64):", 
+                                default=8, 
+                                min_value=0, 
+                                max_value=64
+                            )
                     
                     if use_counts:
                         console.print()
@@ -290,7 +325,9 @@ def run_data_operations():
                                 counts=counts,
                                 seed=42,
                                 task=task_type,
-                                deduplicate=deduplicate_classify
+                                deduplicate=deduplicate_classify,
+                                dedup_mode=dedup_mode_classify,
+                                similarity_threshold=similarity_threshold_classify
                             )
                     else:
                         ratios = input_text("划分比例 (train:val:test):", default="0.7:0.2:0.1")
@@ -313,7 +350,9 @@ def run_data_operations():
                                 counts=None,
                                 seed=42,
                                 task=task_type,
-                                deduplicate=deduplicate_classify
+                                deduplicate=deduplicate_classify,
+                                dedup_mode=dedup_mode_classify,
+                                similarity_threshold=similarity_threshold_classify
                             )
                 else:
                     # 检测/分割任务
@@ -342,11 +381,46 @@ def run_data_operations():
                     # 询问是否去重
                     console.print()
                     print_info("🧹 数据去重：")
-                    print_info("   - 检测并删除完全相同的图片（基于文件哈希）")
+                    print_info("   - 检测并删除重复/相似的图片")
                     print_info("   - 避免训练/验证/测试集之间的数据泄露")
                     print_info("   - 推荐在拆分前进行去重")
                     console.print()
                     deduplicate = confirm_action("是否在拆分前去除重复图片?", default=True)
+                    
+                    # 如果启用去重，询问去重模式
+                    dedup_mode = "exact"
+                    similarity_threshold = 8
+                    if deduplicate:
+                        console.print()
+                        from ..ui.prompts import select_option
+                        print_info("📋 去重模式：")
+                        print_info("   • 完全相同：只删除文件内容完全相同的图片（快速，推荐）")
+                        print_info("   • 相似图片：删除视觉上相似的图片（较慢，需要imagehash库）")
+                        console.print()
+                        
+                        mode_choice = select_option(
+                            "选择去重模式:",
+                            choices=[
+                                "完全相同检测 (推荐，快速)",
+                                "相似图片检测 (检测不同压缩质量、轻微编辑的图片)",
+                            ]
+                        )
+                        
+                        if "相似" in mode_choice:
+                            dedup_mode = "similar"
+                            console.print()
+                            print_info("💡 相似度阈值说明：")
+                            print_info("   • 0-5:  几乎相同（不同压缩质量）")
+                            print_info("   • 6-10: 很相似（轻微编辑、裁剪）")
+                            print_info("   • 11-15: 相似（明显编辑）")
+                            print_info("   • 推荐值：8（平衡准确性和召回率）")
+                            console.print()
+                            similarity_threshold = input_number(
+                                "相似度阈值 (0-64):", 
+                                default=8, 
+                                min_value=0, 
+                                max_value=64
+                            )
                     
                     console.print()
                     print_info(f"将划分数据到: {output_dir}")
@@ -367,7 +441,9 @@ def run_data_operations():
                             seed=42,
                             task=task_type,
                             create_empty_labels=create_empty,
-                            deduplicate=deduplicate
+                            deduplicate=deduplicate,
+                            dedup_mode=dedup_mode,
+                            similarity_threshold=similarity_threshold
                         )
             
             elif operation == 'generate-yaml':
