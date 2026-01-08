@@ -32,22 +32,36 @@ def upload_dataset(
     max_workers: int = typer.Option(4, "--workers", "-w", help="最大并发数（默认: 4）"),
     setup_config: bool = typer.Option(False, "--setup-config", help="配置标注模板"),
     verify: bool = typer.Option(False, "--verify", help="上传后验证结果"),
+    force: bool = typer.Option(False, "--force", help="强制重新上传所有文件（忽略所有检查，会创建重复任务）"),
+    no_resume: bool = typer.Option(False, "--no-resume", help="禁用断点续传（清除本地进度记录重新开始）"),
+    skip_server_check: bool = typer.Option(False, "--skip-server-check", help="跳过服务器重复检测（仅使用本地缓存，适合大项目）"),
+    verify_duplicates: bool = typer.Option(False, "--verify-duplicates", help="强制检查服务器重复（即使项目很大）"),
+    retry_times: int = typer.Option(3, "--retry-times", help="网络失败重试次数（默认: 3）"),
 ):
     """
-    上传YOLO数据集到Label Studio（文件上传模式）
+    上传YOLO数据集到Label Studio（文件上传模式，支持断点续传）
     
     示例:
-        # 上传datasets目录下的数据集
+        # 正常上传（自动断点续传 + 智能重复检测）
         yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1
         
-        # 上传指定路径的数据集
-        yolo_cli labelstudio upload /path/to/dataset --url http://localhost:8080 --api-key xxx --project-id 1
+        # 网络中断后，重新运行相同命令，自动从断点继续
+        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1
+        
+        # 大项目快速上传（跳过服务器重复检查，仅用本地缓存）
+        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --skip-server-check
+        
+        # 强制重新上传所有文件（会创建重复任务，慎用！）
+        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --force
+        
+        # 清除本地缓存重新开始（但仍会检测服务器避免重复）
+        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --no-resume
+        
+        # 自定义重试次数（网络极不稳定时）
+        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --retry-times 5
         
         # 只配置标注模板（不上传数据）
         yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --setup-config
-        
-        # 上传并验证
-        yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --verify
         
         # 只上传训练集和验证集
         yolo_cli labelstudio upload my_dataset --url http://localhost:8080 --api-key xxx --project-id 1 --split train --split val
@@ -98,8 +112,24 @@ def upload_dataset(
     if splits is None:
         splits = ['train', 'val', 'test']
     
+    # 处理参数冲突
+    if verify_duplicates and skip_server_check:
+        print_warning("⚠ --verify-duplicates 和 --skip-server-check 冲突，将启用服务器检查")
+        skip_server_check = False
+    
     print_info(f"\n数据集分割: {', '.join(splits)}")
     print_info(f"并发数: {max_workers}")
+    print_info(f"重试次数: {retry_times}")
+    
+    if force:
+        print_warning("⚠ 强制模式：将重新上传所有文件（可能创建重复任务）")
+    elif no_resume:
+        print_info("ℹ️  已禁用断点续传，将清除本地进度重新开始")
+    elif skip_server_check:
+        print_info("⚡ 跳过服务器检查模式：仅使用本地缓存")
+    else:
+        print_info("✨ 断点续传模式：自动跳过已上传文件")
+    
     print_info("使用文件上传模式（Label Studio会自动管理文件）")
     
     # 上传数据集
@@ -108,7 +138,11 @@ def upload_dataset(
             dataset_path=dataset_path,
             splits=splits,
             max_images=max_images,
-            max_workers=max_workers
+            max_workers=max_workers,
+            force=force,
+            no_resume=no_resume,
+            skip_server_check=skip_server_check,
+            retry_times=retry_times
         )
         
         print_section_header("上传完成")
@@ -119,6 +153,12 @@ def upload_dataset(
         # 验证上传结果
         if verify and total_uploaded > 0:
             uploader.verify_uploaded_tasks(num_samples=5)
+        
+    except KeyboardInterrupt:
+        # 用户中断
+        print_warning("\n\n⚠️  上传已被用户中断")
+        print_info("💾 进度已保存，下次运行时将自动继续")
+        raise typer.Exit(130)  # 130 is the standard exit code for Ctrl+C
         
     except Exception as e:
         print_error(f"上传失败: {str(e)}")

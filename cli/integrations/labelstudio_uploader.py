@@ -15,10 +15,11 @@ import base64
 import yaml
 import requests
 import xml.etree.ElementTree as ET
+import time
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Callable
 from PIL import Image
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 import threading
 
 from ..ui.display import print_info, print_success, print_warning, print_error
@@ -219,6 +220,145 @@ class LabelStudioUploader:
         except Exception as e:
             print_error(f"✗ 连接异常: {str(e)}")
             return False
+    
+    def get_project_task_count(self) -> Optional[int]:
+        """
+        获取项目任务总数
+        
+        Returns:
+            Optional[int]: 任务数量，失败返回 None
+        """
+        try:
+            response = requests.get(
+                f"{self.url}/api/projects/{self.project_id}",
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                project_data = response.json()
+                return project_data.get('task_number', 0)
+            
+            return None
+        except Exception:
+            return None
+    
+    def build_existing_tasks_map(self, show_progress: bool = True) -> Dict[str, int]:
+        """
+        构建现有任务映射表（通过 original_filename 字段）
+        
+        使用 Export API 获取所有任务，提取 data.original_filename 字段，
+        构建 {original_filename: task_id} 映射表。
+        
+        Args:
+            show_progress: 是否显示进度信息
+            
+        Returns:
+            Dict[str, int]: {filename: task_id} 映射表
+        """
+        if show_progress:
+            print_info("\n🔍 正在检查服务器上已有的任务...")
+        
+        try:
+            # 使用 Export API 获取所有任务
+            export_url = f"{self.url}/api/projects/{self.project_id}/export"
+            response = requests.get(
+                export_url,
+                headers=self.headers,
+                params={'exportType': 'JSON'},
+                timeout=60
+            )
+            
+            if response.status_code != 200:
+                if show_progress:
+                    print_warning(f"⚠ 无法获取任务列表: HTTP {response.status_code}")
+                return {}
+            
+            all_tasks = response.json()
+            
+            if show_progress:
+                print_info(f"  服务器返回 {len(all_tasks)} 个任务")
+            
+            # 构建映射表
+            mapping = {}
+            for task in all_tasks:
+                task_id = task.get('id')
+                data = task.get('data', {})
+                original_filename = data.get('original_filename')
+                
+                if task_id and original_filename:
+                    mapping[original_filename] = task_id
+            
+            if show_progress:
+                print_success(f"✓ 成功构建任务映射表（{len(mapping)} 个文件）")
+            
+            return mapping
+            
+        except requests.exceptions.Timeout:
+            if show_progress:
+                print_warning("⚠ 获取任务列表超时（项目可能较大）")
+            return {}
+        except Exception as e:
+            if show_progress:
+                print_warning(f"⚠ 获取任务列表失败: {str(e)}")
+            return {}
+    
+    def check_task_exists(self, filename: str, existing_map: Dict[str, int]) -> Optional[int]:
+        """
+        检查文件是否已上传到 Label Studio
+        
+        Args:
+            filename: 原始文件名
+            existing_map: 现有任务映射表（由 build_existing_tasks_map 生成）
+            
+        Returns:
+            Optional[int]: 任务ID（如果存在），否则返回 None
+        """
+        return existing_map.get(filename)
+    
+    def retry_with_backoff(self, func: Callable, max_retries: int = 3, 
+                          initial_delay: float = 1.0, filename: str = "") -> Tuple[bool, Any, str]:
+        """
+        使用指数退避策略重试函数
+        
+        Args:
+            func: 要重试的函数
+            max_retries: 最大重试次数
+            initial_delay: 初始延迟（秒）
+            filename: 文件名（用于日志）
+            
+        Returns:
+            Tuple[bool, Any, str]: (成功/失败, 返回值, 错误信息)
+        """
+        last_error = ""
+        
+        for attempt in range(max_retries + 1):  # +1 因为包括第一次尝试
+            try:
+                result = func()
+                return (True, result, "")
+            except (requests.exceptions.ConnectionError, 
+                   requests.exceptions.Timeout,
+                   requests.exceptions.RequestException) as e:
+                last_error = str(e)
+                
+                if attempt < max_retries:
+                    # 计算延迟时间（指数退避）
+                    delay = initial_delay * (2 ** attempt)
+                    
+                    # 显示重试信息
+                    retry_msg = f"⚠ {filename}: 网络错误，{delay:.1f}秒后重试 ({attempt + 1}/{max_retries})"
+                    print_warning(retry_msg)
+                    
+                    time.sleep(delay)
+                else:
+                    # 最后一次尝试失败
+                    final_error = f"网络失败（已重试 {max_retries} 次）: {last_error}"
+                    return (False, None, final_error)
+            except Exception as e:
+                # 非网络错误，不重试
+                return (False, None, f"错误: {str(e)}")
+        
+        return (False, None, last_error)
     
     def load_dataset_config(self, dataset_path: Path) -> Dict:
         """加载数据集配置"""
@@ -667,78 +807,207 @@ class LabelStudioUploader:
     def upload_tasks(self, dataset_path: Path, 
                     splits: List[str] = ['train', 'val', 'test'],
                     max_images: Optional[int] = None,
-                    max_workers: int = 4) -> Tuple[int, int]:
+                    max_workers: int = 4,
+                    force: bool = False,
+                    no_resume: bool = False,
+                    skip_server_check: bool = False,
+                    retry_times: int = 3) -> Tuple[int, int]:
         """
-        批量上传任务到Label Studio（支持并发）
+        批量上传任务到Label Studio（支持并发和断点续传）
         
         Args:
             dataset_path: 数据集路径
             splits: 要上传的数据集分割
             max_images: 最大上传图片数（None表示全部）
             max_workers: 最大并发数（默认4）
+            force: 强制重新上传所有文件（忽略所有检查）
+            no_resume: 禁用断点续传（清除进度记录）
+            skip_server_check: 跳过服务器重复检测（仅使用本地缓存）
+            retry_times: 重试次数（默认3）
             
         Returns:
             (成功数, 失败数)
         """
+        from ..core.upload_progress import UploadProgressTracker
+        
         total_uploaded = 0
         total_failed = 0
+        total_skipped = 0
         
-        for split in splits:
-            print_info(f"\n处理 {split} 数据集...")
-            
-            # 尝试不同的目录结构
-            possible_dirs = [
-                (dataset_path / split / 'images', dataset_path / split / 'labels'),
-                (dataset_path / 'images' / split, dataset_path / 'labels' / split),
-            ]
-            
-            images_dir, labels_dir = None, None
-            for img_dir, lbl_dir in possible_dirs:
-                if img_dir.exists():
-                    images_dir = img_dir
-                    labels_dir = lbl_dir
-                    break
-            
-            if not images_dir or not images_dir.exists():
-                print_warning(f"跳过: 未找到 {split} 图片目录")
-                continue
-            
-            # 获取所有图片
-            image_files = sorted(
-                list(images_dir.glob('*.jpg')) + 
-                list(images_dir.glob('*.png')) +
-                list(images_dir.glob('*.jpeg'))
+        # 初始化进度跟踪器（除非 force 模式）
+        progress_tracker = None
+        if not force:
+            progress_tracker = UploadProgressTracker(
+                project_id=self.project_id,
+                dataset_path=dataset_path,
+                url=self.url
             )
             
-            if max_images:
-                image_files = image_files[:max_images]
+            # 如果 no_resume，清除进度
+            if no_resume:
+                print_info("🔄 已清除本地进度缓存")
+                progress_tracker.clear()
             
-            print_info(f"找到 {len(image_files)} 张图片")
-            print_info(f"并发数: {max_workers}")
+            # 显示进度信息
+            progress_info = progress_tracker.get_progress_info()
+            if progress_info:
+                print_info("\n📌 检测到之前的上传进度：")
+                print_info(f"  • 数据集：{progress_info['dataset_name']}")
+                print_info(f"  • 项目ID：{progress_info['project_id']}")
+                print_info(f"  • 已上传：{progress_info['uploaded_count']} 个文件")
+                print_info(f"  • 失败：{progress_info['failed_count']} 个文件")
+                print_info(f"  • 最后更新：{progress_info['last_updated']}")
+                print_info("  ✨ 将自动跳过已上传的文件")
+        
+        # 构建服务器现有任务映射（用于重复检测）
+        existing_map = {}
+        if not force and not skip_server_check:
+            # 智能判断是否检查服务器
+            task_count = self.get_project_task_count()
             
-            # 并发上传
-            uploaded, failed = self._upload_images_concurrent(
-                image_files=image_files,
-                labels_dir=labels_dir,
-                split_name=split,
-                max_workers=max_workers
-            )
+            if task_count is not None and task_count >= 5000:
+                print_warning(f"\n⚠ 项目任务数较大（{task_count} 个），服务器检查可能较慢")
+                print_info("  💡 提示：可使用 --skip-server-check 跳过服务器检查，仅使用本地缓存")
+                print_info("  正在检查服务器...")
             
-            total_uploaded += uploaded
-            total_failed += failed
+            existing_map = self.build_existing_tasks_map(show_progress=True)
+        elif skip_server_check:
+            print_info("\n⚡ 跳过服务器重复检测（仅使用本地缓存）")
+        
+        try:
+            for split in splits:
+                print_info(f"\n处理 {split} 数据集...")
+                
+                # 尝试不同的目录结构
+                possible_dirs = [
+                    (dataset_path / split / 'images', dataset_path / split / 'labels'),
+                    (dataset_path / 'images' / split, dataset_path / 'labels' / split),
+                ]
+                
+                images_dir, labels_dir = None, None
+                for img_dir, lbl_dir in possible_dirs:
+                    if img_dir.exists():
+                        images_dir = img_dir
+                        labels_dir = lbl_dir
+                        break
+                
+                if not images_dir or not images_dir.exists():
+                    print_warning(f"跳过: 未找到 {split} 图片目录")
+                    continue
+                
+                # 获取所有图片
+                image_files = sorted(
+                    list(images_dir.glob('*.jpg')) + 
+                    list(images_dir.glob('*.png')) +
+                    list(images_dir.glob('*.jpeg'))
+                )
+                
+                if max_images:
+                    image_files = image_files[:max_images]
+                
+                print_info(f"找到 {len(image_files)} 张图片")
+                
+                # 过滤掉已上传的文件
+                if progress_tracker and not force:
+                    original_count = len(image_files)
+                    
+                    # 过滤本地缓存中的文件
+                    uploaded_set = progress_tracker.get_uploaded_set()
+                    image_files = [f for f in image_files if f.name not in uploaded_set]
+                    cached_count = original_count - len(image_files)
+                    
+                    # 过滤服务器上已存在的文件
+                    server_exists_count = 0
+                    if existing_map:
+                        remaining_files = []
+                        for f in image_files:
+                            if f.name not in existing_map:
+                                remaining_files.append(f)
+                            else:
+                                server_exists_count += 1
+                        image_files = remaining_files
+                    
+                    # 显示统计信息
+                    print_info(f"\n📊 统计信息：")
+                    print_info(f"  • 总文件数：{original_count}")
+                    if cached_count > 0:
+                        print_success(f"  • 本地缓存已记录：{cached_count} 个（跳过）")
+                    if server_exists_count > 0:
+                        print_success(f"  • 服务器已存在：{server_exists_count} 个（跳过）")
+                    print_info(f"  • 待上传：{len(image_files)} 个")
+                    
+                    total_skipped += cached_count + server_exists_count
+                
+                if len(image_files) == 0:
+                    print_success(f"✓ {split} 数据集所有文件已上传")
+                    continue
+                
+                print_info(f"并发数: {max_workers}")
+                print_info(f"重试次数: {retry_times}")
+                
+                # 并发上传
+                uploaded, failed = self._upload_images_concurrent(
+                    image_files=image_files,
+                    labels_dir=labels_dir,
+                    split_name=split,
+                    max_workers=max_workers,
+                    progress_tracker=progress_tracker,
+                    retry_times=retry_times
+                )
+                
+                total_uploaded += uploaded
+                total_failed += failed
+        
+        except KeyboardInterrupt:
+            # 用户中断，保存进度并重新抛出
+            if progress_tracker:
+                print_warning("\n\n⚠️  检测到中断信号...")
+                # 强制保存当前进度
+                try:
+                    progress_tracker.force_save()
+                except:
+                    pass
+                stats = progress_tracker.get_stats()
+                if stats['uploaded_count'] > 0:
+                    print_info(f"💾 已保存进度到: {stats['progress_file']}")
+            raise
+        
+        # 显示失败文件列表
+        if progress_tracker:
+            # 确保最终进度被保存
+            try:
+                progress_tracker.force_save()
+            except:
+                pass
+            
+            failed_files = progress_tracker.get_failed_files()
+            if failed_files:
+                print_warning(f"\n⚠ 失败文件列表（共 {len(failed_files)} 个）：")
+                for i, failed in enumerate(failed_files[:10], 1):  # 只显示前10个
+                    print_warning(f"  {i}. {failed['filename']}: {failed['error']}")
+                if len(failed_files) > 10:
+                    print_warning(f"  ... 还有 {len(failed_files) - 10} 个文件")
+            
+            # 显示进度文件位置
+            stats = progress_tracker.get_stats()
+            if stats['uploaded_count'] > 0:
+                print_info(f"\n💾 进度已保存到: {stats['progress_file']}")
         
         return total_uploaded, total_failed
     
     def _upload_images_concurrent(self, image_files: List[Path], labels_dir: Path, 
-                                  split_name: str, max_workers: int) -> Tuple[int, int]:
+                                  split_name: str, max_workers: int,
+                                  progress_tracker=None, retry_times: int = 3) -> Tuple[int, int]:
         """
-        并发上传图片
+        并发上传图片（支持断点续传和重试）
         
         Args:
             image_files: 图片文件列表
             labels_dir: 标签目录
             split_name: 数据集分割名称
             max_workers: 最大并发数
+            progress_tracker: 进度跟踪器（可选）
+            retry_times: 重试次数（默认3）
             
         Returns:
             (成功数, 失败数)
@@ -747,25 +1016,43 @@ class LabelStudioUploader:
         failed = 0
         lock = threading.Lock()
         
-        def upload_single_image(idx: int, image_path: Path) -> Tuple[bool, str]:
-            """上传单张图片"""
+        def upload_single_image(idx: int, image_path: Path) -> Tuple[bool, str, Optional[int]]:
+            """上传单张图片（带重试）"""
             label_path = labels_dir / f"{image_path.stem}.txt"
             
-            try:
+            def _do_upload():
+                """实际上传函数（用于重试）"""
                 task = self._create_task(image_path, label_path)
                 success = self._upload_batch([task])
                 
-                if success:
-                    anno_count = task['meta']['annotation_count']
-                    original_name = task['data'].get('original_filename', image_path.name)
-                    return True, f"[{idx}/{len(image_files)}] {original_name} ({anno_count} 个标注)"
-                else:
-                    return False, f"上传失败: {image_path.name}"
-            except Exception as e:
-                return False, f"处理 {image_path.name} 时出错: {str(e)}"
+                if not success:
+                    raise Exception("上传失败")
+                
+                return task
+            
+            # 使用重试机制
+            success, task, error = self.retry_with_backoff(
+                func=_do_upload,
+                max_retries=retry_times,
+                initial_delay=1.0,
+                filename=image_path.name
+            )
+            
+            if success and task:
+                anno_count = task['meta']['annotation_count']
+                original_name = task['data'].get('original_filename', image_path.name)
+                
+                # 获取任务ID（如果有的话，从响应中提取）
+                task_id = task.get('id')
+                
+                return True, f"[{idx}/{len(image_files)}] {original_name} ({anno_count} 个标注)", task_id
+            else:
+                return False, f"{image_path.name}: {error}", None
         
         # 使用线程池并发上传
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        
+        try:
             # 提交所有任务
             futures = {
                 executor.submit(upload_single_image, idx, img): (idx, img)
@@ -777,26 +1064,163 @@ class LabelStudioUploader:
                 idx, image_path = futures[future]
                 
                 try:
-                    success, message = future.result()
+                    success, message, task_id = future.result()
                     
-                    with lock:
-                        if success:
+                    if success:
+                        # 更新进度跟踪器（立即保存，确保一致性）
+                        # 这是唯一的真实来源
+                        if progress_tracker:
+                            progress_tracker.mark_uploaded(
+                                filename=image_path.name,
+                                task_id=task_id or 0,
+                                auto_save=True  # 立即保存，确保进度一致性
+                            )
+                        
+                        # 获取当前实际上传数（从 progress_tracker）
+                        with lock:
                             uploaded += 1
-                            # 显示进度（每10个或最后一个）
-                            if uploaded % 10 == 0 or uploaded == len(image_files) or uploaded <= 3:
-                                print_info(f"  {message}")
-                            if uploaded % 10 == 0 or uploaded == len(image_files):
-                                print_success(f"✓ 进度: 已成功上传 {uploaded}/{len(image_files)} 个任务 ({split_name})")
-                        else:
+                            current_uploaded = len(progress_tracker.uploaded_files) if progress_tracker else uploaded
+                        
+                        # 显示进度（每10个或最后一个）
+                        if current_uploaded % 10 == 0 or current_uploaded == len(image_files) or current_uploaded <= 3:
+                            print_info(f"  {message}")
+                        
+                        # 每10个显示统计
+                        if current_uploaded % 10 == 0 or current_uploaded == len(image_files):
+                            print_success(f"✓ 进度: 已成功上传 {current_uploaded}/{len(image_files)} 个任务 ({split_name})")
+                    else:
+                        with lock:
                             failed += 1
+                            
+                            # 标记为失败（立即保存失败信息）
+                            if progress_tracker:
+                                progress_tracker.mark_failed(
+                                    filename=image_path.name,
+                                    error=message
+                                )
+                            
                             print_error(f"✗ {message}")
                 
                 except Exception as e:
                     with lock:
                         failed += 1
-                        print_error(f"✗ 任务异常: {str(e)}")
+                        error_msg = f"任务异常: {str(e)}"
+                        
+                        # 标记为失败（立即保存失败信息）
+                        if progress_tracker:
+                            progress_tracker.mark_failed(
+                                filename=image_path.name,
+                                error=error_msg
+                            )
+                        
+                        print_error(f"✗ {error_msg}")
+            
+            # 循环结束，不需要强制保存（因为已经实时保存了）
         
-        return uploaded, failed
+        except KeyboardInterrupt:
+            # 用户中断，优雅地关闭
+            print_warning("\n\n⚠️  检测到中断信号，正在停止上传...")
+            
+            # 取消所有未开始的任务
+            cancelled_count = 0
+            running_futures = []
+            completed_futures = []
+            
+            for future in futures:
+                if future.cancel():  # 只能取消未开始的任务
+                    cancelled_count += 1
+                elif future.done():
+                    # 已完成但可能还没被主循环处理
+                    completed_futures.append(future)
+                else:
+                    # 正在运行的任务
+                    running_futures.append(future)
+            
+            if cancelled_count > 0:
+                print_info(f"  已取消 {cancelled_count} 个未开始的任务")
+            
+            # 处理那些已完成但还没被主循环处理的任务
+            if completed_futures:
+                print_info(f"  正在保存 {len(completed_futures)} 个已完成任务的进度...")
+                for future in completed_futures:
+                    try:
+                        idx, image_path = futures[future]
+                        success, message, task_id = future.result()
+                        
+                        if success and progress_tracker and not progress_tracker.is_uploaded(image_path.name):
+                            # 只有当文件还没被标记为上传时才保存（避免重复）
+                            progress_tracker.mark_uploaded(
+                                filename=image_path.name,
+                                task_id=task_id or 0,
+                                auto_save=True
+                            )
+                        elif not success and progress_tracker:
+                            progress_tracker.mark_failed(
+                                filename=image_path.name,
+                                error=message
+                            )
+                    except Exception as e:
+                        # 处理结果时出错，忽略
+                        pass
+            
+            # 等待正在执行的任务完成
+            if running_futures:
+                print_info(f"  等待 {len(running_futures)} 个正在执行的任务完成...")
+                
+                try:
+                    done, not_done = wait(running_futures, timeout=30)
+                    
+                    # 处理刚刚完成的任务
+                    if done:
+                        for future in done:
+                            try:
+                                idx, image_path = futures[future]
+                                success, message, task_id = future.result()
+                                
+                                if success and progress_tracker:
+                                    progress_tracker.mark_uploaded(
+                                        filename=image_path.name,
+                                        task_id=task_id or 0,
+                                        auto_save=True
+                                    )
+                                elif not success and progress_tracker:
+                                    progress_tracker.mark_failed(
+                                        filename=image_path.name,
+                                        error=message
+                                    )
+                            except Exception as e:
+                                # 处理结果时出错，忽略
+                                pass
+                    
+                    if not_done:
+                        print_warning(f"  ⚠ 有 {len(not_done)} 个任务超时未完成")
+                except Exception as e:
+                    print_warning(f"  ⚠ 等待任务时出错: {str(e)}")
+            
+            # 关闭线程池
+            executor.shutdown(wait=False)
+            
+            # 获取实际保存的进度（从 progress_tracker，这是唯一的真实来源）
+            actual_uploaded = len(progress_tracker.uploaded_files) if progress_tracker else uploaded
+            actual_failed = len(progress_tracker.failed_files) if progress_tracker else failed
+            
+            print_info(f"✓ 已保存进度: {actual_uploaded} 个成功, {actual_failed} 个失败")
+            print_info("💡 下次运行时将自动从断点继续")
+            
+            # 重新抛出异常，让上层处理
+            raise
+        
+        finally:
+            # 确保线程池被关闭
+            try:
+                executor.shutdown(wait=False)
+            except:
+                pass
+        
+        # 返回实际保存的数量（从 progress_tracker，这是唯一的真实来源）
+        actual_uploaded = len(progress_tracker.uploaded_files) if progress_tracker else uploaded
+        actual_failed = len(progress_tracker.failed_files) if progress_tracker else failed
+        return actual_uploaded, actual_failed
     
     def _upload_batch(self, tasks: List[Dict]) -> bool:
         """批量上传任务到Label Studio"""

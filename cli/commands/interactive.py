@@ -1331,6 +1331,98 @@ def run_labelstudio_operations():
                 console.print()
                 max_workers = int(input_number("最大并发数:", default=4, min_value=1, max_value=16))
                 
+                # 高级选项
+                console.print()
+                print_info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                show_advanced = confirm_action("显示高级选项（断点续传、重试等）?", default=False)
+                
+                # 默认值
+                force = False
+                no_resume = False
+                skip_server_check = False
+                retry_times = 3
+                
+                if show_advanced:
+                    console.print()
+                    print_info("⚙️  高级选项：")
+                    console.print()
+                    
+                    # 检查是否有进度记录
+                    from ..core.upload_progress import UploadProgressTracker
+                    temp_tracker = UploadProgressTracker(
+                        project_id=project_id,
+                        dataset_path=dataset_path,
+                        url=default_url
+                    )
+                    progress_info = temp_tracker.get_progress_info()
+                    
+                    if progress_info:
+                        # 有进度记录，显示并提供选择
+                        print_warning("⚠️  检测到之前的上传进度：")
+                        print_info(f"   • 数据集：{progress_info['dataset_name']}")
+                        print_info(f"   • 项目ID：{progress_info['project_id']}")
+                        print_info(f"   • 已上传：{progress_info['uploaded_count']} 个文件")
+                        print_info(f"   • 失败：{progress_info['failed_count']} 个文件")
+                        print_info(f"   • 最后更新：{progress_info['last_updated']}")
+                        console.print()
+                        
+                        resume_choices = [
+                            "continue - 继续上传（从断点恢复）✨ 推荐",
+                            "restart - 重新开始（清除进度，但检查服务器避免重复）",
+                            "force - 强制全部重传（会创建重复任务）⚠️"
+                        ]
+                        resume_choice = select_option("选择操作:", resume_choices)
+                        
+                        if resume_choice.startswith("restart"):
+                            no_resume = True
+                        elif resume_choice.startswith("force"):
+                            force = True
+                        # continue 使用默认值
+                    else:
+                        # 没有进度记录
+                        print_info("✨ 自动启用断点续传功能")
+                        enable_resume = confirm_action("启用断点续传?", default=True)
+                        if not enable_resume:
+                            no_resume = True
+                    
+                    console.print()
+                    
+                    # 服务器检查选项（如果不是 force 模式）
+                    if not force:
+                        # 获取项目任务数
+                        task_count = None
+                        try:
+                            from ..integrations.labelstudio_uploader import LabelStudioUploader
+                            temp_uploader = LabelStudioUploader(default_url, default_token, project_id)
+                            task_count = temp_uploader.get_project_task_count()
+                        except:
+                            pass
+                        
+                        if task_count and task_count >= 5000:
+                            print_warning(f"⚠️  项目任务数较大（{task_count} 个），服务器检查可能较慢")
+                            skip_server_check = not confirm_action(
+                                "检查服务器重复（避免重复任务）?",
+                                default=False
+                            )
+                        else:
+                            skip_server_check = not confirm_action(
+                                "检查服务器重复（避免重复任务）?",
+                                default=True
+                            )
+                    
+                    console.print()
+                    
+                    # 重试次数
+                    retry_times = int(input_number(
+                        "网络失败重试次数:",
+                        default=3,
+                        min_value=0,
+                        max_value=10
+                    ))
+                    
+                    console.print()
+                    print_info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
                 # 询问是否配置标注模板
                 console.print()
                 print_info("💡 标注模板配置说明：")
@@ -1352,6 +1444,15 @@ def run_labelstudio_operations():
                 print_info(f"  任务类型: {task_type}")
                 print_info(f"  数据集分割: {', '.join(splits)}")
                 print_info(f"  并发数: {max_workers}")
+                print_info(f"  重试次数: {retry_times}")
+                if force:
+                    print_warning(f"  模式: ⚠️ 强制重传（会创建重复任务）")
+                elif no_resume:
+                    print_info(f"  模式: 🔄 重新开始（清除本地缓存）")
+                elif skip_server_check:
+                    print_info(f"  模式: ⚡ 快速模式（跳过服务器检查）")
+                else:
+                    print_info(f"  模式: ✨ 断点续传（自动跳过已上传）")
                 print_info(f"  配置标注模板: {'是' if setup_config else '否'}")
                 console.print()
                 
@@ -1389,7 +1490,11 @@ def run_labelstudio_operations():
                         dataset_path=dataset_path,
                         splits=splits,
                         max_images=None,
-                        max_workers=max_workers
+                        max_workers=max_workers,
+                        force=force,
+                        no_resume=no_resume,
+                        skip_server_check=skip_server_check,
+                        retry_times=retry_times
                     )
                     
                     # 显示结果
@@ -1404,6 +1509,13 @@ def run_labelstudio_operations():
                         console.print()
                         print_section_header("验证上传结果")
                         uploader.verify_uploaded_tasks(num_samples=5)
+                    
+                except KeyboardInterrupt:
+                    # 用户中断，不显示错误堆栈
+                    console.print()
+                    print_warning("⚠️  上传已被用户中断")
+                    print_info("💾 进度已保存，下次运行时将自动继续")
+                    # 不继续执行后续操作
                     
                 except Exception as e:
                     print_error(f"上传失败: {str(e)}")
