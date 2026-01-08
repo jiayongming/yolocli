@@ -1079,15 +1079,15 @@ class LabelStudioUploader:
                         # 获取当前实际上传数（从 progress_tracker）
                         with lock:
                             uploaded += 1
-                            current_uploaded = len(progress_tracker.uploaded_files) if progress_tracker else uploaded
+                            total_uploaded = len(progress_tracker.uploaded_files) if progress_tracker else uploaded
                         
                         # 显示进度（每10个或最后一个）
-                        if current_uploaded % 10 == 0 or current_uploaded == len(image_files) or current_uploaded <= 3:
+                        if uploaded % 10 == 0 or uploaded == len(image_files) or uploaded <= 3:
                             print_info(f"  {message}")
                         
-                        # 每10个显示统计
-                        if current_uploaded % 10 == 0 or current_uploaded == len(image_files):
-                            print_success(f"✓ 进度: 已成功上传 {current_uploaded}/{len(image_files)} 个任务 ({split_name})")
+                        # 每10个显示统计（显示本次进度 + 累计总数）
+                        if uploaded % 10 == 0 or uploaded == len(image_files):
+                            print_success(f"✓ 进度: 本次 {uploaded}/{len(image_files)}, 累计 {total_uploaded} 个任务 ({split_name})")
                     else:
                         with lock:
                             failed += 1
