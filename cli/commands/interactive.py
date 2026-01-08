@@ -446,6 +446,95 @@ def run_data_operations():
                             similarity_threshold=similarity_threshold
                         )
             
+            elif operation == 'merge':
+                # 合并数据集
+                print_section_header("合并数据集")
+                
+                console.print()
+                print_info("📦 数据集合并：")
+                print_info("   - 合并多个数据集为一个")
+                print_info("   - 自动处理类别ID重映射")
+                print_info("   - 保留原始train/val/test分割")
+                print_info("   - 适合合并不同标签的数据集")
+                console.print()
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
+                # 输入数据集路径列表
+                console.print()
+                print_info("💡 输入要合并的数据集路径（逗号分隔）")
+                print_info("   示例: datasets/umbrella,datasets/clothes,datasets/hat")
+                console.print()
+                datasets_input = input_text(
+                    "数据集路径列表（逗号分隔）:",
+                    default="datasets/dataset1,datasets/dataset2"
+                )
+                
+                # 输出目录
+                output_dir = input_path(
+                    "输出目录:",
+                    default="datasets/merged",
+                    must_exist=False
+                )
+                
+                # 重复文件处理
+                console.print()
+                print_info("🔄 重复文件处理：")
+                print_info("   • 跳过：如果文件名重复，跳过后续的文件")
+                print_info("   • 重命名：自动为重复文件名添加后缀")
+                print_info("   • 报错：遇到重复文件名时停止并报错")
+                console.print()
+                
+                from ..ui.prompts import select_option
+                duplicate_choice = select_option(
+                    "选择重复文件处理方式:",
+                    choices=[
+                        "跳过 (推荐，保留第一个)",
+                        "重命名 (保留所有，自动添加后缀)",
+                        "报错 (遇到重复时停止)",
+                    ]
+                )
+                
+                if "跳过" in duplicate_choice:
+                    handle_duplicates = "skip"
+                elif "重命名" in duplicate_choice:
+                    handle_duplicates = "rename"
+                else:
+                    handle_duplicates = "error"
+                
+                # 询问是否去重
+                console.print()
+                print_info("🧹 数据去重（可选）：")
+                print_info("   - 合并后删除完全相同的图片")
+                print_info("   - 使用MD5哈希检测")
+                console.print()
+                deduplicate = confirm_action("是否在合并后去除完全相同的图片?", default=False)
+                
+                # 显示配置摘要
+                console.print()
+                print_section_header("配置摘要")
+                print_info(f"任务类型: {task_type}")
+                print_info(f"数据集列表: {datasets_input}")
+                print_info(f"输出目录: {output_dir}")
+                print_info(f"重复处理: {handle_duplicates}")
+                print_info(f"去重: {'是' if deduplicate else '否'}")
+                console.print()
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                if confirm_action("确认合并数据集?"):
+                    from ..commands.data import merge_datasets
+                    merge_datasets(
+                        datasets=datasets_input,
+                        output_dir=output_dir,
+                        task=task_type,
+                        handle_duplicates=handle_duplicates,
+                        deduplicate=deduplicate
+                    )
+            
             elif operation == 'generate-yaml':
                 # 生成dataset.yaml
                 print_section_header("生成 dataset.yaml")

@@ -1759,6 +1759,75 @@ def _print_positive_negative_stats(data_path: Path):
         print_warning("未找到有效的数据集")
 
 
+@app.command("merge")
+def merge_datasets(
+    datasets: str = typer.Option(..., "--datasets", "-d", help="数据集路径列表（逗号分隔），如: path1,path2,path3"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
+    handle_duplicates: str = typer.Option("skip", "--duplicates", help="重复文件处理: skip=跳过, rename=重命名, error=报错"),
+    deduplicate: bool = typer.Option(False, "--deduplicate", help="合并后去除完全相同的图片"),
+):
+    """合并多个数据集
+    
+    支持合并不同标签的数据集，自动处理类别ID重映射。
+    
+    示例:
+    \b
+      # 合并两个数据集
+      yolo-cli data merge \\
+        --datasets data/dataset1,data/dataset2 \\
+        --output data/merged \\
+        --task detect
+      
+    \b
+      # 合并三个数据集并去重
+      yolo-cli data merge \\
+        --datasets data/ds1,data/ds2,data/ds3 \\
+        --output data/merged \\
+        --deduplicate
+    """
+    
+    print_section_header("合并数据集")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    print_info(f"任务类型: {task}")
+    
+    # 解析数据集路径
+    dataset_paths = [Path(p.strip()) for p in datasets.split(',')]
+    
+    if len(dataset_paths) < 2:
+        print_error("至少需要指定2个数据集进行合并")
+        raise typer.Exit(1)
+    
+    print_info(f"待合并数据集数量: {len(dataset_paths)}")
+    
+    # 验证所有数据集路径存在
+    for i, ds_path in enumerate(dataset_paths, 1):
+        if not ds_path.exists():
+            print_error(f"数据集 {i} 不存在: {ds_path}")
+            raise typer.Exit(1)
+        print_info(f"  {i}. {ds_path}")
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'merged'
+    else:
+        output_path = Path(output_dir)
+    
+    print_info(f"输出目录: {output_path}")
+    
+    # 调用合并函数
+    return _merge_datasets_impl(
+        dataset_paths=dataset_paths,
+        output_path=output_path,
+        task=task,
+        handle_duplicates=handle_duplicates,
+        deduplicate=deduplicate
+    )
+
+
 @app.command("stats")
 def dataset_stats(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
@@ -2433,6 +2502,313 @@ def convert_labelstudio(
     
     console.print()
     print_success("转换完成！")
+
+
+def _merge_datasets_impl(
+    dataset_paths: List[Path],
+    output_path: Path,
+    task: str,
+    handle_duplicates: str = 'skip',
+    deduplicate: bool = False
+):
+    """合并数据集的实现函数
+    
+    Args:
+        dataset_paths: 数据集路径列表
+        output_path: 输出路径
+        task: 任务类型
+        handle_duplicates: 重复文件处理方式
+        deduplicate: 是否去重
+    """
+    
+    # 1. 收集所有数据集的类别信息
+    print_section_header("收集类别信息")
+    
+    dataset_classes = []  # [(dataset_idx, classes_dict, dataset_path)]
+    all_class_names = []
+    
+    for idx, ds_path in enumerate(dataset_paths):
+        # 尝试从 data.yaml 或 dataset.yaml 读取类别
+        data_yaml = ds_path / 'data.yaml'
+        dataset_yaml = ds_path / 'dataset.yaml'
+        classes_file = ds_path / 'classes.txt'
+        
+        classes_dict = {}
+        yaml_file = None
+        
+        # 优先尝试 data.yaml，然后是 dataset.yaml
+        if data_yaml.exists():
+            yaml_file = data_yaml
+        elif dataset_yaml.exists():
+            yaml_file = dataset_yaml
+        
+        if yaml_file:
+            try:
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    yaml_data = yaml.safe_load(f)
+                    if yaml_data and 'names' in yaml_data:
+                        classes_dict = yaml_data['names']
+                        # 确保是 {id: name} 格式
+                        if isinstance(classes_dict, list):
+                            classes_dict = {i: name for i, name in enumerate(classes_dict)}
+            except Exception as e:
+                print_warning(f"读取 {yaml_file} 失败: {e}")
+        
+        elif classes_file.exists():
+            try:
+                with open(classes_file, 'r', encoding='utf-8') as f:
+                    classes = [line.strip() for line in f if line.strip()]
+                    classes_dict = {i: name for i, name in enumerate(classes)}
+            except Exception as e:
+                print_warning(f"读取 {classes_file} 失败: {e}")
+        
+        if not classes_dict:
+            print_error(f"数据集 {idx + 1} 未找到类别信息: {ds_path}")
+            print_warning(f"请确保以下任一文件存在且包含 'names' 字段:")
+            print_warning(f"  • {ds_path}/data.yaml")
+            print_warning(f"  • {ds_path}/dataset.yaml")
+            print_warning(f"  • {ds_path}/classes.txt")
+            raise typer.Exit(1)
+        
+        dataset_classes.append((idx, classes_dict, ds_path))
+        
+        # 收集类别名称
+        class_names = list(classes_dict.values())
+        all_class_names.extend(class_names)
+        
+        print_info(f"数据集 {idx + 1}: {len(classes_dict)} 个类别 - {', '.join(class_names)}")
+    
+    # 2. 构建统一的类别映射
+    print_section_header("构建统一类别映射")
+    
+    # 去重并保持顺序
+    unique_classes = []
+    seen = set()
+    for name in all_class_names:
+        if name not in seen:
+            unique_classes.append(name)
+            seen.add(name)
+    
+    # 创建新的类别ID映射
+    merged_classes = {i: name for i, name in enumerate(unique_classes)}
+    print_info(f"合并后总类别数: {len(merged_classes)}")
+    print_info(f"类别列表: {', '.join(unique_classes)}")
+    
+    # 为每个数据集创建类别ID重映射表
+    class_remapping = {}  # {dataset_idx: {old_id: new_id}}
+    
+    for idx, old_classes, _ in dataset_classes:
+        remapping = {}
+        for old_id, class_name in old_classes.items():
+            # 找到新的类别ID
+            new_id = next(i for i, name in merged_classes.items() if name == class_name)
+            remapping[old_id] = new_id
+        
+        class_remapping[idx] = remapping
+        
+        # 显示映射关系
+        if remapping and any(old_id != new_id for old_id, new_id in remapping.items()):
+            print_info(f"数据集 {idx + 1} 类别ID重映射:")
+            for old_id, new_id in remapping.items():
+                if old_id != new_id:
+                    class_name = old_classes[old_id]
+                    print_info(f"  {class_name}: {old_id} → {new_id}")
+    
+    console.print()
+    
+    # 3. 创建输出目录结构
+    for split in ['train', 'val', 'test']:
+        ensure_dir(output_path / 'images' / split)
+        if task != 'classify':
+            ensure_dir(output_path / 'labels' / split)
+    
+    # 4. 合并数据集
+    print_section_header("合并数据文件")
+    
+    total_files = 0
+    skipped_files = 0
+    renamed_files = 0
+    file_registry = set()  # 记录已复制的文件名
+    
+    for ds_idx, old_classes, ds_path in dataset_classes:
+        print_info(f"处理数据集 {ds_idx + 1}: {ds_path}")
+        
+        remapping = class_remapping[ds_idx]
+        
+        for split in ['train', 'val', 'test']:
+            # 尝试两种目录结构：
+            # 结构1: dataset/images/train/, dataset/labels/train/
+            # 结构2: dataset/train/images/, dataset/train/labels/
+            src_img_dir = ds_path / 'images' / split
+            src_label_dir = ds_path / 'labels' / split
+            
+            # 如果结构1不存在，尝试结构2
+            if not src_img_dir.exists():
+                src_img_dir = ds_path / split / 'images'
+                src_label_dir = ds_path / split / 'labels'
+            
+            # 处理 val/valid 的别名
+            if not src_img_dir.exists() and split == 'val':
+                # 尝试 valid 作为 val 的别名
+                src_img_dir = ds_path / 'images' / 'valid'
+                src_label_dir = ds_path / 'labels' / 'valid'
+                
+                if not src_img_dir.exists():
+                    src_img_dir = ds_path / 'valid' / 'images'
+                    src_label_dir = ds_path / 'valid' / 'labels'
+            
+            if not src_img_dir.exists():
+                continue
+            
+            # 获取所有图片文件
+            image_files = list(find_files(src_img_dir, ['.jpg', '.jpeg', '.png']))
+            
+            if not image_files:
+                continue
+            
+            print_info(f"  {split}: {len(image_files)} 张图片")
+            
+            for img_file in image_files:
+                # 处理重复文件名
+                dst_filename = img_file.name
+                
+                if dst_filename in file_registry:
+                    if handle_duplicates == 'skip':
+                        skipped_files += 1
+                        continue
+                    elif handle_duplicates == 'rename':
+                        # 重命名: image.jpg → image_ds2.jpg
+                        stem = img_file.stem
+                        suffix = img_file.suffix
+                        dst_filename = f"{stem}_ds{ds_idx + 1}{suffix}"
+                        renamed_files += 1
+                    elif handle_duplicates == 'error':
+                        print_error(f"重复文件名: {dst_filename}")
+                        raise typer.Exit(1)
+                
+                # 复制图片
+                dst_img = output_path / 'images' / split / dst_filename
+                shutil.copy2(img_file, dst_img)
+                file_registry.add(dst_filename)
+                total_files += 1
+                
+                # 处理标签文件
+                if task != 'classify':
+                    label_file = src_label_dir / f"{img_file.stem}.txt"
+                    
+                    if label_file.exists():
+                        # 读取并更新标签文件
+                        dst_label = output_path / 'labels' / split / f"{Path(dst_filename).stem}.txt"
+                        
+                        with open(label_file, 'r') as f_in, open(dst_label, 'w') as f_out:
+                            for line in f_in:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                parts = line.split()
+                                if len(parts) >= 1:
+                                    # 更新类别ID
+                                    old_class_id = int(parts[0])
+                                    new_class_id = remapping.get(old_class_id, old_class_id)
+                                    parts[0] = str(new_class_id)
+                                    
+                                    f_out.write(' '.join(parts) + '\n')
+    
+    # 5. 统计信息
+    console.print()
+    print_info(f"合并完成:")
+    print_info(f"  总文件数: {total_files}")
+    if skipped_files > 0:
+        print_info(f"  跳过重复: {skipped_files}")
+    if renamed_files > 0:
+        print_info(f"  重命名: {renamed_files}")
+    
+    # 6. 保存类别信息
+    classes_file = output_path / 'classes.txt'
+    with open(classes_file, 'w', encoding='utf-8') as f:
+        for class_name in unique_classes:
+            f.write(f"{class_name}\n")
+    
+    print_success(f"✓ 类别列表已保存: {classes_file}")
+    
+    # 7. 生成 dataset.yaml
+    yaml_config = {
+        'path': str(output_path),
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+        'names': merged_classes,
+        'nc': len(merged_classes),
+    }
+    
+    dataset_yaml_path = output_path / 'dataset.yaml'
+    with open(dataset_yaml_path, 'w', encoding='utf-8') as f:
+        f.write("# YOLO 合并数据集配置文件\n")
+        f.write(f"# 合并自 {len(dataset_paths)} 个数据集\n\n")
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"✓ dataset.yaml 已生成: {dataset_yaml_path}")
+    
+    # 8. 可选：去重
+    if deduplicate:
+        console.print()
+        print_section_header("数据去重")
+        print_info("对合并后的数据集进行去重...")
+        
+        from ..core.deduplicator import ImageDeduplicator
+        
+        deduplicator = ImageDeduplicator()
+        
+        for split in ['train', 'val', 'test']:
+            img_dir = output_path / 'images' / split
+            label_dir = output_path / 'labels' / split
+            
+            if not img_dir.exists():
+                continue
+            
+            image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png']))
+            
+            if image_files:
+                print_info(f"检查 {split} 集...")
+                duplicates_map = deduplicator.find_duplicates(image_files)
+                
+                if duplicates_map:
+                    total_dup = sum(len(files) - 1 for files in duplicates_map.values())
+                    print_warning(f"  发现 {total_dup} 个重复文件")
+                    
+                    removed = deduplicator.remove_duplicates(
+                        duplicates_map,
+                        labels_dir=label_dir if task != 'classify' else None
+                    )
+                    
+                    print_success(f"  ✓ 已删除 {len(removed)} 个重复文件")
+                else:
+                    print_success(f"  ✓ 未发现重复")
+    
+    # 9. 最终统计
+    console.print()
+    print_section_header("合并完成")
+    
+    final_stats = {}
+    for split in ['train', 'val', 'test']:
+        img_dir = output_path / 'images' / split
+        if img_dir.exists():
+            count = len(list(find_files(img_dir, ['.jpg', '.jpeg', '.png'])))
+            final_stats[split] = count
+    
+    total_final = sum(final_stats.values())
+    
+    columns = ["数据集", "图片数量"]
+    rows = [
+        ["训练集", final_stats.get('train', 0)],
+        ["验证集", final_stats.get('val', 0)],
+        ["测试集", final_stats.get('test', 0)],
+        ["总计", total_final],
+    ]
+    print_table("合并后数据集统计", columns, rows, show_lines=True)
+    
+    print_success(f"数据集合并完成！输出目录: {output_path}")
 
 
 if __name__ == "__main__":

@@ -695,6 +695,7 @@ def select_data_operation() -> str:
     choices = [
         "convert-labelstudio - 转换Label Studio数据",
         "split - 划分数据集",
+        "merge - 合并多个数据集",
         "generate-yaml - 生成dataset.yaml",
         "verify - 验证数据集",
         "stats - 数据统计",
