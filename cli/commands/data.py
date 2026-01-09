@@ -1306,12 +1306,12 @@ def verify_dataset(
         # 获取 datasets 目录
         config = ConfigManager()
         datasets_root = config.project_root / 'datasets'
-    
+        
         if not datasets_root.exists():
             print_error(f"datasets 目录不存在: {datasets_root}")
             print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --path 参数指定路径")
-        raise typer.Exit(1)
-    
+            raise typer.Exit(1)
+        
         # 扫描 datasets 目录下的所有子目录
         available_datasets = []
         for item in sorted(datasets_root.iterdir()):
@@ -3245,12 +3245,12 @@ def dataset_stats(
         # 获取 datasets 目录
         config = ConfigManager()
         datasets_root = config.project_root / 'datasets'
-    
+        
         if not datasets_root.exists():
             print_error(f"datasets 目录不存在: {datasets_root}")
             print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --path 参数指定路径")
-        raise typer.Exit(1)
-    
+            raise typer.Exit(1)
+        
         # 扫描 datasets 目录下的所有子目录
         available_datasets = []
         for item in sorted(datasets_root.iterdir()):
