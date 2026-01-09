@@ -3256,22 +3256,45 @@ python yolo_cli.py data merge-labels [OPTIONS]
   - 准备二分类任务数据
   - 调整类别粒度（细粒度→粗粒度）
 
-# 按标签过滤数据集 🆕
+# 按标签过滤数据集
 python yolo_cli.py data filter [OPTIONS]
-  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕
   --output TEXT            输出目录（默认: data/processed/filtered）
   --include TEXT           包含的标签列表（逗号分隔）
   --exclude TEXT           排除的标签列表（逗号分隔）
   --keep-negative          保留没有任何标注的图片（负样本，默认: True）
-  --limit TEXT             限制每个集合的样本数量，格式: train:val:test 🆕
+  --limit TEXT             限制每个集合的样本数量，格式: train:val:test
   --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data filter --include person,car
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data filter --dataset data/processed --include person,car
+
+交互式选择示例:
+  $ python yolo_cli.py data filter --include person,car
+  
+  ──────────────────── 按标签过滤数据集 ────────────────────
+  ℹ 📁 发现 18 个数据集
+  
+  ? 请选择要过滤的数据集:
+    > clutter
+      背包
+      扳手
+      ...
+  
+  ℹ 已选择数据集: clutter
+  ℹ 数据集路径: /path/to/datasets/clutter
+  ...
 
 样本数量限制格式:
   • 100:30:10  - train保留100张, val保留30张, test保留10张
   • all:50:20  - train不限制, val保留50张, test保留20张
   • 200:all:all - train保留200张, val和test不限制
 
-示例:
+更多示例:
   # 只保留特定类别
   python yolo_cli.py data filter --dataset data/processed --include person,car,dog
   
@@ -3285,7 +3308,7 @@ python yolo_cli.py data filter [OPTIONS]
     --keep-negative False \\
     --output data/cats_only
   
-  # 过滤并限制样本数量 🆕
+  # 过滤并限制样本数量
   python yolo_cli.py data filter \\
     --dataset data/processed \\
     --include person,car \\

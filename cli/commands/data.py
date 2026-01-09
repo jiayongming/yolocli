@@ -2480,7 +2480,7 @@ def merge_labels(
 
 @app.command("filter")
 def filter_dataset(
-    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    dataset_path: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集路径（可选，不指定则从 datasets 目录中选择）"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
     include_labels: Optional[str] = typer.Option(None, "--include", "-i", help="包含的标签列表（逗号分隔），如: person,car,dog"),
     exclude_labels: Optional[str] = typer.Option(None, "--exclude", "-e", help="排除的标签列表（逗号分隔），如: background,other"),
@@ -2488,14 +2488,18 @@ def filter_dataset(
     limit: Optional[str] = typer.Option(None, "--limit", "-l", help="限制每个集合的样本数量，格式: train:val:test，如: 100:30:10 或 all:50:20"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
 ):
-    """按标签过滤数据集
+    """按标签过滤数据集（支持交互式选择）
     
     根据指定的标签包含/排除条件，从现有数据集中筛选样本生成新的数据集。
     自动重映射类别ID，保持连续性。可选限制每个集合的样本数量。
     
     示例:
     \b
-      # 只保留特定类别
+      # 交互式选择数据集
+      yolo-cli data filter --include person,car
+      
+    \b
+      # 手动指定数据集路径
       yolo-cli data filter \\
         --dataset data/processed \\
         --include person,car \\
@@ -2535,6 +2539,82 @@ def filter_dataset(
     
     print_section_header("按标签过滤数据集")
     
+    # 验证任务类型
+    task = validate_task_type(task)
+    
+    # 确定数据集路径
+    if dataset_path is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要过滤的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_path)
+    
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    console.print()
+    print_info(f"数据集路径: {dataset_path}")
+    
     # 验证参数
     if include_labels is None and exclude_labels is None:
         print_error("必须指定 --include 或 --exclude 参数之一")
@@ -2542,15 +2622,6 @@ def filter_dataset(
     
     if include_labels is not None and exclude_labels is not None:
         print_error("--include 和 --exclude 不能同时使用")
-        raise typer.Exit(1)
-    
-    # 验证任务类型
-    task = validate_task_type(task)
-    
-    # 解析数据集路径
-    dataset_path = Path(dataset_path)
-    if not dataset_path.exists():
-        print_error(f"数据集路径不存在: {dataset_path}")
         raise typer.Exit(1)
     
     # 确定输出目录

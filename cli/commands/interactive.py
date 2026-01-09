@@ -605,21 +605,58 @@ def run_data_operations():
                 # 选择任务类型
                 task_type = select_task_type()
                 
-                # 输入数据集路径
-                dataset_path = input_path(
-                    "数据集路径（包含data.yaml的目录）:",
-                    default="data/processed",
-                    must_exist=True
-                )
-                if not dataset_path:
-                    print_warning("操作已取消")
-                    continue
-                
-                # 读取数据集类别列表
+                # 选择数据集
                 from pathlib import Path
                 import yaml
+                from ..core.config import ConfigManager
                 
-                dataset_path_obj = Path(dataset_path)
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
+                    continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要过滤的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_path = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                console.print()
+                
+                # 读取数据集类别列表
                 yaml_file = None
                 for yaml_name in ['data.yaml', 'dataset.yaml']:
                     yaml_path = dataset_path_obj / yaml_name
