@@ -1897,6 +1897,235 @@ def merge_datasets(
     )
 
 
+@app.command("convert-format")
+def convert_dataset_format(
+    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    source_format: str = typer.Option(..., "--from", "-f", help="源格式 (detect/segment/pose)"),
+    target_format: str = typer.Option(..., "--to", "-t", help="目标格式 (detect/segment/pose)"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    bbox_expand: float = typer.Option(0.0, "--bbox-expand", help="边界框扩展比例 (0.0-0.5，用于segment→detect)"),
+    keep_confidence: bool = typer.Option(False, "--keep-confidence", help="保留置信度信息（如果有）"),
+    preserve_structure: bool = typer.Option(True, "--preserve-structure", help="保留原始的train/val/test分割"),
+):
+    """转换数据集标注格式
+    
+    支持多种格式之间的转换，并提供丰富的自定义参数。
+    
+    示例:
+    \b
+      # 分割→检测（计算外接矩形）
+      yolo-cli data convert-format \\
+        --dataset data/segment_dataset \\
+        --from segment --to detect \\
+        --output data/detect_dataset
+      
+    \b
+      # 分割→检测（扩展边界框10%）
+      yolo-cli data convert-format \\
+        --dataset data/segment_dataset \\
+        --from segment --to detect \\
+        --bbox-expand 0.1 \\
+        --output data/detect_expanded
+      
+    \b
+      # Pose→检测（只保留边界框）
+      yolo-cli data convert-format \\
+        --dataset data/pose_dataset \\
+        --from pose --to detect \\
+        --output data/detect_dataset
+      
+    \b
+      # 检测→分割（矩形作为多边形）
+      yolo-cli data convert-format \\
+        --dataset data/detect_dataset \\
+        --from detect --to segment \\
+        --output data/segment_dataset
+    """
+    
+    print_section_header("数据集格式转换")
+    
+    # 验证格式
+    valid_formats = ['detect', 'segment', 'pose']
+    if source_format not in valid_formats:
+        print_error(f"不支持的源格式: {source_format}")
+        print_info(f"支持的格式: {', '.join(valid_formats)}")
+        raise typer.Exit(1)
+    
+    if target_format not in valid_formats:
+        print_error(f"不支持的目标格式: {target_format}")
+        print_info(f"支持的格式: {', '.join(valid_formats)}")
+        raise typer.Exit(1)
+    
+    if source_format == target_format:
+        print_error("源格式和目标格式相同，无需转换")
+        raise typer.Exit(1)
+    
+    # 验证bbox扩展比例
+    if bbox_expand < 0 or bbox_expand > 0.5:
+        print_error("边界框扩展比例必须在 0.0-0.5 之间")
+        raise typer.Exit(1)
+    
+    # 解析路径
+    dataset_path = Path(dataset_path)
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / f'converted_{target_format}'
+    else:
+        output_path = Path(output_dir)
+    
+    # 调用转换函数
+    return _convert_format_impl(
+        dataset_path=dataset_path,
+        output_path=output_path,
+        source_format=source_format,
+        target_format=target_format,
+        bbox_expand=bbox_expand,
+        keep_confidence=keep_confidence,
+        preserve_structure=preserve_structure
+    )
+
+
+@app.command("merge-labels")
+def merge_labels(
+    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    mapping: Optional[str] = typer.Option(None, "--mapping", "-m", help="映射规则，格式: 'source1,source2:target;source3:target2'"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
+):
+    """合并多个类别标签为一个
+    
+    将多个相似或相关的类别合并为一个类别，简化模型训练。
+    
+    示例:
+    \b
+      # 合并车辆类别
+      yolo-cli data merge-labels \\
+        --dataset data/processed \\
+        --mapping "car,truck,bus:vehicle" \\
+        --output data/merged_vehicle
+      
+    \b
+      # 多个合并规则
+      yolo-cli data merge-labels \\
+        --dataset data/processed \\
+        --mapping "car,truck,bus:vehicle;cat,dog:pet;apple,banana:fruit" \\
+        --output data/simplified
+      
+    \b
+      # 交互式配置映射（不指定mapping参数）
+      yolo-cli data merge-labels \\
+        --dataset data/processed \\
+        --output data/merged
+    """
+    
+    print_section_header("合并类别标签")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    
+    # 解析数据集路径
+    dataset_path = Path(dataset_path)
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'merged_labels'
+    else:
+        output_path = Path(output_dir)
+    
+    # 调用合并函数
+    return _merge_labels_impl(
+        dataset_path=dataset_path,
+        output_path=output_path,
+        mapping_str=mapping,
+        task=task
+    )
+
+
+@app.command("filter")
+def filter_dataset(
+    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    include_labels: Optional[str] = typer.Option(None, "--include", "-i", help="包含的标签列表（逗号分隔），如: person,car,dog"),
+    exclude_labels: Optional[str] = typer.Option(None, "--exclude", "-e", help="排除的标签列表（逗号分隔），如: background,other"),
+    keep_negative: bool = typer.Option(True, "--keep-negative", help="保留没有任何标注的图片（负样本）"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
+):
+    """按标签过滤数据集
+    
+    根据指定的标签包含/排除条件，从现有数据集中筛选样本生成新的数据集。
+    自动重映射类别ID，保持连续性。
+    
+    示例:
+    \b
+      # 只保留特定类别
+      yolo-cli data filter \\
+        --dataset data/processed \\
+        --include person,car \\
+        --output data/filtered_person_car
+      
+    \b
+      # 排除特定类别
+      yolo-cli data filter \\
+        --dataset data/processed \\
+        --exclude background,other \\
+        --output data/cleaned
+      
+    \b
+      # 保留特定类别，不保留负样本
+      yolo-cli data filter \\
+        --dataset data/processed \\
+        --include cat,dog \\
+        --keep-negative False \\
+        --output data/pets_only
+    """
+    
+    print_section_header("按标签过滤数据集")
+    
+    # 验证参数
+    if include_labels is None and exclude_labels is None:
+        print_error("必须指定 --include 或 --exclude 参数之一")
+        raise typer.Exit(1)
+    
+    if include_labels is not None and exclude_labels is not None:
+        print_error("--include 和 --exclude 不能同时使用")
+        raise typer.Exit(1)
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    
+    # 解析数据集路径
+    dataset_path = Path(dataset_path)
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'filtered'
+    else:
+        output_path = Path(output_dir)
+    
+    # 调用过滤函数
+    return _filter_dataset_impl(
+        dataset_path=dataset_path,
+        output_path=output_path,
+        include_labels=include_labels,
+        exclude_labels=exclude_labels,
+        keep_negative=keep_negative,
+        task=task
+    )
+
+
 @app.command("stats")
 def dataset_stats(
     data_path: Optional[str] = typer.Option(None, "--path", "-p", help="数据集路径"),
@@ -2573,6 +2802,260 @@ def convert_labelstudio(
     print_success("转换完成！")
 
 
+def _detect_label_format(label_file: Path) -> str:
+    """
+    自动检测标签文件格式
+    
+    Args:
+        label_file: 标签文件路径
+    
+    Returns:
+        str: 'detect', 'segment', 'pose', 或 'unknown'
+    """
+    if not label_file.exists():
+        return 'unknown'
+    
+    try:
+        with open(label_file, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+            if not lines:
+                return 'unknown'
+            
+            # 分析第一行
+            first_line = lines[0]
+            parts = first_line.split()
+            
+            if len(parts) < 5:
+                return 'unknown'
+            
+            # 检测格式
+            # Segment: class_id + 至少6个坐标值（3个点，每个点x,y）
+            if len(parts) >= 7:
+                # 进一步判断是 segment 还是 pose
+                # Segment: 所有值应该在0-1之间（归一化坐标）
+                # Pose: 固定格式 class_id x y w h [kp_x kp_y kp_v ...]
+                
+                # 如果是5个值 + 3的倍数，可能是pose
+                if len(parts) > 5 and (len(parts) - 5) % 3 == 0:
+                    # 检查第2-5个值是否是bbox格式（通常<1）
+                    try:
+                        bbox_vals = [float(parts[i]) for i in range(1, 5)]
+                        if all(0 <= v <= 1 for v in bbox_vals):
+                            return 'pose'
+                    except:
+                        pass
+                
+                # 否则认为是segment（多边形点）
+                return 'segment'
+            
+            # Detect: class_id x_center y_center width height (正好5个值)
+            elif len(parts) == 5:
+                return 'detect'
+            
+            return 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _convert_segment_to_detect(parts: List[str], bbox_expand: float = 0.0) -> str:
+    """
+    将分割标注转换为检测标注（计算外接矩形）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x1, y1, x2, y2, ...]
+        bbox_expand: 边界框扩展比例 (0.0-0.5)
+    
+    Returns:
+        str: 检测格式的标签行 "class_id x_center y_center width height"
+    """
+    try:
+        class_id = parts[0]
+        
+        # 提取所有坐标点
+        coords = [float(x) for x in parts[1:]]
+        
+        # 分离x和y坐标
+        x_coords = coords[0::2]
+        y_coords = coords[1::2]
+        
+        # 计算边界框
+        x_min = min(x_coords)
+        x_max = max(x_coords)
+        y_min = min(y_coords)
+        y_max = max(y_coords)
+        
+        # 转换为YOLO格式（中心点 + 宽高）
+        width = x_max - x_min
+        height = y_max - y_min
+        
+        # 应用扩展（如果需要）
+        if bbox_expand > 0:
+            width *= (1 + bbox_expand)
+            height *= (1 + bbox_expand)
+            # 确保不超出图像边界（归一化坐标 0-1）
+            width = min(width, 1.0)
+            height = min(height, 1.0)
+        
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
+        
+        # 确保中心点在合理范围内
+        x_center = max(width/2, min(1 - width/2, x_center))
+        y_center = max(height/2, min(1 - height/2, y_center))
+        
+        return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
+    except Exception as e:
+        # 转换失败，返回原始行
+        return ' '.join(parts)
+
+
+def _convert_pose_to_detect(parts: List[str], bbox_expand: float = 0.0) -> str:
+    """
+    将姿态估计标注转换为检测标注（只保留bbox部分）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x, y, w, h, kp_x, kp_y, kp_v, ...]
+        bbox_expand: 边界框扩展比例 (0.0-0.5)
+    
+    Returns:
+        str: 检测格式的标签行 "class_id x_center y_center width height"
+    """
+    try:
+        # Pose格式前5个值就是detect格式
+        if len(parts) >= 5:
+            if bbox_expand > 0:
+                class_id = parts[0]
+                x_center = float(parts[1])
+                y_center = float(parts[2])
+                width = float(parts[3]) * (1 + bbox_expand)
+                height = float(parts[4]) * (1 + bbox_expand)
+                
+                # 确保不超出边界
+                width = min(width, 1.0)
+                height = min(height, 1.0)
+                x_center = max(width/2, min(1 - width/2, x_center))
+                y_center = max(height/2, min(1 - height/2, y_center))
+                
+                return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
+            else:
+                return ' '.join(parts[:5])
+        return ' '.join(parts)
+    except Exception:
+        return ' '.join(parts)
+
+
+def _convert_detect_to_segment(parts: List[str]) -> str:
+    """
+    将检测标注转换为分割标注（矩形转为4点多边形）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x_center, y_center, width, height]
+    
+    Returns:
+        str: 分割格式的标签行 "class_id x1 y1 x2 y2 x3 y3 x4 y4"
+    """
+    try:
+        if len(parts) < 5:
+            return ' '.join(parts)
+        
+        class_id = parts[0]
+        x_center = float(parts[1])
+        y_center = float(parts[2])
+        width = float(parts[3])
+        height = float(parts[4])
+        
+        # 计算矩形四个角点（顺时针）
+        x1 = x_center - width / 2  # 左上
+        y1 = y_center - height / 2
+        x2 = x_center + width / 2  # 右上
+        y2 = y_center - height / 2
+        x3 = x_center + width / 2  # 右下
+        y3 = y_center + height / 2
+        x4 = x_center - width / 2  # 左下
+        y4 = y_center + height / 2
+        
+        # 确保坐标在0-1范围内
+        points = [x1, y1, x2, y2, x3, y3, x4, y4]
+        points = [max(0, min(1, p)) for p in points]
+        
+        points_str = ' '.join([f"{p:.6f}" for p in points])
+        return f"{class_id} {points_str}"
+    except Exception:
+        return ' '.join(parts)
+
+
+def _convert_detect_to_pose(parts: List[str], num_keypoints: int = 17) -> str:
+    """
+    将检测标注转换为Pose标注（添加默认关键点）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x_center, y_center, width, height]
+        num_keypoints: 关键点数量
+    
+    Returns:
+        str: Pose格式的标签行 "class_id x y w h kp_x kp_y kp_v ..."
+    """
+    try:
+        if len(parts) < 5:
+            return ' '.join(parts)
+        
+        # 保留原始bbox
+        result = ' '.join(parts[:5])
+        
+        # 添加默认关键点（全部设为不可见，坐标为0）
+        for _ in range(num_keypoints):
+            result += " 0 0 0"  # x=0, y=0, visibility=0 (未标注)
+        
+        return result
+    except Exception:
+        return ' '.join(parts)
+
+
+def _convert_segment_to_pose(parts: List[str], num_keypoints: int = 17) -> str:
+    """
+    将分割标注转换为Pose标注（计算bbox + 默认关键点）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x1, y1, x2, y2, ...]
+        num_keypoints: 关键点数量
+    
+    Returns:
+        str: Pose格式的标签行 "class_id x y w h kp_x kp_y kp_v ..."
+    """
+    try:
+        # 先转为detect格式
+        detect_line = _convert_segment_to_detect(parts, 0.0)
+        detect_parts = detect_line.split()
+        
+        # 再转为pose格式
+        return _convert_detect_to_pose(detect_parts, num_keypoints)
+    except Exception:
+        return ' '.join(parts)
+
+
+def _convert_pose_to_segment(parts: List[str]) -> str:
+    """
+    将Pose标注转换为分割标注（使用bbox作为矩形）
+    
+    Args:
+        parts: 标签行分割后的部分 [class_id, x, y, w, h, kp_x, kp_y, kp_v, ...]
+    
+    Returns:
+        str: 分割格式的标签行 "class_id x1 y1 x2 y2 x3 y3 x4 y4"
+    """
+    try:
+        if len(parts) < 5:
+            return ' '.join(parts)
+        
+        # 提取bbox部分
+        detect_parts = parts[:5]
+        
+        # 转为segment格式
+        return _convert_detect_to_segment(detect_parts)
+    except Exception:
+        return ' '.join(parts)
+
+
 def _merge_datasets_impl(
     dataset_paths: List[Path],
     output_path: Path,
@@ -2585,18 +3068,20 @@ def _merge_datasets_impl(
     Args:
         dataset_paths: 数据集路径列表
         output_path: 输出路径
-        task: 任务类型
+        task: 目标任务类型（合并后的格式）
         handle_duplicates: 重复文件处理方式
         deduplicate: 是否去重
     """
     
-    # 1. 收集所有数据集的类别信息
-    print_section_header("收集类别信息")
+    # 1. 收集所有数据集的类别信息和任务类型
+    print_section_header("分析数据集")
     
-    dataset_classes = []  # [(dataset_idx, classes_dict, dataset_path)]
+    dataset_classes = []  # [(dataset_idx, classes_dict, dataset_path, detected_task)]
     all_class_names = []
+    dataset_task_types = {}  # {dataset_idx: task_type}
     
     for idx, ds_path in enumerate(dataset_paths):
+        print_info(f"\n分析数据集 {idx + 1}: {ds_path.name}")
         # 尝试从 data.yaml 或 dataset.yaml 读取类别
         data_yaml = ds_path / 'data.yaml'
         dataset_yaml = ds_path / 'dataset.yaml'
@@ -2639,13 +3124,79 @@ def _merge_datasets_impl(
             print_warning(f"  • {ds_path}/classes.txt")
             raise typer.Exit(1)
         
-        dataset_classes.append((idx, classes_dict, ds_path))
+        # 自动检测任务类型
+        detected_task = 'unknown'
+        
+        # 尝试找一个标签文件进行格式检测
+        for split in ['train', 'val', 'test']:
+            label_dir = ds_path / 'labels' / split
+            if not label_dir.exists():
+                label_dir = ds_path / split / 'labels'
+            
+            if label_dir.exists():
+                # 找第一个标签文件
+                label_files = list(label_dir.glob('*.txt'))
+                if label_files:
+                    detected_task = _detect_label_format(label_files[0])
+                    break
+        
+        dataset_task_types[idx] = detected_task
+        dataset_classes.append((idx, classes_dict, ds_path, detected_task))
         
         # 收集类别名称
         class_names = list(classes_dict.values())
         all_class_names.extend(class_names)
         
-        print_info(f"数据集 {idx + 1}: {len(classes_dict)} 个类别 - {', '.join(class_names)}")
+        # 显示信息
+        task_emoji = {
+            'detect': '📦',
+            'segment': '🎨', 
+            'pose': '🤸',
+            'unknown': '❓'
+        }
+        print_info(f"  类别数: {len(classes_dict)}")
+        print_info(f"  类别: {', '.join(class_names)}")
+        print_info(f"  {task_emoji.get(detected_task, '❓')} 检测到的任务类型: {detected_task}")
+    
+    # 检查是否需要格式转换
+    console.print()
+    print_section_header("检查格式兼容性")
+    
+    unique_task_types = set(dataset_task_types.values()) - {'unknown'}
+    needs_conversion = len(unique_task_types) > 1 or (unique_task_types and task not in unique_task_types)
+    
+    if needs_conversion:
+        print_warning(f"\n⚠️  检测到混合任务类型:")
+        for idx, detected in dataset_task_types.items():
+            if detected != 'unknown':
+                print_warning(f"   数据集 {idx + 1}: {detected}")
+        
+        print_info(f"\n目标任务类型: {task}")
+        print_info("将自动转换标签格式:")
+        
+        conversion_count = 0
+        for idx, detected in dataset_task_types.items():
+            if detected != task and detected != 'unknown':
+                conversion_count += 1
+                if detected == 'segment' and task == 'detect':
+                    print_info(f"   数据集 {idx + 1}: segment → detect (多边形→外接矩形)")
+                elif detected == 'pose' and task == 'detect':
+                    print_info(f"   数据集 {idx + 1}: pose → detect (保留边界框，丢弃关键点)")
+                elif detected == 'detect' and task == 'segment':
+                    print_warning(f"   数据集 {idx + 1}: detect → segment (⚠️  无法精确转换，将使用矩形作为掩码)")
+                else:
+                    print_warning(f"   数据集 {idx + 1}: {detected} → {task} (可能无法完美转换)")
+        
+        if conversion_count > 0:
+            console.print()
+            print_info("💡 转换说明:")
+            print_info("   • segment→detect: 从多边形计算最小外接矩形，精度不损失")
+            print_info("   • pose→detect: 保留边界框，丢弃关键点信息")
+            print_info("   • detect→segment: 不建议，矩形作为分割掩码效果较差")
+    else:
+        print_success(f"✓ 所有数据集任务类型一致: {task}")
+    
+    console.print()
     
     # 2. 构建统一的类别映射
     print_section_header("构建统一类别映射")
@@ -2666,7 +3217,7 @@ def _merge_datasets_impl(
     # 为每个数据集创建类别ID重映射表
     class_remapping = {}  # {dataset_idx: {old_id: new_id}}
     
-    for idx, old_classes, _ in dataset_classes:
+    for idx, old_classes, _, _ in dataset_classes:
         remapping = {}
         for old_id, class_name in old_classes.items():
             # 找到新的类别ID
@@ -2699,10 +3250,13 @@ def _merge_datasets_impl(
     renamed_files = 0
     file_registry = set()  # 记录已复制的文件名
     
-    for ds_idx, old_classes, ds_path in dataset_classes:
-        print_info(f"处理数据集 {ds_idx + 1}: {ds_path}")
+    converted_labels_count = 0
+    
+    for ds_idx, old_classes, ds_path, detected_task in dataset_classes:
+        print_info(f"处理数据集 {ds_idx + 1}: {ds_path.name}")
         
         remapping = class_remapping[ds_idx]
+        source_task = dataset_task_types[ds_idx]
         
         for split in ['train', 'val', 'test']:
             # 尝试两种目录结构：
@@ -2782,7 +3336,29 @@ def _merge_datasets_impl(
                                     new_class_id = remapping.get(old_class_id, old_class_id)
                                     parts[0] = str(new_class_id)
                                     
-                                    f_out.write(' '.join(parts) + '\n')
+                                    # 格式转换（如果需要）
+                                    if source_task != task and source_task != 'unknown':
+                                        # segment → detect
+                                        if source_task == 'segment' and task == 'detect':
+                                            if len(parts) >= 7:  # 确保是分割格式
+                                                line = _convert_segment_to_detect(parts)
+                                                converted_labels_count += 1
+                                            else:
+                                                line = ' '.join(parts)
+                                        # pose → detect
+                                        elif source_task == 'pose' and task == 'detect':
+                                            if len(parts) > 5:  # 确保是pose格式
+                                                line = _convert_pose_to_detect(parts)
+                                                converted_labels_count += 1
+                                            else:
+                                                line = ' '.join(parts)
+                                        else:
+                                            # 其他转换暂不支持，保持原样
+                                            line = ' '.join(parts)
+                                    else:
+                                        line = ' '.join(parts)
+                                    
+                                    f_out.write(line + '\n')
     
     # 5. 统计信息
     console.print()
@@ -2792,6 +3368,8 @@ def _merge_datasets_impl(
         print_info(f"  跳过重复: {skipped_files}")
     if renamed_files > 0:
         print_info(f"  重命名: {renamed_files}")
+    if converted_labels_count > 0:
+        print_success(f"  ✓ 格式转换: {converted_labels_count} 个标注已转换为 {task} 格式")
     
     # 6. 保存类别信息
     classes_file = output_path / 'classes.txt'
@@ -3255,6 +3833,921 @@ def scale_labels(
         print_info("1. 检查调整后的标注是否符合预期")
         print_info("2. 使用新数据集训练模型并对比效果")
         console.print(f"   python yolo_cli.py train --data {output_path / 'data.yaml'}")
+
+
+def _filter_dataset_impl(
+    dataset_path: Path,
+    output_path: Path,
+    include_labels: Optional[str],
+    exclude_labels: Optional[str],
+    keep_negative: bool,
+    task: str
+):
+    """过滤数据集的实现函数"""
+    
+    # 1. 读取数据集配置
+    print_section_header("读取数据集配置")
+    
+    # 检查输入是文件还是目录
+    if dataset_path.is_file() and dataset_path.suffix in ['.yaml', '.yml']:
+        # 输入的就是 yaml 文件
+        data_yaml = dataset_path
+        dataset_path = dataset_path.parent  # 更新为目录路径
+        print_info(f"使用配置文件: {data_yaml.name}")
+    elif dataset_path.is_dir():
+        # 输入的是目录，在目录中查找 yaml 文件
+        yaml_files = list(dataset_path.glob('*.yaml')) + list(dataset_path.glob('*.yml'))
+        data_yaml = None
+        for yaml_file in yaml_files:
+            if yaml_file.name in ['data.yaml', 'dataset.yaml']:
+                data_yaml = yaml_file
+                break
+        
+        if data_yaml is None and yaml_files:
+            data_yaml = yaml_files[0]
+        
+        if data_yaml is None:
+            print_error(f"在 {dataset_path} 中未找到 data.yaml 或 dataset.yaml")
+            raise typer.Exit(1)
+        
+        print_info(f"找到配置文件: {data_yaml.name}")
+    else:
+        print_error(f"路径不存在或不是有效的文件/目录: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 读取配置
+    with open(data_yaml, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    # 获取类别信息
+    if 'names' not in config:
+        print_error("数据集配置中缺少 'names' 字段")
+        raise typer.Exit(1)
+    
+    if isinstance(config['names'], dict):
+        original_classes = config['names']  # {id: name}
+    elif isinstance(config['names'], list):
+        original_classes = {i: name for i, name in enumerate(config['names'])}
+    else:
+        print_error("数据集配置中的 'names' 字段格式不正确")
+        raise typer.Exit(1)
+    
+    print_info(f"原始类别数: {len(original_classes)}")
+    print_info(f"类别列表: {', '.join(original_classes.values())}")
+    
+    # 2. 确定要保留的类别
+    print_section_header("确定过滤条件")
+    
+    if include_labels is not None:
+        # 包含模式
+        include_set = set(label.strip() for label in include_labels.split(','))
+        print_info(f"包含模式: 只保留 {', '.join(include_set)}")
+        
+        # 检查类别是否存在
+        invalid_labels = include_set - set(original_classes.values())
+        if invalid_labels:
+            print_warning(f"以下标签在原数据集中不存在: {', '.join(invalid_labels)}")
+        
+        # 创建过滤后的类别映射
+        filtered_classes = {}
+        class_remapping = {}  # {old_id: new_id}
+        new_id = 0
+        
+        for old_id, class_name in original_classes.items():
+            if class_name in include_set:
+                filtered_classes[new_id] = class_name
+                class_remapping[old_id] = new_id
+                new_id += 1
+    
+    else:
+        # 排除模式
+        exclude_set = set(label.strip() for label in exclude_labels.split(','))
+        print_info(f"排除模式: 移除 {', '.join(exclude_set)}")
+        
+        # 检查类别是否存在
+        invalid_labels = exclude_set - set(original_classes.values())
+        if invalid_labels:
+            print_warning(f"以下标签在原数据集中不存在: {', '.join(invalid_labels)}")
+        
+        # 创建过滤后的类别映射
+        filtered_classes = {}
+        class_remapping = {}
+        new_id = 0
+        
+        for old_id, class_name in original_classes.items():
+            if class_name not in exclude_set:
+                filtered_classes[new_id] = class_name
+                class_remapping[old_id] = new_id
+                new_id += 1
+    
+    if not filtered_classes:
+        print_error("过滤后没有剩余类别！")
+        raise typer.Exit(1)
+    
+    print_info(f"过滤后类别数: {len(filtered_classes)}")
+    print_info(f"过滤后类别: {', '.join(filtered_classes.values())}")
+    
+    # 显示类别ID映射
+    if any(old_id != new_id for old_id, new_id in class_remapping.items()):
+        console.print()
+        print_info("类别ID重映射:")
+        for old_id, new_id in class_remapping.items():
+            if old_id != new_id:
+                print_info(f"  {original_classes[old_id]}: {old_id} → {new_id}")
+    
+    console.print()
+    
+    # 3. 创建输出目录
+    for split in ['train', 'val', 'test']:
+        ensure_dir(output_path / 'images' / split)
+        if task != 'classify':
+            ensure_dir(output_path / 'labels' / split)
+    
+    # 4. 过滤数据集
+    print_section_header("过滤数据文件")
+    
+    total_images = 0
+    kept_images = 0
+    negative_images = 0
+    filtered_annotations = 0
+    total_annotations = 0
+    
+    for split in ['train', 'val', 'test']:
+        # 查找图片目录
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        # 尝试另一种目录结构
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        if not img_dir.exists():
+            continue
+        
+        # 获取所有图片
+        image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png']))
+        if not image_files:
+            continue
+        
+        total_images += len(image_files)
+        split_kept = 0
+        split_negative = 0
+        
+        print_info(f"处理 {split} 数据集: {len(image_files)} 张图片")
+        
+        progress = create_progress_bar()
+        task_id = progress.add_task(f"[cyan]{split}", total=len(image_files))
+        
+        with progress:
+            for img_file in image_files:
+                progress.update(task_id, advance=1)
+                
+                # 读取标签文件
+                label_file = label_dir / f"{img_file.stem}.txt"
+                
+                if not label_file.exists():
+                    # 负样本（没有标注）
+                    if keep_negative:
+                        # 复制图片
+                        dst_img = output_path / 'images' / split / img_file.name
+                        shutil.copy2(img_file, dst_img)
+                        
+                        # 创建空标签文件
+                        if task != 'classify':
+                            dst_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                            dst_label.touch()
+                        
+                        kept_images += 1
+                        split_kept += 1
+                        negative_images += 1
+                    continue
+                
+                # 读取并过滤标签
+                filtered_lines = []
+                
+                with open(label_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split()
+                        if not parts:
+                            continue
+                        
+                        total_annotations += 1
+                        
+                        # 获取类别ID
+                        try:
+                            old_class_id = int(parts[0])
+                        except ValueError:
+                            continue
+                        
+                        # 检查是否在保留的类别中
+                        if old_class_id in class_remapping:
+                            # 重映射类别ID
+                            new_class_id = class_remapping[old_class_id]
+                            parts[0] = str(new_class_id)
+                            filtered_lines.append(' '.join(parts))
+                            filtered_annotations += 1
+                
+                # 如果有保留的标注，或者是负样本且需要保留
+                if filtered_lines or (not filtered_lines and keep_negative):
+                    # 复制图片
+                    dst_img = output_path / 'images' / split / img_file.name
+                    shutil.copy2(img_file, dst_img)
+                    
+                    # 写入过滤后的标签
+                    if task != 'classify':
+                        dst_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                        with open(dst_label, 'w') as f:
+                            f.write('\n'.join(filtered_lines))
+                            if filtered_lines:
+                                f.write('\n')
+                    
+                    kept_images += 1
+                    split_kept += 1
+                    
+                    if not filtered_lines:
+                        negative_images += 1
+        
+        print_info(f"  保留: {split_kept} 张图片")
+    
+    # 5. 生成新的 data.yaml
+    print_section_header("生成配置文件")
+    
+    new_config = {
+        'path': '.',
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+        'nc': len(filtered_classes),
+        'names': filtered_classes
+    }
+    
+    # 如果是 pose 任务，保留关键点配置
+    if task == 'pose' and 'kpt_shape' in config:
+        new_config['kpt_shape'] = config['kpt_shape']
+        if 'flip_idx' in config:
+            new_config['flip_idx'] = config['flip_idx']
+        if 'keypoint_names' in config:
+            new_config['keypoint_names'] = config['keypoint_names']
+    
+    output_yaml = output_path / 'data.yaml'
+    with open(output_yaml, 'w', encoding='utf-8') as f:
+        yaml.dump(new_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"配置文件已生成: {output_yaml}")
+    
+    # 6. 打印统计信息
+    console.print()
+    print_section_header("过滤统计")
+    
+    print_key_value("原始图片数", total_images)
+    print_key_value("保留图片数", kept_images)
+    print_key_value("保留比例", f"{kept_images/total_images*100:.1f}%" if total_images > 0 else "0%")
+    print_key_value("负样本数", negative_images)
+    
+    console.print()
+    print_key_value("原始标注数", total_annotations)
+    print_key_value("保留标注数", filtered_annotations)
+    print_key_value("保留比例", f"{filtered_annotations/total_annotations*100:.1f}%" if total_annotations > 0 else "0%")
+    
+    console.print()
+    print_key_value("原始类别数", len(original_classes))
+    print_key_value("过滤后类别数", len(filtered_classes))
+    
+    console.print()
+    print_success(f"✓ 数据集过滤完成！输出目录: {output_path}")
+    
+    # 后续步骤提示
+    console.print()
+    print_section_header("后续步骤")
+    print_info("1. 验证过滤后的数据集")
+    print_info(f"   python yolo_cli.py data verify --path {output_path}")
+    print_info("2. 查看数据统计")
+    print_info(f"   python yolo_cli.py data stats --path {output_path} --detailed")
+    print_info("3. 使用过滤后的数据集训练")
+    print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
+
+
+def _convert_format_impl(
+    dataset_path: Path,
+    output_path: Path,
+    source_format: str,
+    target_format: str,
+    bbox_expand: float,
+    keep_confidence: bool,
+    preserve_structure: bool
+):
+    """格式转换的实现函数"""
+    
+    # 1. 读取数据集配置
+    print_section_header("读取数据集配置")
+    
+    # 检查输入是文件还是目录
+    if dataset_path.is_file() and dataset_path.suffix in ['.yaml', '.yml']:
+        data_yaml = dataset_path
+        dataset_path = dataset_path.parent
+        print_info(f"使用配置文件: {data_yaml.name}")
+    elif dataset_path.is_dir():
+        yaml_files = list(dataset_path.glob('*.yaml')) + list(dataset_path.glob('*.yml'))
+        data_yaml = None
+        for yaml_file in yaml_files:
+            if yaml_file.name in ['data.yaml', 'dataset.yaml']:
+                data_yaml = yaml_file
+                break
+        
+        if data_yaml is None and yaml_files:
+            data_yaml = yaml_files[0]
+        
+        if data_yaml is None:
+            print_error(f"在 {dataset_path} 中未找到 data.yaml 或 dataset.yaml")
+            raise typer.Exit(1)
+        
+        print_info(f"找到配置文件: {data_yaml.name}")
+    else:
+        print_error(f"路径不存在或不是有效的文件/目录: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 读取配置
+    with open(data_yaml, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    # 获取类别信息
+    if 'names' not in config:
+        print_error("数据集配置中缺少 'names' 字段")
+        raise typer.Exit(1)
+    
+    if isinstance(config['names'], dict):
+        classes = config['names']
+    elif isinstance(config['names'], list):
+        classes = {i: name for i, name in enumerate(config['names'])}
+    else:
+        print_error("数据集配置中的 'names' 字段格式不正确")
+        raise typer.Exit(1)
+    
+    print_info(f"类别数: {len(classes)}")
+    print_info(f"类别列表: {', '.join(classes.values())}")
+    
+    # 2. 确定转换策略
+    console.print()
+    print_section_header("转换配置")
+    
+    conversion_name = f"{source_format} → {target_format}"
+    print_info(f"转换方向: {conversion_name}")
+    
+    if bbox_expand > 0:
+        print_info(f"边界框扩展: {bbox_expand*100:.1f}%")
+    
+    # 显示转换说明
+    warnings = []
+    if source_format == 'segment' and target_format == 'detect':
+        print_info("✓ 转换质量: 优秀（无精度损失）")
+        print_info("  方法: 计算多边形的最小外接矩形")
+    elif source_format == 'pose' and target_format == 'detect':
+        print_info("✓ 转换质量: 良好（保留边界框）")
+        print_info("  方法: 提取前5个值（bbox），丢弃关键点")
+    elif source_format == 'detect' and target_format == 'segment':
+        print_warning("⚠️  转换质量: 一般（精度较低）")
+        print_warning("  方法: 将矩形框转为4点多边形")
+        warnings.append("检测→分割转换精度有限，仅适合特殊场景")
+    elif source_format == 'detect' and target_format == 'pose':
+        print_warning("⚠️  转换质量: 一般（无关键点信息）")
+        print_warning("  方法: 保留bbox，添加默认关键点（visibility=0）")
+        warnings.append("检测→Pose转换无法生成真实关键点，需要后续标注")
+    elif source_format == 'segment' and target_format == 'pose':
+        print_warning("⚠️  转换质量: 一般（无关键点信息）")
+        print_warning("  方法: 从多边形计算bbox，添加默认关键点")
+        warnings.append("分割→Pose转换无法生成真实关键点，需要后续标注")
+    elif source_format == 'pose' and target_format == 'segment':
+        print_warning("⚠️  转换质量: 一般（使用bbox作为矩形）")
+        print_warning("  方法: 将bbox转为4点多边形，丢弃关键点")
+        warnings.append("Pose→分割转换丢失关键点信息，仅保留bbox")
+    
+    # 3. 创建输出目录
+    console.print()
+    for split in ['train', 'val', 'test']:
+        ensure_dir(output_path / 'images' / split)
+        ensure_dir(output_path / 'labels' / split)
+    
+    # 4. 转换数据集
+    print_section_header("转换标注文件")
+    
+    total_images = 0
+    converted_labels = 0
+    skipped_labels = 0
+    
+    for split in ['train', 'val', 'test']:
+        # 查找目录
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        # 尝试另一种结构
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        # 处理 val/valid别名
+        if not img_dir.exists() and split == 'val':
+            img_dir = dataset_path / 'images' / 'valid'
+            label_dir = dataset_path / 'labels' / 'valid'
+            if not img_dir.exists():
+                img_dir = dataset_path / 'valid' / 'images'
+                label_dir = dataset_path / 'valid' / 'labels'
+        
+        if not img_dir.exists():
+            continue
+        
+        # 获取所有图片
+        image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png']))
+        if not image_files:
+            continue
+        
+        total_images += len(image_files)
+        print_info(f"处理 {split}: {len(image_files)} 张图片")
+        
+        progress = create_progress_bar()
+        task_id = progress.add_task(f"[cyan]{split}", total=len(image_files))
+        
+        with progress:
+            for img_file in image_files:
+                progress.update(task_id, advance=1)
+                
+                # 复制图片
+                dst_img = output_path / 'images' / split / img_file.name
+                shutil.copy2(img_file, dst_img)
+                
+                # 处理标签
+                label_file = label_dir / f"{img_file.stem}.txt"
+                dst_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                
+                if not label_file.exists():
+                    # 创建空标签
+                    dst_label.touch()
+                    skipped_labels += 1
+                    continue
+                
+                # 转换标签
+                with open(label_file, 'r') as f_in, open(dst_label, 'w') as f_out:
+                    for line in f_in:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split()
+                        if not parts:
+                            continue
+                        
+                        # 根据转换方向调用相应函数
+                        if source_format == 'segment' and target_format == 'detect':
+                            converted_line = _convert_segment_to_detect(parts, bbox_expand)
+                        elif source_format == 'pose' and target_format == 'detect':
+                            converted_line = _convert_pose_to_detect(parts, bbox_expand)
+                        elif source_format == 'detect' and target_format == 'segment':
+                            converted_line = _convert_detect_to_segment(parts)
+                        elif source_format == 'detect' and target_format == 'pose':
+                            # 获取关键点数量（如果有配置）
+                            num_kpts = 17  # 默认COCO
+                            if 'kpt_shape' in config:
+                                kpt_shape = config['kpt_shape']
+                                num_kpts = kpt_shape[0] if isinstance(kpt_shape, list) else kpt_shape
+                            converted_line = _convert_detect_to_pose(parts, num_kpts)
+                        elif source_format == 'segment' and target_format == 'pose':
+                            num_kpts = 17
+                            if 'kpt_shape' in config:
+                                kpt_shape = config['kpt_shape']
+                                num_kpts = kpt_shape[0] if isinstance(kpt_shape, list) else kpt_shape
+                            converted_line = _convert_segment_to_pose(parts, num_kpts)
+                        elif source_format == 'pose' and target_format == 'segment':
+                            converted_line = _convert_pose_to_segment(parts)
+                        else:
+                            converted_line = ' '.join(parts)
+                        
+                        f_out.write(converted_line + '\n')
+                        converted_labels += 1
+    
+    # 5. 生成新的 data.yaml
+    console.print()
+    print_section_header("生成配置文件")
+    
+    new_config = {
+        'path': '.',
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+        'nc': len(classes),
+        'names': classes
+    }
+    
+    # 如果是pose任务，添加关键点配置
+    if target_format == 'pose':
+        if 'kpt_shape' in config:
+            new_config['kpt_shape'] = config['kpt_shape']
+        else:
+            new_config['kpt_shape'] = [17, 3]  # 默认COCO
+        
+        if 'flip_idx' in config:
+            new_config['flip_idx'] = config['flip_idx']
+        
+        if 'keypoint_names' in config:
+            new_config['keypoint_names'] = config['keypoint_names']
+    
+    output_yaml = output_path / 'data.yaml'
+    with open(output_yaml, 'w', encoding='utf-8') as f:
+        f.write(f"# YOLO {target_format.upper()} 数据集配置\n")
+        f.write(f"# 从 {source_format} 格式转换而来\n\n")
+        yaml.dump(new_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"配置文件已生成: {output_yaml}")
+    
+    # 6. 显示统计信息
+    console.print()
+    print_section_header("转换完成")
+    
+    print_key_value("总图片数", total_images)
+    print_key_value("转换标注数", converted_labels)
+    print_key_value("空标签数", skipped_labels)
+    print_key_value("转换方向", conversion_name)
+    if bbox_expand > 0:
+        print_key_value("边界框扩展", f"{bbox_expand*100:.1f}%")
+    
+    # 显示警告
+    if warnings:
+        console.print()
+        print_warning("⚠️  注意事项:")
+        for warning in warnings:
+            print_warning(f"   • {warning}")
+    
+    console.print()
+    print_success(f"✓ 转换完成！输出目录: {output_path}")
+    
+    # 后续步骤
+    console.print()
+    print_section_header("后续步骤")
+    print_info("1. 验证转换后的数据集")
+    print_info(f"   python yolo_cli.py data verify --path {output_path}")
+    print_info("2. 查看数据统计")
+    print_info(f"   python yolo_cli.py data stats --path {output_path} --detailed --task {target_format}")
+    print_info("3. 使用FiftyOne可视化检查")
+    print_info(f"   python yolo_cli.py interactive-mode → fiftyone → load")
+    print_info("4. 开始训练")
+    print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
+
+
+def _merge_labels_impl(
+    dataset_path: Path,
+    output_path: Path,
+    mapping_str: Optional[str],
+    task: str
+):
+    """合并类别标签的实现函数"""
+    
+    # 1. 读取数据集配置
+    print_section_header("读取数据集配置")
+    
+    # 检查输入是文件还是目录
+    if dataset_path.is_file() and dataset_path.suffix in ['.yaml', '.yml']:
+        data_yaml = dataset_path
+        dataset_path = dataset_path.parent
+        print_info(f"使用配置文件: {data_yaml.name}")
+    elif dataset_path.is_dir():
+        yaml_files = list(dataset_path.glob('*.yaml')) + list(dataset_path.glob('*.yml'))
+        data_yaml = None
+        for yaml_file in yaml_files:
+            if yaml_file.name in ['data.yaml', 'dataset.yaml']:
+                data_yaml = yaml_file
+                break
+        
+        if data_yaml is None and yaml_files:
+            data_yaml = yaml_files[0]
+        
+        if data_yaml is None:
+            print_error(f"在 {dataset_path} 中未找到 data.yaml 或 dataset.yaml")
+            raise typer.Exit(1)
+        
+        print_info(f"找到配置文件: {data_yaml.name}")
+    else:
+        print_error(f"路径不存在或不是有效的文件/目录: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 读取配置
+    with open(data_yaml, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    # 获取类别信息
+    if 'names' not in config:
+        print_error("数据集配置中缺少 'names' 字段")
+        raise typer.Exit(1)
+    
+    if isinstance(config['names'], dict):
+        original_classes = config['names']  # {id: name}
+    elif isinstance(config['names'], list):
+        original_classes = {i: name for i, name in enumerate(config['names'])}
+    else:
+        print_error("数据集配置中的 'names' 字段格式不正确")
+        raise typer.Exit(1)
+    
+    print_info(f"原始类别数: {len(original_classes)}")
+    print_info(f"类别列表: {', '.join(original_classes.values())}")
+    
+    # 2. 解析或配置映射规则
+    console.print()
+    print_section_header("配置合并规则")
+    
+    label_mapping = {}  # {old_name: new_name}
+    
+    if mapping_str:
+        # 解析命令行映射规则
+        # 格式: "source1,source2:target;source3:target2"
+        try:
+            rules = mapping_str.split(';')
+            for rule in rules:
+                if ':' not in rule:
+                    print_error(f"映射规则格式错误: {rule}")
+                    print_info("正确格式: 'source1,source2:target'")
+                    raise typer.Exit(1)
+                
+                sources, target = rule.split(':', 1)
+                source_labels = [s.strip() for s in sources.split(',')]
+                target_label = target.strip()
+                
+                # 验证源标签存在
+                for src in source_labels:
+                    if src not in original_classes.values():
+                        print_error(f"源标签不存在: {src}")
+                        raise typer.Exit(1)
+                    label_mapping[src] = target_label
+                
+                print_info(f"合并规则: {', '.join(source_labels)} → {target_label}")
+        
+        except ValueError:
+            print_error("映射规则格式错误")
+            print_info("格式: 'source1,source2:target;source3,source4:target2'")
+            raise typer.Exit(1)
+    else:
+        # 交互式配置
+        from ..ui.prompts import confirm_action, input_text, select_multiple
+        
+        print_info("💡 交互式配置类别合并规则")
+        print_info("   可以将多个类别合并为一个")
+        console.print()
+        
+        # 显示所有类别
+        class_list = list(original_classes.values())
+        print_info(f"可用类别: {', '.join(class_list)}")
+        console.print()
+        
+        # 循环添加合并规则
+        while True:
+            console.print()
+            if not confirm_action("添加一个合并规则?", default=True):
+                break
+            
+            # 选择要合并的源类别（多选）
+            selected_sources = select_multiple(
+                "选择要合并的源类别 (空格选择，回车确认):",
+                class_list
+            )
+            
+            if not selected_sources:
+                print_warning("未选择任何类别")
+                continue
+            
+            if len(selected_sources) < 2:
+                print_warning("至少需要选择2个类别进行合并")
+                if not confirm_action("重新选择?", default=True):
+                    continue
+            
+            # 输入目标类别名称
+            target_label = input_text(
+                "输入合并后的类别名称:",
+                default=selected_sources[0]
+            )
+            
+            if not target_label:
+                print_warning("未输入目标类别名称")
+                continue
+            
+            # 保存映射规则
+            for src in selected_sources:
+                label_mapping[src] = target_label
+            
+            print_success(f"✓ 已添加: {', '.join(selected_sources)} → {target_label}")
+        
+        if not label_mapping:
+            print_warning("未配置任何合并规则")
+            raise typer.Exit(0)
+    
+    # 3. 构建新的类别列表
+    console.print()
+    print_section_header("生成新类别列表")
+    
+    # 收集所有类别（合并后）
+    new_class_names = set()
+    for class_name in original_classes.values():
+        if class_name in label_mapping:
+            new_class_names.add(label_mapping[class_name])
+        else:
+            new_class_names.add(class_name)
+    
+    # 排序并分配ID
+    new_class_names = sorted(list(new_class_names))
+    new_classes = {i: name for i, name in enumerate(new_class_names)}
+    
+    print_info(f"合并后类别数: {len(new_classes)}")
+    print_info(f"类别列表: {', '.join(new_classes.values())}")
+    
+    # 创建ID映射表
+    class_id_mapping = {}  # {old_id: new_id}
+    for old_id, old_name in original_classes.items():
+        # 确定新名称
+        new_name = label_mapping.get(old_name, old_name)
+        # 找到新ID
+        new_id = next(i for i, name in new_classes.items() if name == new_name)
+        class_id_mapping[old_id] = new_id
+    
+    # 显示映射关系
+    console.print()
+    print_info("类别ID映射:")
+    for old_id, old_name in original_classes.items():
+        new_id = class_id_mapping[old_id]
+        new_name = new_classes[new_id]
+        if old_name != new_name or old_id != new_id:
+            if old_name == new_name:
+                print_info(f"  {old_name}: ID {old_id} → {new_id}")
+            else:
+                print_info(f"  {old_name} → {new_name}: ID {old_id} → {new_id}")
+    
+    console.print()
+    
+    # 4. 创建输出目录
+    for split in ['train', 'val', 'test']:
+        ensure_dir(output_path / 'images' / split)
+        if task != 'classify':
+            ensure_dir(output_path / 'labels' / split)
+    
+    # 5. 处理数据集
+    print_section_header("处理数据文件")
+    
+    total_images = 0
+    processed_labels = 0
+    merged_annotations = 0
+    
+    for split in ['train', 'val', 'test']:
+        # 查找图片目录
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        # 尝试另一种目录结构
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        # 处理 val/valid 别名
+        if not img_dir.exists() and split == 'val':
+            img_dir = dataset_path / 'images' / 'valid'
+            label_dir = dataset_path / 'labels' / 'valid'
+            if not img_dir.exists():
+                img_dir = dataset_path / 'valid' / 'images'
+                label_dir = dataset_path / 'valid' / 'labels'
+        
+        if not img_dir.exists():
+            continue
+        
+        # 获取所有图片
+        image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png']))
+        if not image_files:
+            continue
+        
+        total_images += len(image_files)
+        print_info(f"处理 {split} 数据集: {len(image_files)} 张图片")
+        
+        progress = create_progress_bar()
+        task_id = progress.add_task(f"[cyan]{split}", total=len(image_files))
+        
+        with progress:
+            for img_file in image_files:
+                progress.update(task_id, advance=1)
+                
+                # 复制图片
+                dst_img = output_path / 'images' / split / img_file.name
+                shutil.copy2(img_file, dst_img)
+                
+                # 处理标签文件
+                if task != 'classify':
+                    label_file = label_dir / f"{img_file.stem}.txt"
+                    dst_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                    
+                    if not label_file.exists():
+                        # 创建空标签
+                        dst_label.touch()
+                        continue
+                    
+                    # 读取并更新标签
+                    label_lines = []
+                    with open(label_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            parts = line.split()
+                            if len(parts) >= 1:
+                                try:
+                                    old_class_id = int(parts[0])
+                                    # 映射到新的类别ID
+                                    new_class_id = class_id_mapping.get(old_class_id, old_class_id)
+                                    
+                                    # 检查是否发生了合并
+                                    old_name = original_classes.get(old_class_id, '')
+                                    new_name = new_classes.get(new_class_id, '')
+                                    if old_name != new_name:
+                                        merged_annotations += 1
+                                    
+                                    parts[0] = str(new_class_id)
+                                    label_lines.append(' '.join(parts))
+                                    processed_labels += 1
+                                except (ValueError, KeyError):
+                                    # 保持原样
+                                    label_lines.append(' '.join(parts))
+                    
+                    # 写入新标签文件
+                    with open(dst_label, 'w') as f:
+                        f.write('\n'.join(label_lines))
+                        if label_lines:
+                            f.write('\n')
+    
+    # 6. 生成新的 data.yaml
+    console.print()
+    print_section_header("生成配置文件")
+    
+    new_config = {
+        'path': '.',
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+        'nc': len(new_classes),
+        'names': new_classes
+    }
+    
+    # 如果是 pose 任务，保留关键点配置
+    if task == 'pose' and 'kpt_shape' in config:
+        new_config['kpt_shape'] = config['kpt_shape']
+        if 'flip_idx' in config:
+            new_config['flip_idx'] = config['flip_idx']
+        if 'keypoint_names' in config:
+            new_config['keypoint_names'] = config['keypoint_names']
+    
+    output_yaml = output_path / 'data.yaml'
+    with open(output_yaml, 'w', encoding='utf-8') as f:
+        f.write("# YOLO 数据集配置文件\n")
+        f.write("# 类别已合并\n\n")
+        yaml.dump(new_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"配置文件已生成: {output_yaml}")
+    
+    # 7. 显示统计信息
+    console.print()
+    print_section_header("合并统计")
+    
+    print_key_value("总图片数", total_images)
+    print_key_value("处理标注数", processed_labels)
+    print_key_value("合并标注数", merged_annotations)
+    
+    console.print()
+    print_key_value("原始类别数", len(original_classes))
+    print_key_value("合并后类别数", len(new_classes))
+    print_key_value("减少类别", len(original_classes) - len(new_classes))
+    
+    # 显示合并详情
+    console.print()
+    print_info("合并详情:")
+    merge_groups = {}
+    for old_name, new_name in label_mapping.items():
+        if new_name not in merge_groups:
+            merge_groups[new_name] = []
+        merge_groups[new_name].append(old_name)
+    
+    for new_name, old_names in merge_groups.items():
+        if len(old_names) > 1:
+            print_info(f"  {new_name} ← {', '.join(old_names)}")
+    
+    console.print()
+    print_success(f"✓ 类别合并完成！输出目录: {output_path}")
+    
+    # 后续步骤
+    console.print()
+    print_section_header("后续步骤")
+    print_info("1. 验证合并后的数据集")
+    print_info(f"   python yolo_cli.py data verify --path {output_path}")
+    print_info("2. 查看数据统计")
+    print_info(f"   python yolo_cli.py data stats --path {output_path} --detailed")
+    print_info("3. 使用FiftyOne可视化检查")
+    print_info(f"   python yolo_cli.py interactive-mode → fiftyone → load")
+    print_info("4. 使用合并后的数据集训练")
+    print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
 
 
 if __name__ == "__main__":

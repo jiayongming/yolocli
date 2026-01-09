@@ -459,6 +459,9 @@ def run_data_operations():
                 
                 # 扫描 datasets 目录
                 from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
                 datasets_root = config.project_root / 'datasets'
                 
                 if not datasets_root.exists():
@@ -585,6 +588,292 @@ def run_data_operations():
                         task=task_type,
                         handle_duplicates=handle_duplicates,
                         deduplicate=deduplicate
+                    )
+            
+            elif operation == 'filter':
+                # 按标签过滤数据集
+                print_section_header("按标签过滤数据集")
+                
+                console.print()
+                print_info("🏷️  标签过滤功能：")
+                print_info("   - 从数据集中提取特定类别")
+                print_info("   - 排除不需要的类别")
+                print_info("   - 自动重映射类别ID")
+                print_info("   - 可选保留负样本（无标注图片）")
+                console.print()
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
+                # 输入数据集路径
+                dataset_path = input_path(
+                    "数据集路径（包含data.yaml的目录）:",
+                    default="data/processed",
+                    must_exist=True
+                )
+                if not dataset_path:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 选择过滤模式
+                console.print()
+                filter_mode = select_option(
+                    "选择过滤模式:",
+                    [
+                        "包含模式 - 只保留指定类别",
+                        "排除模式 - 移除指定类别",
+                    ]
+                )
+                
+                is_include_mode = "包含" in filter_mode
+                
+                # 输入标签列表
+                console.print()
+                if is_include_mode:
+                    print_info("💡 输入要保留的类别名称（逗号分隔）")
+                    print_info("   示例: person,car,dog")
+                    labels_input = input_text(
+                        "要保留的类别:",
+                        default="person,car"
+                    )
+                    include_labels = labels_input
+                    exclude_labels = None
+                else:
+                    print_info("💡 输入要排除的类别名称（逗号分隔）")
+                    print_info("   示例: background,other")
+                    labels_input = input_text(
+                        "要排除的类别:",
+                        default="background"
+                    )
+                    include_labels = None
+                    exclude_labels = labels_input
+                
+                if not labels_input:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 是否保留负样本
+                console.print()
+                print_info("📊 负样本处理：")
+                print_info("   - 负样本：没有任何标注的图片")
+                print_info("   - 保留负样本有助于减少误报")
+                console.print()
+                keep_negative = confirm_action("保留负样本（无标注图片）?", default=True)
+                
+                # 输出目录
+                output_dir = input_path(
+                    "输出目录:",
+                    default="data/filtered",
+                    must_exist=False
+                )
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 显示配置摘要
+                console.print()
+                print_section_header("配置摘要")
+                print_info(f"数据集路径: {dataset_path}")
+                print_info(f"任务类型: {task_type}")
+                if is_include_mode:
+                    print_info(f"过滤模式: 包含模式")
+                    print_info(f"保留类别: {labels_input}")
+                else:
+                    print_info(f"过滤模式: 排除模式")
+                    print_info(f"排除类别: {labels_input}")
+                print_info(f"保留负样本: {'是' if keep_negative else '否'}")
+                print_info(f"输出目录: {output_dir}")
+                console.print()
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                if confirm_action("确认过滤数据集?"):
+                    from ..commands.data import filter_dataset
+                    filter_dataset(
+                        dataset_path=dataset_path,
+                        output_dir=output_dir,
+                        include_labels=include_labels,
+                        exclude_labels=exclude_labels,
+                        keep_negative=keep_negative,
+                        task=task_type
+                    )
+            
+            elif operation == 'merge-labels':
+                # 合并多个类别标签
+                print_section_header("合并类别标签")
+                
+                console.print()
+                print_info("🏷️  标签合并功能：")
+                print_info("   - 将多个类别合并为一个")
+                print_info("   - 简化类别数量")
+                print_info("   - 自动重映射类别ID")
+                print_info("   - 适合二分类、粗粒度分类等场景")
+                console.print()
+                
+                print_info("💡 使用场景示例:")
+                print_info("   • car,truck,bus → vehicle (车辆)")
+                print_info("   • cat,dog,rabbit → pet (宠物)")
+                print_info("   • apple,banana,orange → fruit (水果)")
+                console.print()
+                
+                # 选择任务类型
+                task_type = select_task_type()
+                
+                # 输入数据集路径
+                dataset_path = input_path(
+                    "数据集路径（包含data.yaml的目录）:",
+                    default="data/processed",
+                    must_exist=True
+                )
+                if not dataset_path:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 输出目录
+                output_dir = input_path(
+                    "输出目录:",
+                    default="data/merged_labels",
+                    must_exist=False
+                )
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                console.print()
+                print_info("接下来将进入交互式配置合并规则")
+                print_info("您可以多次添加合并规则，每次选择多个类别合并为一个")
+                console.print()
+                
+                if not confirm_action("开始配置?"):
+                    continue
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                # 调用合并函数（交互式配置）
+                from ..commands.data import merge_labels
+                merge_labels(
+                    dataset_path=dataset_path,
+                    output_dir=output_dir,
+                    mapping=None,  # 交互式配置
+                    task=task_type
+                )
+            
+            elif operation == 'convert-format':
+                # 转换标注格式
+                print_section_header("转换标注格式")
+                
+                console.print()
+                print_info("🔄 格式转换功能：")
+                print_info("   - segment ← → detect: 分割 ← → 检测")
+                print_info("   - pose ← → detect: 姿态 ← → 检测")
+                print_info("   - pose ← → segment: 姿态 ← → 分割")
+                print_info("   - 自动处理类别映射")
+                print_info("   - 支持边界框扩展等高级参数")
+                console.print()
+                
+                # 输入数据集路径
+                dataset_path = input_path(
+                    "数据集路径（包含data.yaml的目录）:",
+                    default="data/processed",
+                    must_exist=True
+                )
+                if not dataset_path:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 选择源格式
+                console.print()
+                source_format = select_option(
+                    "源格式（当前数据集的格式）:",
+                    [
+                        "detect - 目标检测",
+                        "segment - 实例分割",
+                        "pose - 姿态估计",
+                    ]
+                )
+                source_format = source_format.split(' ')[0]
+                
+                # 选择目标格式
+                target_format = select_option(
+                    "目标格式（要转换成的格式）:",
+                    [
+                        "detect - 目标检测",
+                        "segment - 实例分割",
+                        "pose - 姿态估计",
+                    ]
+                )
+                target_format = target_format.split(' ')[0]
+                
+                if source_format == target_format:
+                    print_error("源格式和目标格式相同，无需转换")
+                    continue
+                
+                # 边界框扩展（仅对转换到detect有效）
+                bbox_expand = 0.0
+                if target_format == 'detect':
+                    console.print()
+                    print_info("📏 边界框扩展（可选）:")
+                    print_info("   - 扩展边界框以包含更多上下文")
+                    print_info("   - 范围: 0-50% (0=不扩展)")
+                    print_info("   - 推荐: 5-10% 用于一般场景")
+                    console.print()
+                    if confirm_action("是否扩展边界框?", default=False):
+                        expand_pct = input_number(
+                            "扩展比例 (%):",
+                            default=10.0,
+                            min_value=0.0,
+                            max_value=50.0
+                        )
+                        bbox_expand = expand_pct / 100.0
+                
+                # 输出目录
+                output_dir = input_path(
+                    "输出目录:",
+                    default=f"data/converted_{target_format}",
+                    must_exist=False
+                )
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 显示配置摘要
+                console.print()
+                print_section_header("配置摘要")
+                print_info(f"数据集路径: {dataset_path}")
+                print_info(f"转换方向: {source_format} → {target_format}")
+                if bbox_expand > 0:
+                    print_info(f"边界框扩展: {bbox_expand*100:.1f}%")
+                print_info(f"输出目录: {output_dir}")
+                
+                # 转换质量说明
+                console.print()
+                if source_format == 'segment' and target_format == 'detect':
+                    print_info("✓ 转换质量: 优秀（无精度损失）")
+                elif source_format == 'pose' and target_format == 'detect':
+                    print_info("✓ 转换质量: 良好（保留边界框）")
+                else:
+                    print_warning("⚠️  转换质量: 一般（可能损失信息）")
+                
+                console.print()
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                if confirm_action("确认转换格式?"):
+                    from ..commands.data import convert_dataset_format
+                    convert_dataset_format(
+                        dataset_path=dataset_path,
+                        source_format=source_format,
+                        target_format=target_format,
+                        output_dir=output_dir,
+                        bbox_expand=bbox_expand,
+                        keep_confidence=False,
+                        preserve_structure=True
                     )
             
             elif operation == 'scale-labels':

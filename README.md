@@ -2264,22 +2264,113 @@ python yolo_cli.py interactive
 
 1. 启动交互式模式：`python yolo_cli.py interactive-mode`
 2. 选择 `数据处理` → `合并多个数据集`
-3. 选择任务类型（detect/segment/classify/pose）
+3. 选择**目标任务类型**（detect/segment/classify/pose）
 4. **自动扫描 datasets 目录**：系统会自动扫描 `datasets/` 目录下的所有数据集
 5. **多选数据集**：
    - 使用 **↑↓ 方向键** 移动光标
    - 使用 **空格键** 选择/取消选择数据集（可多选，至少选2个）
    - 按 **回车键** 确认选择
 6. 系统自动完成：
-   - 收集各数据集的类别信息
-   - 构建统一的类别映射（自动处理类别ID重映射）
-   - 合并图像和标签文件
-   - 生成合并后的数据集配置文件
+   - 🔍 **自动检测**每个数据集的任务类型
+   - 🔄 **智能转换**标签格式到目标类型（如果需要）
+   - 🏷️ 收集并统一类别信息（自动重映射类别ID）
+   - 📦 合并图像和标签文件
+   - 📄 生成合并后的数据集配置文件
+
+智能合并示例：
+- **场景1**：3个检测数据集 + 1个分割数据集 → 目标：检测
+  - 系统自动将分割标注转换为检测标注（多边形→外接矩形）
+  
+- **场景2**：2个Pose数据集 + 1个检测数据集 → 目标：检测  
+  - 系统保留Pose数据集的边界框，丢弃关键点信息
 
 注意：
 - 数据集应放在项目根目录的 `datasets/` 目录下
 - 每个数据集目录应包含标准的 YOLO 数据集结构（images/labels 目录或 train/val/test 目录）
 - 支持处理重复文件名，可选择跳过、重命名或报错
+- ⚠️ detect→segment 转换效果较差，不推荐使用
+
+**在交互式模式中转换标注格式** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `转换标注格式`
+3. 输入数据集路径
+4. **选择源格式**：当前数据集的格式（detect/segment/pose）
+5. **选择目标格式**：要转换成的格式（detect/segment/pose）
+6. **配置参数**（可选）：
+   - 边界框扩展比例（转换到detect时）
+   - 输出目录
+7. 系统自动完成：
+   - 遍历所有标签文件
+   - 根据转换方向应用相应算法
+   - 复制图片并转换标签
+   - 生成新的数据集配置文件
+
+转换质量说明：
+- ✅ **segment→detect**: 从多边形计算外接矩形，精度优秀
+- ✅ **pose→detect**: 提取边界框，质量良好
+- ⚠️ **detect→segment**: 矩形转多边形，精度一般，仅供特殊需求
+- ⚠️ **detect→pose**: 需要后续手动标注关键点
+- ⚠️ **其他方向**: 可能损失部分信息
+
+使用场景：
+- 有分割数据集，想训练检测模型
+- 有Pose数据集，想训练检测模型
+- 格式统一以便数据集合并
+- 数据格式预处理
+
+**在交互式模式中合并类别标签** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `合并多个类别标签`
+3. 选择任务类型（detect/segment/classify/pose）
+4. 输入数据集路径
+5. **交互式配置合并规则**：
+   - 循环添加合并规则
+   - 每次可选择多个源类别（空格多选）
+   - 输入合并后的目标类别名称
+   - 可添加多个合并规则
+6. 系统自动完成：
+   - 创建新的类别列表
+   - 生成类别ID映射表
+   - 处理所有标签文件
+   - 更新类别ID
+   - 生成新的数据集配置
+
+典型应用：
+- **车辆合并**: car, truck, bus → vehicle
+- **动物合并**: cat, dog, rabbit → animal  
+- **二分类**: normal, good → 正常; bad, defect → 缺陷
+- **水果合并**: apple, banana, orange → fruit
+
+优势：
+- 简化模型训练（类别数减少）
+- 提高样本密度（每类样本数增加）
+- 适应不同粒度的分类需求
+- 自动处理类别ID重映射
+
+**在交互式模式中按标签过滤数据集** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `按标签过滤数据集`
+3. 选择任务类型（detect/segment/classify/pose）
+4. 输入数据集路径
+5. **选择过滤模式**：
+   - **包含模式**：只保留指定类别的样本
+   - **排除模式**：移除指定类别的样本
+6. 输入要处理的类别名称（逗号分隔）
+7. 选择是否保留负样本（无标注图片）
+8. 系统自动完成：
+   - 过滤标注数据
+   - 重映射类别ID（保持连续）
+   - 复制符合条件的图片和标签
+   - 生成新的数据集配置文件
+
+使用场景：
+- 从多类别数据集中提取特定类别
+- 移除不需要的类别或噪声类别
+- 准备单类别训练数据
+- 清理数据集
 
 **在交互式模式中使用数据统计**：
 
@@ -2839,7 +2930,7 @@ python yolo_cli.py data verify [OPTIONS]
 python yolo_cli.py data merge [OPTIONS]
   --datasets TEXT          数据集路径列表（逗号分隔，可选）
   --output TEXT            输出目录（默认: data/processed/merged）
-  --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+  --task TEXT              目标任务类型 (detect/segment/classify/pose，默认: detect)
   --duplicates TEXT        重复文件处理 (skip/rename/error，默认: skip)
   --deduplicate            合并后去除完全相同的图片（默认: False）
 
@@ -2850,13 +2941,137 @@ python yolo_cli.py data merge [OPTIONS]
   # 手动指定数据集路径合并
   python yolo_cli.py data merge --datasets data/dataset1,data/dataset2 --output data/merged
   
+  # 混合任务类型合并（自动转换格式）🆕
+  python yolo_cli.py data merge \\
+    --datasets detect_ds1,segment_ds2,detect_ds3 \\
+    --task detect \\
+    --output data/merged_detect
+  
   # 合并三个数据集并去重
   python yolo_cli.py data merge --datasets data/ds1,data/ds2,data/ds3 --deduplicate
 
+智能功能 🚀:
+  - 🔍 自动检测每个数据集的任务类型（detect/segment/pose）
+  - 🔄 自动转换标签格式到目标任务类型
+  - 📦 segment → detect: 计算多边形外接矩形
+  - 🤸 pose → detect: 保留边界框，丢弃关键点
+  - 🏷️ 自动处理不同数据集的类别ID重映射
+
 注意:
   - 如果不指定 --datasets，将进入交互式选择模式，从 datasets/ 目录选择要合并的数据集
-  - 支持自动处理不同数据集的类别ID重映射
+  - 支持合并不同任务类型的数据集，系统会自动转换到指定的目标任务类型
   - 重复文件处理方式：skip=跳过, rename=重命名, error=报错
+
+# 转换标注格式 🆕
+python yolo_cli.py data convert-format [OPTIONS]
+  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --from TEXT              源格式 (detect/segment/pose，必需)
+  --to TEXT                目标格式 (detect/segment/pose，必需)
+  --output TEXT            输出目录（默认: data/processed/converted_*)
+  --bbox-expand FLOAT      边界框扩展比例 (0.0-0.5，用于转换到detect)
+  --preserve-structure     保留原始train/val/test分割（默认: True）
+
+支持的转换方向:
+  ✓ segment → detect  (优秀) 计算多边形外接矩形，无精度损失
+  ✓ pose → detect     (良好) 保留边界框，丢弃关键点信息
+  ⚠️ detect → segment  (一般) 矩形转4点多边形，精度较低
+  ⚠️ detect → pose     (一般) 添加默认关键点(visibility=0)，需要后续标注
+  ⚠️ segment → pose    (一般) 从多边形计算bbox + 默认关键点
+  ⚠️ pose → segment    (一般) 使用bbox作为矩形，丢弃关键点
+
+示例:
+  # 分割→检测（最常用）
+  python yolo_cli.py data convert-format \\
+    --dataset data/segment_dataset \\
+    --from segment --to detect
+  
+  # 分割→检测（扩展边界框10%）
+  python yolo_cli.py data convert-format \\
+    --dataset data/segment_dataset \\
+    --from segment --to detect \\
+    --bbox-expand 0.1
+  
+  # Pose→检测
+  python yolo_cli.py data convert-format \\
+    --dataset data/pose_dataset \\
+    --from pose --to detect
+  
+  # 检测→分割（不推荐，仅特殊场景）
+  python yolo_cli.py data convert-format \\
+    --dataset data/detect_dataset \\
+    --from detect --to segment
+
+高级参数:
+  - --bbox-expand: 边界框扩展比例，用于在转换后包含更多上下文
+    • 推荐值: 0.05-0.15 (5%-15%)
+    • 用途: segment/pose→detect时扩大检测框
+  - --preserve-structure: 保持原数据集的train/val/test分割
+
+# 合并多个类别标签 🆕
+python yolo_cli.py data merge-labels [OPTIONS]
+  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --output TEXT            输出目录（默认: data/processed/merged_labels）
+  --mapping TEXT           映射规则（可选，不指定则交互式配置）
+  --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+
+映射规则格式:
+  "source1,source2:target;source3,source4:target2"
+  - 用逗号分隔源类别
+  - 用冒号分隔源类别和目标类别
+  - 用分号分隔多个合并规则
+
+示例:
+  # 交互式配置（推荐）
+  python yolo_cli.py data merge-labels --dataset data/processed
+  
+  # 合并车辆类别
+  python yolo_cli.py data merge-labels \\
+    --dataset data/processed \\
+    --mapping "car,truck,bus:vehicle"
+  
+  # 多个合并规则
+  python yolo_cli.py data merge-labels \\
+    --dataset data/processed \\
+    --mapping "car,truck,bus:vehicle;cat,dog:pet;apple,banana:fruit"
+  
+  # 简化为二分类
+  python yolo_cli.py data merge-labels \\
+    --dataset data/processed \\
+    --mapping "normal,good:正常;defect,bad:缺陷"
+
+使用场景:
+  - 将多类别简化为少类别
+  - 合并相似或相关的类别
+  - 准备二分类任务数据
+  - 调整类别粒度（细粒度→粗粒度）
+
+# 按标签过滤数据集 🆕
+python yolo_cli.py data filter [OPTIONS]
+  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --output TEXT            输出目录（默认: data/processed/filtered）
+  --include TEXT           包含的标签列表（逗号分隔）
+  --exclude TEXT           排除的标签列表（逗号分隔）
+  --keep-negative          保留没有任何标注的图片（负样本，默认: True）
+  --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+
+示例:
+  # 只保留特定类别
+  python yolo_cli.py data filter --dataset data/processed --include person,car,dog
+  
+  # 排除特定类别
+  python yolo_cli.py data filter --dataset data/processed --exclude background,other
+  
+  # 提取单个类别，不保留负样本
+  python yolo_cli.py data filter \\
+    --dataset data/processed \\
+    --include cat \\
+    --keep-negative False \\
+    --output data/cats_only
+
+注意:
+  - --include 和 --exclude 必须指定其中之一，不能同时使用
+  - 自动重映射类别ID，保持连续性
+  - 负样本是指没有任何标注的图片，对减少误报有帮助
 
 # 数据统计
 python yolo_cli.py data stats [OPTIONS]
