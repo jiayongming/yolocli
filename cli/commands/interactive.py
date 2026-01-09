@@ -1245,67 +1245,39 @@ def run_data_operations():
                 print_section_header("验证数据集")
                 
                 task_type = select_task_type()
-                data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
                 
+                # 不传递 data_path 参数，让 verify_dataset 从 datasets 目录中选择
                 from ..commands.data import verify_dataset
-                verify_dataset(data_path=data_path, task=task_type)
+                verify_dataset(data_path=None, task=task_type)
             
             elif operation == 'stats':
                 # 数据统计
                 print_section_header("数据统计")
                 
                 task_type = select_task_type()
-                data_path = input_path("数据集路径:", default="data/processed", must_exist=False)
                 detailed = confirm_action("显示详细统计 (含正负样本统计)?", default=True)
                 
-                # 如果是分类任务且需要详细统计，让用户选择正类
+                # 如果是分类任务且需要详细统计，让用户输入正类
                 positive_classes_str = None
                 if task_type == 'classify' and detailed:
-                    data_path_obj = Path(data_path)
+                    console.print()
+                    print_info("💡 正负样本统计说明（分类任务）：")
+                    print_info("   - 输入一个或多个类别名称作为「正类」（逗号分隔）")
+                    print_info("   - 其余类别将自动归为「负类」")
+                    print_info("   - 适用于异常检测、二分类等场景")
+                    console.print()
                     
-                    # 获取所有类别
-                    all_classes = set()
-                    for split in ['train', 'val', 'test']:
-                        split_dir = data_path_obj / 'images' / split
-                        if split_dir.exists():
-                            classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
-                            all_classes.update(classes)
-                    
-                    if all_classes:
-                        print_info(f"检测到 {len(all_classes)} 个类别: {', '.join(sorted(all_classes))}")
-                        console.print()
-                        print_info("💡 正负样本统计说明：")
-                        print_info("   - 选择一个或多个类别作为「正类」")
-                        print_info("   - 其余类别将自动归为「负类」")
-                        print_info("   - 适用于异常检测、二分类等场景")
-                        console.print()
-                        
-                        if confirm_action("是否选择正类进行正负样本统计?", default=True):
-                            console.print()
-                            print_info("📋 操作说明：")
-                            print_info("   1. 使用 ↑↓ 键移动")
-                            print_info("   2. 使用 空格键 选择/取消选择")
-                            print_info("   3. 按 回车键 确认选择")
-                            console.print()
-                            
-                            positive_classes = select_multiple(
-                                "选择正类 (空格选择，回车确认):",
-                                sorted(list(all_classes))
-                            )
-                            
-                            if positive_classes:
-                                positive_classes_str = ','.join(positive_classes)
-                                console.print()
-                                print_success(f"✓ 已选择正类: {positive_classes_str}")
-                                negative_classes = [c for c in all_classes if c not in positive_classes]
-                                if negative_classes:
-                                    print_info(f"  负类: {', '.join(sorted(negative_classes))}")
-                            else:
-                                console.print()
-                                print_warning("⚠️  未选择任何正类，将跳过正负样本统计")
+                    if confirm_action("是否指定正类进行正负样本统计?", default=False):
+                        positive_classes_str = input_text(
+                            "请输入正类名称 (逗号分隔，如: normal,good):",
+                            default=""
+                        )
+                        if positive_classes_str:
+                            print_success(f"✓ 已指定正类: {positive_classes_str}")
                 
+                # 不传递 data_path 参数，让 dataset_stats 从 datasets 目录中选择
                 from ..commands.data import dataset_stats
-                dataset_stats(data_path=data_path, detailed=detailed, task=task_type, positive_classes=positive_classes_str)
+                dataset_stats(data_path=None, detailed=detailed, task=task_type, positive_classes=positive_classes_str)
             
             console.print()
             if not confirm_action("继续数据操作?", default=False):
