@@ -342,7 +342,7 @@ def build_training_config() -> Dict[str, Any]:
     
     # 高级选项
     if confirm_action("配置高级选项?", default=False):
-        from ..ui.display import console, print_info, print_section_header
+        from ..ui.display import console, print_info, print_section_header, print_success, print_warning
         
         console.print()
         print_section_header("⚙️ 高级选项配置")
@@ -351,15 +351,40 @@ def build_training_config() -> Dict[str, Any]:
         console.print()
         print_info("📊 训练控制参数：")
         config['patience'] = int(input_number(
-            "早停耐心值 (连续多少轮无改善后停止):", 
+            "  早停耐心值 (连续多少轮无改善后停止):", 
             default=50, 
             min_value=0
         ))
         config['save_period'] = int(input_number(
-            "保存周期 (每隔多少轮保存一次模型):", 
+            "  保存周期 (每隔多少轮保存一次模型):", 
             default=10, 
             min_value=1
         ))
+        
+        # 高级训练控制参数
+        if confirm_action("配置更多训练控制参数?", default=False):
+            config['close_mosaic'] = int(input_number(
+                "  关闭Mosaic轮数 (在最后N轮关闭mosaic增强，推荐10):",
+                default=10,
+                min_value=0,
+                max_value=50
+            ))
+            config['nbs'] = int(input_number(
+                "  名义批次大小 (用于归一化损失，推荐64):",
+                default=64,
+                min_value=16,
+                max_value=256
+            ))
+            config['overlap_mask'] = confirm_action(
+                "  使用重叠掩码 (分割任务，推荐开启)?",
+                default=True
+            ) if config['task'] == 'segment' else None
+            
+            print_info("   ✓ 高级训练控制参数配置完成")
+        else:
+            config['close_mosaic'] = None
+            config['nbs'] = None
+            config['overlap_mask'] = None
         
         # 2. 数据增强配置
         console.print()
@@ -543,6 +568,16 @@ def build_training_config() -> Dict[str, Any]:
                 min_value=0.0,
                 max_value=1.0
             ))
+            
+            # IoU 阈值（用于评估和损失计算）
+            console.print()
+            print_info("📐 IoU阈值配置：")
+            config['optimizer']['iou'] = float(input_number(
+                "  IoU阈值 (用于训练目标分配，推荐0.7):",
+                default=0.7,
+                min_value=0.1,
+                max_value=0.9
+            ))
         else:
             config['optimizer'] = None
         
@@ -571,29 +606,89 @@ def build_training_config() -> Dict[str, Any]:
         if confirm_action("自定义损失函数权重?", default=False):
             config['loss_weights'] = {}
             
-            if config['task'] == 'detect' or config['task'] == 'segment':
+            # 检测任务 (detect)
+            if config['task'] == 'detect':
+                print_info("  📦 检测任务损失权重:")
                 config['loss_weights']['box'] = float(input_number(
-                    "  边界框损失权重 (推荐7.5):",
+                    "    边界框损失权重 (推荐7.5):",
                     default=7.5,
                     min_value=0.1,
                     max_value=20.0
                 ))
                 config['loss_weights']['cls'] = float(input_number(
-                    "  分类损失权重 (推荐0.5):",
+                    "    分类损失权重 (推荐0.5):",
                     default=0.5,
                     min_value=0.1,
                     max_value=10.0
                 ))
                 config['loss_weights']['dfl'] = float(input_number(
-                    "  DFL损失权重 (推荐1.5):",
+                    "    DFL损失权重 (推荐1.5):",
                     default=1.5,
                     min_value=0.1,
                     max_value=10.0
                 ))
             
-            if config['task'] == 'classify':
+            # 分割任务 (segment)
+            elif config['task'] == 'segment':
+                print_info("  🎨 分割任务损失权重:")
+                config['loss_weights']['box'] = float(input_number(
+                    "    边界框损失权重 (推荐7.5):",
+                    default=7.5,
+                    min_value=0.1,
+                    max_value=20.0
+                ))
+                config['loss_weights']['cls'] = float(input_number(
+                    "    分类损失权重 (推荐0.5):",
+                    default=0.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+                config['loss_weights']['dfl'] = float(input_number(
+                    "    DFL损失权重 (推荐1.5):",
+                    default=1.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+            
+            # 姿态估计任务 (pose)
+            elif config['task'] == 'pose':
+                print_info("  🤸 姿态估计任务损失权重:")
+                config['loss_weights']['box'] = float(input_number(
+                    "    边界框损失权重 (推荐7.5):",
+                    default=7.5,
+                    min_value=0.1,
+                    max_value=20.0
+                ))
+                config['loss_weights']['cls'] = float(input_number(
+                    "    分类损失权重 (推荐0.5):",
+                    default=0.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+                config['loss_weights']['dfl'] = float(input_number(
+                    "    DFL损失权重 (推荐1.5):",
+                    default=1.5,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+                config['loss_weights']['pose'] = float(input_number(
+                    "    关键点损失权重 (推荐12.0):",
+                    default=12.0,
+                    min_value=0.1,
+                    max_value=30.0
+                ))
+                config['loss_weights']['kobj'] = float(input_number(
+                    "    关键点目标损失权重 (推荐2.0):",
+                    default=2.0,
+                    min_value=0.1,
+                    max_value=10.0
+                ))
+            
+            # 分类任务 (classify)
+            elif config['task'] == 'classify':
+                print_info("  🏷️ 分类任务损失权重:")
                 config['loss_weights']['label_smoothing'] = float(input_number(
-                    "  标签平滑 (0.0-0.1，推荐0.0):",
+                    "    标签平滑 (0.0-0.1，推荐0.0):",
                     default=0.0,
                     min_value=0.0,
                     max_value=0.1
@@ -609,11 +704,52 @@ def build_training_config() -> Dict[str, Any]:
             # 关键点配置
             preset_choice = select_option(
                 "选择关键点预设:",
-                ["COCO (17个关键点 - 人体)", "自定义"],
-                default="COCO (17个关键点 - 人体)"
+                [
+                    "从数据集自动获取 (推荐)",
+                    "COCO (17个关键点 - 人体)", 
+                    "自定义"
+                ],
+                default="从数据集自动获取 (推荐)"
             )
             
-            if "COCO" in preset_choice:
+            if "从数据集" in preset_choice:
+                # 从数据集读取配置
+                import yaml
+                dataset_path = input_path(
+                    "  数据集配置文件 (data.yaml/dataset.yaml):",
+                    default="data/processed/dataset.yaml",
+                    must_exist=False
+                )
+                
+                if dataset_path and Path(dataset_path).exists():
+                    try:
+                        with open(dataset_path, 'r', encoding='utf-8') as f:
+                            yaml_data = yaml.safe_load(f)
+                            
+                        if yaml_data and 'kpt_shape' in yaml_data:
+                            config['kpt_shape'] = yaml_data['kpt_shape']
+                            config['flip_idx'] = yaml_data.get('flip_idx', None)
+                            
+                            kpt_count = config['kpt_shape'][0] if isinstance(config['kpt_shape'], list) else config['kpt_shape']
+                            print_success(f"  ✓ 从数据集读取: {kpt_count} 个关键点")
+                            
+                            if config['flip_idx']:
+                                print_info(f"  ✓ 对称索引: {config['flip_idx']}")
+                        else:
+                            print_warning("  数据集中未找到 kpt_shape 配置，使用默认 COCO 配置")
+                            config['kpt_shape'] = [17, 3]
+                            config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                    except Exception as e:
+                        print_warning(f"  读取数据集配置失败: {e}")
+                        print_info("  使用默认 COCO 配置")
+                        config['kpt_shape'] = [17, 3]
+                        config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                else:
+                    print_warning("  数据集文件不存在，使用默认 COCO 配置")
+                    config['kpt_shape'] = [17, 3]
+                    config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            
+            elif "COCO" in preset_choice:
                 config['kpt_shape'] = [17, 3]
                 config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
                 print_info("  使用COCO 17关键点配置")
