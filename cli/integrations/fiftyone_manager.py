@@ -201,19 +201,55 @@ class FiftyOneManager:
             detected_task_type = 'detect'
             num_keypoints = 0
             keypoint_labels = None
+            task_info = {}
             
             if task_type:
                 # 用户指定了任务类型
                 detected_task_type = task_type.lower()
+                debug_info.append(f"Using specified task type: {detected_task_type}")
             else:
-                # 自动检测：检查是否为 Pose 任务
-                if 'kpt_shape' in dataset_config:
-                    detected_task_type = 'pose'
-                    kpt_shape = dataset_config.get('kpt_shape')
-                    num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                # 自动检测：从标签文件推断任务类型
+                debug_info.append("Auto-detecting task type from labels...")
+                
+                # 尝试查找第一个有效的标签文件
+                label_file_found = None
+                for split in ['train', 'val', 'valid', 'test']:
+                    # 尝试不同的目录结构
+                    possible_dirs = [
+                        dataset_root / 'labels' / split,
+                        dataset_root / split / 'labels',
+                    ]
+                    
+                    for labels_dir in possible_dirs:
+                        if labels_dir.exists():
+                            for label_file in labels_dir.glob('*.txt'):
+                                if label_file.name != 'classes.txt' and label_file.stat().st_size > 0:
+                                    label_file_found = label_file
+                                    break
+                            if label_file_found:
+                                break
+                    if label_file_found:
+                        break
+                
+                # 从标签文件检测任务类型
+                if label_file_found:
+                    detected_task_type, task_info = self._detect_task_type(label_file_found)
+                    debug_info.append(f"Detected task type from labels: {detected_task_type}")
+                    
+                    # 如果检测到 pose，获取关键点数量
+                    if detected_task_type == 'pose':
+                        num_keypoints = task_info.get('num_keypoints', 0)
                 else:
-                    # 默认为 detect
-                    detected_task_type = 'detect'
+                    # 如果找不到标签文件，尝试从 YAML 配置推断
+                    if 'kpt_shape' in dataset_config:
+                        detected_task_type = 'pose'
+                        kpt_shape = dataset_config.get('kpt_shape')
+                        num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                        debug_info.append(f"Detected pose from yaml kpt_shape: {num_keypoints} keypoints")
+                    else:
+                        # 默认为 detect
+                        detected_task_type = 'detect'
+                        debug_info.append("No labels found, defaulting to detect")
             
             is_pose = detected_task_type == 'pose'
             is_segment = detected_task_type == 'segment'
@@ -221,11 +257,17 @@ class FiftyOneManager:
             
             # 处理 Pose 任务的关键点配置
             if is_pose:
-                # 如果是手动指定的 pose，但 yaml 中有 kpt_shape，使用它
-                if 'kpt_shape' in dataset_config and num_keypoints == 0:
-                    kpt_shape = dataset_config.get('kpt_shape')
-                    num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
-                    debug_info.append(f"Got keypoint count from yaml: {num_keypoints}")
+                # 优先使用从标签文件检测到的关键点数量
+                if num_keypoints == 0:
+                    # 如果还没有关键点数量，尝试从 yaml 获取
+                    if 'kpt_shape' in dataset_config:
+                        kpt_shape = dataset_config.get('kpt_shape')
+                        num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                        debug_info.append(f"Got keypoint count from yaml: {num_keypoints}")
+                    else:
+                        # 最后尝试从第一个标签文件获取
+                        num_keypoints = task_info.get('num_keypoints', 17)
+                        debug_info.append(f"Using detected keypoint count: {num_keypoints}")
                 
                 # 获取关键点标签
                 keypoint_labels = dataset_config.get('keypoint_names', None)

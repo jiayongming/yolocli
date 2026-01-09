@@ -1121,7 +1121,7 @@ def select_task_type_for_predict() -> Optional[str]:
         Optional[str]: 任务类型 (None表示自动推断, 或 'detect'/'segment'/'pose'/'classify')
     """
     choices = [
-        "自动推断（从模型推断）",
+        "自动推断（从标签文件推断）",
         "检测 (detect)",
         "分割 (segment)",
         "姿态估计 (pose)",
