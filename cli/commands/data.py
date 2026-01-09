@@ -64,7 +64,7 @@ def _validate_segment_label(label_file: Path) -> bool:
         return False
 
 
-def _validate_detect_label(label_file: Path) -> bool:
+def _validate_detect_label(label_file: Path) -> tuple:
     """
     验证检测标签文件格式
     
@@ -72,30 +72,42 @@ def _validate_detect_label(label_file: Path) -> bool:
         label_file: 标签文件路径
         
     Returns:
-        bool: 标签格式是否有效
+        tuple: (是否有效, 错误信息)
     """
     try:
         with open(label_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+            lines = [line.strip() for line in f if line.strip()]
+            
+            if not lines:
+                return (True, None)  # 空文件视为有效（负样本）
+            
+            for line_num, line in enumerate(lines, 1):
                 parts = line.split()
+                
                 # 检测标签需要：class_id + 4个坐标值
-                if len(parts) != 5:
-                    return False
+                if len(parts) < 5:
+                    return (False, f"字段数不足: 需要5个字段，实际{len(parts)}个 (行{line_num})")
+                elif len(parts) > 5:
+                    # 可能是segment格式
+                    return (False, f"字段数过多: {len(parts)}个字段 (可能是segment格式，行{line_num})")
+                
                 # 验证所有值都是有效数字
                 try:
-                    int(parts[0])  # class_id
-                    for val in parts[1:]:
+                    class_id = int(parts[0])
+                    if class_id < 0:
+                        return (False, f"类别ID为负数: {class_id} (行{line_num})")
+                    
+                    for i, val in enumerate(parts[1:], 1):
                         coord = float(val)
                         if coord < 0 or coord > 1:
-                            return False
-                except ValueError:
-                    return False
-        return True
-    except Exception:
-        return False
+                            coord_names = ['x_center', 'y_center', 'width', 'height']
+                            return (False, f"{coord_names[i-1]}超出范围: {coord} (行{line_num})")
+                except ValueError as e:
+                    return (False, f"数值格式错误: {e} (行{line_num})")
+        
+        return (True, None)
+    except Exception as e:
+        return (False, f"读取文件失败: {e}")
 
 
 def _validate_pose_label(label_file: Path, expected_kpt_count: Optional[int] = None) -> bool:
@@ -1317,8 +1329,25 @@ def verify_dataset(
     else:
         # 检测/分割任务验证
         for split in ['train', 'val', 'test']:
+            # 尝试两种目录结构
+            # 结构1: images/train/, labels/train/
             img_dir = data_path / 'images' / split
             label_dir = data_path / 'labels' / split
+            
+            # 结构2: train/images/, train/labels/
+            if not img_dir.exists():
+                img_dir = data_path / split / 'images'
+                label_dir = data_path / split / 'labels'
+            
+            # 处理 val/valid 别名
+            if not img_dir.exists() and split == 'val':
+                # 尝试 valid 作为 val 的别名
+                img_dir = data_path / 'images' / 'valid'
+                label_dir = data_path / 'labels' / 'valid'
+                
+                if not img_dir.exists():
+                    img_dir = data_path / 'valid' / 'images'
+                    label_dir = data_path / 'valid' / 'labels'
             
             if not img_dir.exists():
                 continue
@@ -1338,8 +1367,9 @@ def verify_dataset(
                             if not _validate_segment_label(label_file):
                                 issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
                         elif task == 'detect':
-                            if not _validate_detect_label(label_file):
-                                issues.append(f"{split}: 检测标签格式错误 - {label_file.name}")
+                            is_valid, error_msg = _validate_detect_label(label_file)
+                            if not is_valid:
+                                issues.append(f"{split}: {label_file.name} - {error_msg}")
                         elif task == 'pose':
                             # 尝试从 dataset.yaml 读取 kpt_shape
                             kpt_count = None
@@ -1360,7 +1390,46 @@ def verify_dataset(
     console.print()
     if issues:
         print_warning(f"发现 {len(issues)} 个问题:")
-        for issue in issues[:20]:  # 最多显示20个
+        
+        # 分类统计错误类型
+        error_types = {}
+        segment_format_count = 0
+        
+        for issue in issues:
+            if "可能是segment格式" in issue:
+                segment_format_count += 1
+                error_type = "segment格式"
+            elif "字段数不足" in issue:
+                error_type = "字段数不足"
+            elif "超出范围" in issue:
+                error_type = "坐标超出范围"
+            elif "类别ID为负数" in issue:
+                error_type = "类别ID错误"
+            elif "缺少标签" in issue:
+                error_type = "缺少标签文件"
+            else:
+                error_type = "其他错误"
+            
+            error_types[error_type] = error_types.get(error_type, 0) + 1
+        
+        # 显示错误类型统计
+        if error_types:
+            console.print()
+            print_info("错误类型统计:")
+            for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                print_info(f"  • {error_type}: {count} 个")
+        
+        # 如果大量错误是segment格式，给出提示
+        if segment_format_count > len(issues) * 0.5:
+            console.print()
+            print_warning(f"⚠️  检测到 {segment_format_count} 个文件可能是segment格式（字段数>5）")
+            print_info("💡 建议:")
+            print_info("   1. 检查任务类型是否应该是 'segment' 而不是 'detect'")
+            print_info("   2. 或使用 'data format-convert' 命令将segment转换为detect格式")
+        
+        console.print()
+        print_info("详细错误信息（前20个）:")
+        for issue in issues[:20]:
             print_error(f"  • {issue}")
         if len(issues) > 20:
             print_warning(f"  ... 还有 {len(issues) - 20} 个问题")
@@ -1658,8 +1727,22 @@ def _print_positive_negative_stats(data_path: Path):
     split_stats = {}
     
     for split in ['train', 'val', 'test']:
+        # 尝试两种目录结构
         img_dir = data_path / 'images' / split
         label_dir = data_path / 'labels' / split
+        
+        # 结构2: train/images/, train/labels/
+        if not img_dir.exists():
+            img_dir = data_path / split / 'images'
+            label_dir = data_path / split / 'labels'
+        
+        # 处理 val/valid 别名
+        if not img_dir.exists() and split == 'val':
+            img_dir = data_path / 'images' / 'valid'
+            label_dir = data_path / 'labels' / 'valid'
+            if not img_dir.exists():
+                img_dir = data_path / 'valid' / 'images'
+                label_dir = data_path / 'valid' / 'labels'
         
         if not img_dir.exists():
             continue
@@ -2401,7 +2484,19 @@ def dataset_stats(
             bbox_counts = 0
             
             for split in ['train', 'val', 'test']:
+                # 尝试两种目录结构
                 label_dir = data_path / 'labels' / split
+                
+                # 结构2: train/labels/
+                if not label_dir.exists():
+                    label_dir = data_path / split / 'labels'
+                
+                # 处理 val/valid 别名
+                if not label_dir.exists() and split == 'val':
+                    label_dir = data_path / 'labels' / 'valid'
+                    if not label_dir.exists():
+                        label_dir = data_path / 'valid' / 'labels'
+                
                 if not label_dir.exists():
                     continue
                 
@@ -3061,6 +3156,26 @@ def _convert_segment_to_detect(parts: List[str], bbox_expand: float = 0.0) -> st
         str: 检测格式的标签行 "class_id x_center y_center width height"
     """
     try:
+        # 检查是否已经是detect格式（5个字段）
+        if len(parts) == 5:
+            # 已经是detect格式，直接返回（可选：应用bbox_expand）
+            if bbox_expand > 0:
+                class_id = parts[0]
+                x_center = float(parts[1])
+                y_center = float(parts[2])
+                width = float(parts[3]) * (1 + bbox_expand)
+                height = float(parts[4]) * (1 + bbox_expand)
+                
+                return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
+            else:
+                # 无需扩展，直接返回原样
+                return ' '.join(parts)
+        
+        # 检查是否是有效的segment格式（至少7个字段：class_id + 3对坐标点）
+        if len(parts) < 7:
+            # 不是有效的segment格式，返回原样
+            return ' '.join(parts)
+        
         class_id = parts[0]
         
         # 提取所有坐标点
@@ -3077,6 +3192,8 @@ def _convert_segment_to_detect(parts: List[str], bbox_expand: float = 0.0) -> st
         y_max = max(y_coords)
         
         # 转换为YOLO格式（中心点 + 宽高）
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
         width = x_max - x_min
         height = y_max - y_min
         
@@ -3084,16 +3201,6 @@ def _convert_segment_to_detect(parts: List[str], bbox_expand: float = 0.0) -> st
         if bbox_expand > 0:
             width *= (1 + bbox_expand)
             height *= (1 + bbox_expand)
-            # 确保不超出图像边界（归一化坐标 0-1）
-            width = min(width, 1.0)
-            height = min(height, 1.0)
-        
-        x_center = (x_min + x_max) / 2
-        y_center = (y_min + y_max) / 2
-        
-        # 确保中心点在合理范围内
-        x_center = max(width/2, min(1 - width/2, x_center))
-        y_center = max(height/2, min(1 - height/2, y_center))
         
         return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
     except Exception as e:
@@ -3113,8 +3220,9 @@ def _convert_pose_to_detect(parts: List[str], bbox_expand: float = 0.0) -> str:
         str: 检测格式的标签行 "class_id x_center y_center width height"
     """
     try:
-        # Pose格式前5个值就是detect格式
-        if len(parts) >= 5:
+        # 检查是否已经是detect格式（正好5个字段）
+        if len(parts) == 5:
+            # 已经是detect格式，直接返回（可选：应用bbox_expand）
             if bbox_expand > 0:
                 class_id = parts[0]
                 x_center = float(parts[1])
@@ -3122,15 +3230,24 @@ def _convert_pose_to_detect(parts: List[str], bbox_expand: float = 0.0) -> str:
                 width = float(parts[3]) * (1 + bbox_expand)
                 height = float(parts[4]) * (1 + bbox_expand)
                 
-                # 确保不超出边界
-                width = min(width, 1.0)
-                height = min(height, 1.0)
-                x_center = max(width/2, min(1 - width/2, x_center))
-                y_center = max(height/2, min(1 - height/2, y_center))
+                return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
+            else:
+                return ' '.join(parts)
+        
+        # Pose格式（大于5个字段）：提取前5个值作为detect格式
+        if len(parts) > 5:
+            if bbox_expand > 0:
+                class_id = parts[0]
+                x_center = float(parts[1])
+                y_center = float(parts[2])
+                width = float(parts[3]) * (1 + bbox_expand)
+                height = float(parts[4]) * (1 + bbox_expand)
                 
                 return f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}"
             else:
                 return ' '.join(parts[:5])
+        
+        # 少于5个字段，格式不正确，返回原样
         return ' '.join(parts)
     except Exception:
         return ' '.join(parts)

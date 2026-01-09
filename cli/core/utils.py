@@ -225,8 +225,25 @@ def get_dataset_info(data_path: Union[str, Path]) -> dict:
     
     # 统计各个split的图像和标签数量
     for split in ['train', 'val', 'test']:
+        # 尝试两种目录结构
+        # 结构1: images/train/, labels/train/
         img_dir = data_path / 'images' / split
         label_dir = data_path / 'labels' / split
+        
+        # 结构2: train/images/, train/labels/
+        if not img_dir.exists():
+            img_dir = data_path / split / 'images'
+            label_dir = data_path / split / 'labels'
+        
+        # 处理 val/valid 别名
+        if not img_dir.exists() and split == 'val':
+            # 尝试 valid 作为 val 的别名
+            img_dir = data_path / 'images' / 'valid'
+            label_dir = data_path / 'labels' / 'valid'
+            
+            if not img_dir.exists():
+                img_dir = data_path / 'valid' / 'images'
+                label_dir = data_path / 'valid' / 'labels'
         
         if not img_dir.exists():
             continue

@@ -2972,6 +2972,35 @@ python yolo_cli.py data generate-yaml [OPTIONS]
 # 验证数据集
 python yolo_cli.py data verify [OPTIONS]
   --path TEXT        数据集路径
+  --task TEXT        任务类型 (detect/segment/pose，默认: detect)
+
+验证内容 🆕：
+  • 目录结构完整性
+  • 图像-标签对应关系
+  • 标签格式正确性（详细错误信息）
+  • 错误分类统计
+
+增强的错误报告 🆕：
+  ✓ 详细错误信息（字段数、坐标范围、具体错误位置）
+  ✓ 错误类型统计（segment格式、字段不足、坐标超限等）
+  ✓ 智能建议（如检测到segment格式，建议转换或修改任务类型）
+
+示例输出:
+  ⚠ 发现 277 个问题:
+  
+  ℹ 错误类型统计:
+    • segment格式: 250 个
+    • 坐标超出范围: 15 个
+    • 字段数不足: 12 个
+  
+  ⚠️  检测到 250 个文件可能是segment格式（字段数>5）
+  💡 建议:
+     1. 检查任务类型是否应该是 'segment' 而不是 'detect'
+     2. 或使用 'data format-convert' 命令将segment转换为detect格式
+  
+  ℹ 详细错误信息（前20个）:
+    ✗ train: file1.txt - 字段数过多: 12个字段 (可能是segment格式，行1)
+    ✗ train: file2.txt - width超出范围: 1.2 (行3)
 
 # 合并数据集 🆕
 python yolo_cli.py data merge [OPTIONS]
