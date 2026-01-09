@@ -615,6 +615,52 @@ def run_data_operations():
                     print_warning("操作已取消")
                     continue
                 
+                # 读取数据集类别列表
+                from pathlib import Path
+                import yaml
+                
+                dataset_path_obj = Path(dataset_path)
+                yaml_file = None
+                for yaml_name in ['data.yaml', 'dataset.yaml']:
+                    yaml_path = dataset_path_obj / yaml_name
+                    if yaml_path.exists():
+                        yaml_file = yaml_path
+                        break
+                
+                if not yaml_file:
+                    print_error(f"在 {dataset_path} 中未找到 data.yaml 或 dataset.yaml")
+                    continue
+                
+                try:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:
+                        yaml_config = yaml.safe_load(f)
+                    
+                    if not yaml_config or 'names' not in yaml_config:
+                        print_error("配置文件中缺少 'names' 字段")
+                        continue
+                    
+                    # 解析类别名称
+                    names_data = yaml_config['names']
+                    if isinstance(names_data, dict):
+                        class_names = list(names_data.values())
+                    elif isinstance(names_data, list):
+                        class_names = names_data
+                    else:
+                        print_error("配置文件中的 'names' 字段格式不正确")
+                        continue
+                    
+                    if not class_names:
+                        print_error("数据集中没有类别")
+                        continue
+                    
+                    console.print()
+                    print_info(f"📋 数据集包含 {len(class_names)} 个类别:")
+                    print_info(f"   {', '.join(class_names)}")
+                    
+                except Exception as e:
+                    print_error(f"读取配置文件失败: {e}")
+                    continue
+                
                 # 选择过滤模式
                 console.print()
                 filter_mode = select_option(
@@ -627,30 +673,36 @@ def run_data_operations():
                 
                 is_include_mode = "包含" in filter_mode
                 
-                # 输入标签列表
+                # 从类别列表中多选
                 console.print()
                 if is_include_mode:
-                    print_info("💡 输入要保留的类别名称（逗号分隔）")
-                    print_info("   示例: person,car,dog")
-                    labels_input = input_text(
+                    print_info("💡 选择要保留的类别（空格多选，回车确认）")
+                    selected_labels = select_multiple(
                         "要保留的类别:",
-                        default="person,car"
+                        class_names
                     )
+                    
+                    if not selected_labels:
+                        print_warning("未选择任何类别")
+                        continue
+                    
+                    labels_input = ','.join(selected_labels)
                     include_labels = labels_input
                     exclude_labels = None
                 else:
-                    print_info("💡 输入要排除的类别名称（逗号分隔）")
-                    print_info("   示例: background,other")
-                    labels_input = input_text(
+                    print_info("💡 选择要排除的类别（空格多选，回车确认）")
+                    selected_labels = select_multiple(
                         "要排除的类别:",
-                        default="background"
+                        class_names
                     )
+                    
+                    if not selected_labels:
+                        print_warning("未选择任何类别")
+                        continue
+                    
+                    labels_input = ','.join(selected_labels)
                     include_labels = None
                     exclude_labels = labels_input
-                
-                if not labels_input:
-                    print_warning("操作已取消")
-                    continue
                 
                 # 是否保留负样本
                 console.print()
@@ -670,6 +722,33 @@ def run_data_operations():
                     print_warning("操作已取消")
                     continue
                 
+                # 是否限制样本数量
+                console.print()
+                print_info("📊 样本数量限制：")
+                print_info("   - 可以限制每个集合保留的样本数量")
+                print_info("   - 格式: train:val:test，如 100:30:10")
+                print_info("   - 使用 'all' 表示不限制，如 all:50:20")
+                console.print()
+                
+                limit_samples = confirm_action("是否限制样本数量?", default=False)
+                limit_str = None
+                
+                if limit_samples:
+                    console.print()
+                    print_info("💡 输入格式说明:")
+                    print_info("   • 100:30:10  - train保留100张, val保留30张, test保留10张")
+                    print_info("   • all:50:20  - train不限制, val保留50张, test保留20张")
+                    print_info("   • 200:all:all - train保留200张, val和test不限制")
+                    console.print()
+                    
+                    limit_str = input_text(
+                        "样本数量限制 (train:val:test):",
+                        default="100:30:10"
+                    )
+                    
+                    if not limit_str:
+                        print_warning("未设置样本数量限制，将保留所有样本")
+                
                 # 显示配置摘要
                 console.print()
                 print_section_header("配置摘要")
@@ -682,6 +761,10 @@ def run_data_operations():
                     print_info(f"过滤模式: 排除模式")
                     print_info(f"排除类别: {labels_input}")
                 print_info(f"保留负样本: {'是' if keep_negative else '否'}")
+                if limit_str:
+                    print_info(f"样本数量限制: {limit_str}")
+                else:
+                    print_info(f"样本数量限制: 无（保留所有样本）")
                 print_info(f"输出目录: {output_dir}")
                 console.print()
                 
@@ -697,6 +780,7 @@ def run_data_operations():
                         include_labels=include_labels,
                         exclude_labels=exclude_labels,
                         keep_negative=keep_negative,
+                        limit=limit_str,
                         task=task_type
                     )
             

@@ -2144,12 +2144,13 @@ def filter_dataset(
     include_labels: Optional[str] = typer.Option(None, "--include", "-i", help="包含的标签列表（逗号分隔），如: person,car,dog"),
     exclude_labels: Optional[str] = typer.Option(None, "--exclude", "-e", help="排除的标签列表（逗号分隔），如: background,other"),
     keep_negative: bool = typer.Option(True, "--keep-negative", help="保留没有任何标注的图片（负样本）"),
+    limit: Optional[str] = typer.Option(None, "--limit", "-l", help="限制每个集合的样本数量，格式: train:val:test，如: 100:30:10 或 all:50:20"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
 ):
     """按标签过滤数据集
     
     根据指定的标签包含/排除条件，从现有数据集中筛选样本生成新的数据集。
-    自动重映射类别ID，保持连续性。
+    自动重映射类别ID，保持连续性。可选限制每个集合的样本数量。
     
     示例:
     \b
@@ -2173,6 +2174,22 @@ def filter_dataset(
         --include cat,dog \\
         --keep-negative False \\
         --output data/pets_only
+      
+    \b
+      # 过滤并限制样本数量（train:100张, val:30张, test:10张）
+      yolo-cli data filter \\
+        --dataset data/processed \\
+        --include person,car \\
+        --limit 100:30:10 \\
+        --output data/small_sample
+      
+    \b
+      # 保留所有训练集，限制验证集和测试集
+      yolo-cli data filter \\
+        --dataset data/processed \\
+        --include cat,dog \\
+        --limit all:50:20 \\
+        --output data/pets_limited
     """
     
     print_section_header("按标签过滤数据集")
@@ -2202,6 +2219,37 @@ def filter_dataset(
     else:
         output_path = Path(output_dir)
     
+    # 解析样本数量限制
+    limit_dict = {}  # {split: count or 'all'}
+    if limit:
+        try:
+            parts = limit.split(':')
+            if len(parts) != 3:
+                print_error("--limit 格式错误，应为 train:val:test，如: 100:30:10")
+                raise typer.Exit(1)
+            
+            for split_name, count_str in zip(['train', 'val', 'test'], parts):
+                count_str = count_str.strip().lower()
+                if count_str == 'all' or count_str == '*':
+                    limit_dict[split_name] = 'all'
+                else:
+                    try:
+                        count = int(count_str)
+                        if count <= 0:
+                            print_error(f"样本数量必须大于0: {count}")
+                            raise typer.Exit(1)
+                        limit_dict[split_name] = count
+                    except ValueError:
+                        print_error(f"无效的样本数量: {count_str}")
+                        raise typer.Exit(1)
+            
+            print_info(f"样本数量限制: train={limit_dict.get('train', 'all')}, val={limit_dict.get('val', 'all')}, test={limit_dict.get('test', 'all')}")
+        except Exception as e:
+            if not isinstance(e, typer.Exit):
+                print_error(f"解析 --limit 参数失败: {e}")
+                raise typer.Exit(1)
+            raise
+    
     # 调用过滤函数
     return _filter_dataset_impl(
         dataset_path=dataset_path,
@@ -2209,6 +2257,7 @@ def filter_dataset(
         include_labels=include_labels,
         exclude_labels=exclude_labels,
         keep_negative=keep_negative,
+        limit_dict=limit_dict if limit else None,
         task=task
     )
 
@@ -2346,8 +2395,9 @@ def dataset_stats(
                     print_table(f"{split} 类别分布", columns, rows, show_lines=True)
                     print_info(f"总图片数: {total}, 类别数: {len(class_counts)}")
         else:
-            # 检测/分割任务：统计边界框
-            class_counts = defaultdict(int)
+            # 检测/分割任务：统计边界框和样本数
+            class_counts = defaultdict(int)  # 标注数量
+            class_image_counts = defaultdict(set)  # 样本数（包含该类别的图片）
             bbox_counts = 0
             
             for split in ['train', 'val', 'test']:
@@ -2357,6 +2407,7 @@ def dataset_stats(
                 
                 for label_file in label_dir.glob('*.txt'):
                     try:
+                        image_name = label_file.stem  # 图片文件名（不含扩展名）
                         with open(label_file, 'r') as f:
                             for line in f:
                                 line = line.strip()
@@ -2366,6 +2417,7 @@ def dataset_stats(
                                 if len(parts) >= 5:
                                     class_id = int(parts[0])
                                     class_counts[class_id] += 1
+                                    class_image_counts[class_id].add(image_name)  # 记录图片
                                     bbox_counts += 1
                     except Exception:
                         pass
@@ -2373,32 +2425,38 @@ def dataset_stats(
             if class_counts:
                 # 根据是否有类别名称决定列数
                 if class_names:
-                    columns = ["类别ID", "类别名称", "数量", "比例"]
+                    columns = ["类别ID", "类别名称", "标注数", "样本数", "比例"]
                 else:
-                    columns = ["类别ID", "数量", "比例"]
+                    columns = ["类别ID", "标注数", "样本数", "比例"]
                 
                 rows = []
                 total = sum(class_counts.values())
+                total_images = len(set().union(*class_image_counts.values()))  # 去重后的总图片数
                 
                 for class_id in sorted(class_counts.keys()):
                     count = class_counts[class_id]
+                    image_count = len(class_image_counts[class_id])
+                    
                     if class_names:
                         class_name = class_names.get(class_id, f"未知_{class_id}")
                         rows.append([
                             class_id,
                             class_name,
                             count,
+                            image_count,
                             f"{count/total*100:.1f}%"
                         ])
                     else:
                         rows.append([
                             class_id,
                             count,
+                            image_count,
                             f"{count/total*100:.1f}%"
                         ])
                 
                 print_table("类别分布", columns, rows, show_lines=True)
-                print_info(f"总边界框数量: {bbox_counts}")
+                print_info(f"总标注数量: {bbox_counts}")
+                print_info(f"包含标注的图片数: {total_images}")
                 
                 # 显示类别总数
                 if class_names:
@@ -3378,6 +3436,7 @@ def _merge_datasets_impl(
     skipped_files = 0
     renamed_files = 0
     file_registry = set()  # 记录已复制的文件名
+    split_counts = {'train': 0, 'val': 0, 'test': 0}  # 记录各split的文件数
     
     converted_labels_count = 0
     
@@ -3443,6 +3502,7 @@ def _merge_datasets_impl(
                 shutil.copy2(img_file, dst_img)
                 file_registry.add(dst_filename)
                 total_files += 1
+                split_counts[split] += 1
                 
                 # 处理标签文件
                 if task != 'classify':
@@ -3491,14 +3551,27 @@ def _merge_datasets_impl(
     
     # 5. 统计信息
     console.print()
-    print_info(f"合并完成:")
-    print_info(f"  总文件数: {total_files}")
+    print_section_header("合并统计")
+    
+    print_info("各集合文件数:")
+    print_info(f"  训练集 (train): {split_counts['train']} 张")
+    print_info(f"  验证集 (val):   {split_counts['val']} 张")
+    print_info(f"  测试集 (test):  {split_counts['test']} 张")
+    print_info(f"  总计:           {total_files} 张")
+    
+    # 验证总数是否一致
+    split_sum = sum(split_counts.values())
+    if split_sum != total_files:
+        print_warning(f"⚠️  内部统计不一致: 分集合总和({split_sum}) ≠ 总计({total_files})")
+    
     if skipped_files > 0:
-        print_info(f"  跳过重复: {skipped_files}")
+        console.print()
+        print_warning(f"跳过重复文件: {skipped_files} 张")
     if renamed_files > 0:
-        print_info(f"  重命名: {renamed_files}")
+        print_info(f"重命名文件: {renamed_files} 张")
     if converted_labels_count > 0:
-        print_success(f"  ✓ 格式转换: {converted_labels_count} 个标注已转换为 {task} 格式")
+        console.print()
+        print_success(f"✓ 格式转换: {converted_labels_count} 个标注已转换为 {task} 格式")
     
     # 6. 保存类别信息
     classes_file = output_path / 'classes.txt'
@@ -3525,6 +3598,30 @@ def _merge_datasets_impl(
         yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
     
     print_success(f"✓ dataset.yaml 已生成: {dataset_yaml_path}")
+    
+    # 7.5 验证实际文件数
+    console.print()
+    print_section_header("验证数据集")
+    
+    actual_counts = {'train': 0, 'val': 0, 'test': 0}
+    for split in ['train', 'val', 'test']:
+        img_dir = output_path / 'images' / split
+        if img_dir.exists():
+            actual_counts[split] = len(list(find_files(img_dir, ['.jpg', '.jpeg', '.png'])))
+    
+    actual_total = sum(actual_counts.values())
+    
+    print_info("实际生成文件数:")
+    print_info(f"  训练集 (train): {actual_counts['train']} 张")
+    print_info(f"  验证集 (val):   {actual_counts['val']} 张")
+    print_info(f"  测试集 (test):  {actual_counts['test']} 张")
+    print_info(f"  总计:           {actual_total} 张")
+    
+    # 对比统计数据
+    if actual_total == total_files:
+        print_success("✓ 文件数验证通过")
+    else:
+        print_warning(f"⚠️  文件数不一致: 实际({actual_total}) vs 统计({total_files})")
     
     # 8. 可选：去重
     if deduplicate:
@@ -3970,9 +4067,20 @@ def _filter_dataset_impl(
     include_labels: Optional[str],
     exclude_labels: Optional[str],
     keep_negative: bool,
+    limit_dict: Optional[dict],
     task: str
 ):
-    """过滤数据集的实现函数"""
+    """过滤数据集的实现函数
+    
+    Args:
+        dataset_path: 数据集路径
+        output_path: 输出路径
+        include_labels: 包含的标签列表（逗号分隔）
+        exclude_labels: 排除的标签列表（逗号分隔）
+        keep_negative: 是否保留负样本
+        limit_dict: 样本数量限制 {split: count or 'all'}
+        task: 任务类型
+    """
     
     # 1. 读取数据集配置
     print_section_header("读取数据集配置")
@@ -4111,6 +4219,16 @@ def _filter_dataset_impl(
             img_dir = dataset_path / split / 'images'
             label_dir = dataset_path / split / 'labels'
         
+        # 处理 val/valid 别名
+        if not img_dir.exists() and split == 'val':
+            # 尝试 valid 作为 val 的别名
+            img_dir = dataset_path / 'images' / 'valid'
+            label_dir = dataset_path / 'labels' / 'valid'
+            
+            if not img_dir.exists():
+                img_dir = dataset_path / 'valid' / 'images'
+                label_dir = dataset_path / 'valid' / 'labels'
+        
         if not img_dir.exists():
             continue
         
@@ -4123,7 +4241,17 @@ def _filter_dataset_impl(
         split_kept = 0
         split_negative = 0
         
-        print_info(f"处理 {split} 数据集: {len(image_files)} 张图片")
+        # 检查该集合的样本数量限制
+        split_limit = None
+        if limit_dict and split in limit_dict:
+            limit_value = limit_dict[split]
+            if limit_value != 'all':
+                split_limit = limit_value
+                print_info(f"处理 {split} 数据集: {len(image_files)} 张图片 (限制: {split_limit})")
+            else:
+                print_info(f"处理 {split} 数据集: {len(image_files)} 张图片 (不限制)")
+        else:
+            print_info(f"处理 {split} 数据集: {len(image_files)} 张图片")
         
         progress = create_progress_bar()
         task_id = progress.add_task(f"[cyan]{split}", total=len(image_files))
@@ -4131,6 +4259,11 @@ def _filter_dataset_impl(
         with progress:
             for img_file in image_files:
                 progress.update(task_id, advance=1)
+                
+                # 检查是否达到样本数量限制
+                if split_limit is not None and split_kept >= split_limit:
+                    # 达到限制，跳过后续图片
+                    continue
                 
                 # 读取标签文件
                 label_file = label_dir / f"{img_file.stem}.txt"

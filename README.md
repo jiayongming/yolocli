@@ -2388,13 +2388,25 @@ python yolo_cli.py interactive
 2. 选择 `数据处理` → `按标签过滤数据集`
 3. 选择任务类型（detect/segment/classify/pose）
 4. 输入数据集路径
-5. **选择过滤模式**：
+5. **系统自动读取类别列表** 🆕：
+   - 从 data.yaml 中读取所有可用类别
+   - 显示类别总数和名称
+6. **选择过滤模式**：
    - **包含模式**：只保留指定类别的样本
    - **排除模式**：移除指定类别的样本
-6. 输入要处理的类别名称（逗号分隔）
-7. 选择是否保留负样本（无标注图片）
-8. 系统自动完成：
+7. **从类别列表中多选** 🆕：
+   - 使用空格键选择/取消选择类别
+   - 使用方向键上下移动
+   - 按回车确认选择
+   - 无需手动输入类别名称，避免拼写错误
+8. 选择是否保留负样本（无标注图片）
+9. **选择是否限制样本数量** 🆕：
+   - 可选择限制每个集合保留的样本数量
+   - 格式：train:val:test（如 100:30:10）
+   - 支持使用 'all' 表示不限制（如 all:50:20）
+10. 系统自动完成：
    - 过滤标注数据
+   - 限制样本数量（如有设置）🆕
    - 重映射类别ID（保持连续）
    - 复制符合条件的图片和标签
    - 生成新的数据集配置文件
@@ -2403,6 +2415,8 @@ python yolo_cli.py interactive
 - 从多类别数据集中提取特定类别
 - 移除不需要的类别或噪声类别
 - 准备单类别训练数据
+- 创建小规模数据集用于快速实验 🆕
+- 平衡数据集的样本分布 🆕
 - 清理数据集
 
 **在交互式模式中使用数据统计**：
@@ -3143,7 +3157,13 @@ python yolo_cli.py data filter [OPTIONS]
   --include TEXT           包含的标签列表（逗号分隔）
   --exclude TEXT           排除的标签列表（逗号分隔）
   --keep-negative          保留没有任何标注的图片（负样本，默认: True）
+  --limit TEXT             限制每个集合的样本数量，格式: train:val:test 🆕
   --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+
+样本数量限制格式:
+  • 100:30:10  - train保留100张, val保留30张, test保留10张
+  • all:50:20  - train不限制, val保留50张, test保留20张
+  • 200:all:all - train保留200张, val和test不限制
 
 示例:
   # 只保留特定类别
@@ -3158,11 +3178,32 @@ python yolo_cli.py data filter [OPTIONS]
     --include cat \\
     --keep-negative False \\
     --output data/cats_only
+  
+  # 过滤并限制样本数量 🆕
+  python yolo_cli.py data filter \\
+    --dataset data/processed \\
+    --include person,car \\
+    --limit 100:30:10 \\
+    --output data/small_sample
+  
+  # 保留所有训练集，限制验证集和测试集 🆕
+  python yolo_cli.py data filter \\
+    --dataset data/processed \\
+    --include cat,dog \\
+    --limit all:50:20 \\
+    --output data/pets_limited
+
+使用场景:
+  - 提取特定类别的子数据集
+  - 创建小规模数据集用于快速实验 🆕
+  - 平衡不同类别的样本数量
+  - 清理不需要的类别
 
 注意:
   - --include 和 --exclude 必须指定其中之一，不能同时使用
   - 自动重映射类别ID，保持连续性
   - 负样本是指没有任何标注的图片，对减少误报有帮助
+  - 样本数量限制按顺序应用，先处理的样本会被保留 🆕
 
 # 数据统计
 python yolo_cli.py data stats [OPTIONS]
@@ -3170,6 +3211,24 @@ python yolo_cli.py data stats [OPTIONS]
   --detailed               显示详细统计（包括正负样本统计）
   --task TEXT              任务类型 (detect/segment/classify)
   --positive-classes TEXT  正类列表（逗号分隔，仅用于分类任务）
+
+类别分布统计（检测/分割任务）🆕：
+  • 类别ID: 类别的数字标识
+  • 类别名称: 类别的文本名称（从data.yaml读取）
+  • 标注数: 该类别的总标注数量（一张图片可能有多个标注）
+  • 样本数: 包含该类别的图片数量（去重）🆕
+  • 比例: 该类别标注占总标注的百分比
+
+示例输出:
+  ╭────────┬───────────┬────────┬────────┬───────╮
+  │ 类别ID │ 类别名称  │ 标注数 │ 样本数 │ 比例  │
+  ├────────┼───────────┼────────┼────────┼───────┤
+  │ 0      │ person    │ 16420  │ 8500   │ 55.0% │
+  │ 1      │ car       │ 186    │ 150    │ 0.6%  │
+  ╰────────┴───────────┴────────┴────────┴───────╯
+  
+  说明: person类有16420个标注，分布在8500张图片中
+        （平均每张图片约1.93个person标注）
 
 示例:
   # 检测任务统计
