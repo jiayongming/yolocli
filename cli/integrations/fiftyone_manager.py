@@ -191,7 +191,7 @@ class FiftyOneManager:
             else:
                 return (False, None, "数据集配置中缺少类别信息(names)")
             
-            # 初始化调试信息和计数器
+            # 初始化计数器和调试信息（用于错误诊断）
             sample_count = 0
             debug_info = []
             debug_info.append(f"Dataset root: {dataset_root}")
@@ -205,18 +205,15 @@ class FiftyOneManager:
             if task_type:
                 # 用户指定了任务类型
                 detected_task_type = task_type.lower()
-                debug_info.append(f"Using specified task type: {detected_task_type}")
             else:
                 # 自动检测：检查是否为 Pose 任务
                 if 'kpt_shape' in dataset_config:
                     detected_task_type = 'pose'
                     kpt_shape = dataset_config.get('kpt_shape')
                     num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
-                    debug_info.append(f"Auto-detected Pose dataset with {num_keypoints} keypoints")
                 else:
                     # 默认为 detect
                     detected_task_type = 'detect'
-                    debug_info.append(f"Default to detect task type")
             
             is_pose = detected_task_type == 'pose'
             is_segment = detected_task_type == 'segment'
@@ -243,9 +240,6 @@ class FiftyOneManager:
                                          'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
                     else:
                         keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
-                    debug_info.append(f"Using default keypoint labels: {keypoint_labels}")
-                else:
-                    debug_info.append(f"Keypoint labels from config: {keypoint_labels}")
             
             # 确定要加载的划分
             if splits is None:
@@ -262,48 +256,104 @@ class FiftyOneManager:
             for split in splits:
                 split_key = split
                 if split_key not in dataset_config:
-                    debug_info.append(f"Split '{split}' not in config")
                     continue
                 
                 # 获取图片目录路径
                 split_path = dataset_config[split_key]
                 debug_info.append(f"Split '{split}' path from config: {split_path}")
                 
-                images_dir = dataset_root / split_path
-                debug_info.append(f"Constructed images_dir: {images_dir}")
+                # 解析路径（处理相对路径和 .. 符号）
+                split_path_obj = Path(split_path)
+                images_dir = None
                 
-                # 如果路径不存在，尝试解析相对路径
-                if not images_dir.exists():
-                    # 尝试作为绝对路径
-                    images_dir = Path(split_path)
-                    debug_info.append(f"Trying absolute path: {images_dir}")
-                    if not images_dir.exists():
-                        debug_info.append(f"Images dir not exists: {images_dir}")
-                        continue
+                # 如果是绝对路径，直接使用
+                if split_path_obj.is_absolute():
+                    images_dir = split_path_obj
+                else:
+                    # 如果是相对路径，相对于 yaml 文件所在目录解析
+                    candidate_path = (dataset_root / split_path).resolve()
+                    
+                    if candidate_path.exists():
+                        images_dir = candidate_path
+                    else:
+                        # 回退方案1: 如果路径包含 '..'，尝试移除 '..' 部分
+                        # 例如: '../train/images' -> 'train/images'
+                        if '..' in split_path:
+                            parts = Path(split_path).parts
+                            cleaned_parts = [p for p in parts if p != '..']
+                            if cleaned_parts:
+                                cleaned_path = Path(*cleaned_parts)
+                                candidate_path = (dataset_root / cleaned_path).resolve()
+                                
+                                if candidate_path.exists():
+                                    images_dir = candidate_path
+                        
+                        # 回退方案2: 尝试常见的目录结构
+                        if images_dir is None:
+                            candidate_path = dataset_root / 'images' / split
+                            if candidate_path.exists():
+                                images_dir = candidate_path
+                        
+                        # 回退方案3: 尝试 split_name/images/
+                        if images_dir is None:
+                            candidate_path = dataset_root / split / 'images'
+                            if candidate_path.exists():
+                                images_dir = candidate_path
+                
+                # 如果所有尝试都失败，跳过这个 split
+                if images_dir is None or not images_dir.exists():
+                    debug_info.append(f"Could not find images directory for split '{split}'")
+                    continue
                 
                 # 获取标签目录（智能查找）
-                # 方法1: 替换 'images' 为 'labels'
-                labels_dir = Path(str(images_dir).replace('/images/', '/labels/').replace('\\images\\', '\\labels\\'))
+                labels_dir = None
                 
-                # 方法2: 如果方法1不存在，尝试在同级目录查找
-                if not labels_dir.exists():
-                    if images_dir.name == 'images' or 'images' in str(images_dir):
-                        # 如果是 .../images/train，labels 在 .../labels/train
-                        parent = images_dir.parent
-                        relative_part = images_dir.relative_to(parent)
-                        labels_dir = parent.parent / 'labels' / relative_part.name if 'images' in parent.name else parent / 'labels' / images_dir.name
+                # 方法1: 如果 images_dir 最后一个目录是 'images'，替换为 'labels'
+                if images_dir.name == 'images':
+                    # .../train/images -> .../train/labels
+                    labels_dir = images_dir.parent / 'labels'
+                    if not labels_dir.exists():
+                        labels_dir = None
+                
+                # 方法2: 如果路径中包含 /images/ 或 \images\，替换为 /labels/ 或 \labels\
+                if labels_dir is None:
+                    labels_path_str = str(images_dir)
+                    if '/images/' in labels_path_str:
+                        candidate = Path(labels_path_str.replace('/images/', '/labels/'))
+                    elif '\\images\\' in labels_path_str:
+                        candidate = Path(labels_path_str.replace('\\images\\', '\\labels\\'))
+                    elif labels_path_str.endswith('/images'):
+                        candidate = Path(labels_path_str.replace('/images', '/labels'))
+                    elif labels_path_str.endswith('\\images'):
+                        candidate = Path(labels_path_str.replace('\\images', '\\labels'))
                     else:
-                        # 如果是 .../train，labels 可能在 .../labels 或 images 同级
-                        labels_dir = images_dir.parent / 'labels' / images_dir.name
+                        candidate = None
+                    
+                    if candidate and candidate.exists():
+                        labels_dir = candidate
+                
+                # 方法3: 查找与 images 同级的 labels 目录
+                if labels_dir is None:
+                    parent = images_dir.parent
+                    # 尝试在各级父目录中查找 labels
+                    for _ in range(3):  # 最多向上查找3级
+                        candidate = parent / 'labels'
+                        if candidate.exists():
+                            labels_dir = candidate
+                            break
+                        parent = parent.parent
+                        if str(parent) == parent.anchor:  # 到达根目录
+                            break
+                
+                # 如果还是找不到，使用默认路径（即使不存在）
+                if labels_dir is None:
+                    labels_dir = images_dir.parent / 'labels'
                 
                 # 遍历图片文件
                 image_files = []
                 for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.JPG', '.JPEG', '.PNG', '.BMP']:
                     found = list(images_dir.glob(f'*{ext}'))
                     image_files.extend(found)
-                
-                debug_info.append(f"Found {len(image_files)} images in {images_dir}")
-                debug_info.append(f"Labels dir: {labels_dir}, exists: {labels_dir.exists()}")
                 
                 for image_path in image_files:
                     sample_count += 1

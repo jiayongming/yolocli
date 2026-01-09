@@ -1762,7 +1762,7 @@ def _print_positive_negative_stats(data_path: Path):
 
 @app.command("merge")
 def merge_datasets(
-    datasets: str = typer.Option(..., "--datasets", "-d", help="数据集路径列表（逗号分隔），如: path1,path2,path3"),
+    datasets: Optional[str] = typer.Option(None, "--datasets", "-d", help="数据集路径列表（逗号分隔），如: path1,path2,path3。如不指定则进入交互式选择模式"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
     handle_duplicates: str = typer.Option("skip", "--duplicates", help="重复文件处理: skip=跳过, rename=重命名, error=报错"),
@@ -1774,7 +1774,11 @@ def merge_datasets(
     
     示例:
     \b
-      # 合并两个数据集
+      # 交互式选择数据集合并（从datasets目录）
+      yolo-cli data merge
+      
+    \b
+      # 手动指定数据集路径合并
       yolo-cli data merge \\
         --datasets data/dataset1,data/dataset2 \\
         --output data/merged \\
@@ -1794,14 +1798,78 @@ def merge_datasets(
     task = validate_task_type(task)
     print_info(f"任务类型: {task}")
     
-    # 解析数据集路径
-    dataset_paths = [Path(p.strip()) for p in datasets.split(',')]
-    
-    if len(dataset_paths) < 2:
-        print_error("至少需要指定2个数据集进行合并")
-        raise typer.Exit(1)
-    
-    print_info(f"待合并数据集数量: {len(dataset_paths)}")
+    # 如果没有指定数据集参数，进入交互式选择模式
+    if datasets is None:
+        from ..ui.prompts import select_multiple, confirm_action
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录（包含 images 目录或数据集配置文件）
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            raise typer.Exit(1)
+        
+        print_info(f"发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户多选数据集
+        choices = [f"{ds.name} ({ds})" for ds in available_datasets]
+        selected_choices = select_multiple(
+            "请选择要合并的数据集 (空格选择，回车确认):",
+            choices
+        )
+        
+        if not selected_choices:
+            print_warning("未选择任何数据集")
+            raise typer.Exit(0)
+        
+        if len(selected_choices) < 2:
+            print_error("至少需要选择2个数据集进行合并")
+            raise typer.Exit(1)
+        
+        # 提取选中的数据集路径
+        dataset_paths = []
+        for choice in selected_choices:
+            # 从 "name (path)" 格式中提取路径
+            ds_path_str = choice.split('(')[1].rstrip(')')
+            dataset_paths.append(Path(ds_path_str))
+        
+        print_info(f"已选择 {len(dataset_paths)} 个数据集进行合并")
+    else:
+        # 解析数据集路径（手动指定模式）
+        dataset_paths = [Path(p.strip()) for p in datasets.split(',')]
+        
+        if len(dataset_paths) < 2:
+            print_error("至少需要指定2个数据集进行合并")
+            raise typer.Exit(1)
+        
+        print_info(f"待合并数据集数量: {len(dataset_paths)}")
     
     # 验证所有数据集路径存在
     for i, ds_path in enumerate(dataset_paths, 1):

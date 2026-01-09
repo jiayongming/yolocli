@@ -2260,6 +2260,27 @@ python yolo_cli.py interactive
 6. 对于检测/分割任务，可选择是否为缺失标签创建空文件（负样本）
 7. 确认后自动完成数据集划分
 
+**在交互式模式中合并数据集** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `合并多个数据集`
+3. 选择任务类型（detect/segment/classify/pose）
+4. **自动扫描 datasets 目录**：系统会自动扫描 `datasets/` 目录下的所有数据集
+5. **多选数据集**：
+   - 使用 **↑↓ 方向键** 移动光标
+   - 使用 **空格键** 选择/取消选择数据集（可多选，至少选2个）
+   - 按 **回车键** 确认选择
+6. 系统自动完成：
+   - 收集各数据集的类别信息
+   - 构建统一的类别映射（自动处理类别ID重映射）
+   - 合并图像和标签文件
+   - 生成合并后的数据集配置文件
+
+注意：
+- 数据集应放在项目根目录的 `datasets/` 目录下
+- 每个数据集目录应包含标准的 YOLO 数据集结构（images/labels 目录或 train/val/test 目录）
+- 支持处理重复文件名，可选择跳过、重命名或报错
+
 **在交互式模式中使用数据统计**：
 
 1. 启动交互式模式：`python yolo_cli.py interactive-mode`
@@ -2813,6 +2834,29 @@ python yolo_cli.py data generate-yaml [OPTIONS]
 # 验证数据集
 python yolo_cli.py data verify [OPTIONS]
   --path TEXT        数据集路径
+
+# 合并数据集 🆕
+python yolo_cli.py data merge [OPTIONS]
+  --datasets TEXT          数据集路径列表（逗号分隔，可选）
+  --output TEXT            输出目录（默认: data/processed/merged）
+  --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+  --duplicates TEXT        重复文件处理 (skip/rename/error，默认: skip)
+  --deduplicate            合并后去除完全相同的图片（默认: False）
+
+示例:
+  # 交互式选择数据集合并（推荐）🆕
+  python yolo_cli.py data merge
+  
+  # 手动指定数据集路径合并
+  python yolo_cli.py data merge --datasets data/dataset1,data/dataset2 --output data/merged
+  
+  # 合并三个数据集并去重
+  python yolo_cli.py data merge --datasets data/ds1,data/ds2,data/ds3 --deduplicate
+
+注意:
+  - 如果不指定 --datasets，将进入交互式选择模式，从 datasets/ 目录选择要合并的数据集
+  - 支持自动处理不同数据集的类别ID重映射
+  - 重复文件处理方式：skip=跳过, rename=重命名, error=报错
 
 # 数据统计
 python yolo_cli.py data stats [OPTIONS]

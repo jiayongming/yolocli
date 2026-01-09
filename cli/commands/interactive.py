@@ -457,18 +457,69 @@ def run_data_operations():
                 # 选择任务类型
                 task_type = select_task_type()
                 
-                # 输入数据集路径列表
-                console.print()
-                print_info("💡 输入要合并的数据集路径（逗号分隔）")
-                print_info("   示例: datasets/umbrella,datasets/clothes,datasets/hat")
-                console.print()
-                datasets_input = input_text(
-                    "数据集路径列表（逗号分隔）:",
-                    default="datasets/dataset1,datasets/dataset2"
-                )
-                if not datasets_input:
-                    print_warning("操作已取消")
+                # 扫描 datasets 目录
+                from pathlib import Path
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
                     continue
+                
+                # 扫描所有有效的数据集
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        # 检查是否是有效的数据集目录
+                        has_images = (item / 'images').exists() or \
+                                     (item / 'train').exists() or \
+                                     (item / 'val').exists() or \
+                                     (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or \
+                                    (item / 'dataset.yaml').exists() or \
+                                    (item / 'classes.txt').exists()
+                        
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    print_info("数据集目录应包含以下任一结构:")
+                    print_info("  • images/ 目录")
+                    print_info("  • train/val/test 目录")
+                    print_info("  • data.yaml 或 dataset.yaml 配置文件")
+                    continue
+                
+                print_info(f"发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户多选数据集
+                choices = [f"{ds.name} ({ds})" for ds in available_datasets]
+                selected_choices = select_multiple(
+                    "请选择要合并的数据集 (空格选择，回车确认):",
+                    choices
+                )
+                
+                if not selected_choices:
+                    print_warning("未选择任何数据集")
+                    continue
+                
+                if len(selected_choices) < 2:
+                    print_error("至少需要选择2个数据集进行合并")
+                    continue
+                
+                # 提取选中的数据集路径
+                dataset_paths = []
+                for choice in selected_choices:
+                    # 从 "name (path)" 格式中提取路径
+                    ds_path_str = choice.split('(')[1].rstrip(')')
+                    dataset_paths.append(ds_path_str)
+                
+                # 构建逗号分隔的路径字符串（用于传递给 merge_datasets 命令）
+                datasets_input = ','.join(dataset_paths)
+                
+                print_info(f"已选择 {len(dataset_paths)} 个数据集进行合并")
+                console.print()
                 
                 # 输出目录
                 output_dir = input_path(
