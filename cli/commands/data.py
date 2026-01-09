@@ -2425,33 +2425,38 @@ def dataset_stats(
             if class_counts:
                 # 根据是否有类别名称决定列数
                 if class_names:
-                    columns = ["类别ID", "类别名称", "标注数", "样本数", "比例"]
+                    columns = ["类别ID", "类别名称", "标注数", "标注占比", "样本数", "样本占比"]
                 else:
-                    columns = ["类别ID", "标注数", "样本数", "比例"]
+                    columns = ["类别ID", "标注数", "标注占比", "样本数", "样本占比"]
                 
                 rows = []
-                total = sum(class_counts.values())
+                total_annotations = sum(class_counts.values())
                 total_images = len(set().union(*class_image_counts.values()))  # 去重后的总图片数
                 
                 for class_id in sorted(class_counts.keys()):
-                    count = class_counts[class_id]
+                    annotation_count = class_counts[class_id]
                     image_count = len(class_image_counts[class_id])
+                    
+                    annotation_ratio = f"{annotation_count/total_annotations*100:.1f}%"
+                    image_ratio = f"{image_count/total_images*100:.1f}%"
                     
                     if class_names:
                         class_name = class_names.get(class_id, f"未知_{class_id}")
                         rows.append([
                             class_id,
                             class_name,
-                            count,
+                            annotation_count,
+                            annotation_ratio,
                             image_count,
-                            f"{count/total*100:.1f}%"
+                            image_ratio
                         ])
                     else:
                         rows.append([
                             class_id,
-                            count,
+                            annotation_count,
+                            annotation_ratio,
                             image_count,
-                            f"{count/total*100:.1f}%"
+                            image_ratio
                         ])
                 
                 print_table("类别分布", columns, rows, show_lines=True)
