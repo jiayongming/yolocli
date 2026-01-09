@@ -2187,6 +2187,30 @@ def dataset_stats(
     info = get_dataset_info(data_path)
     print_dataset_info(info)
     
+    # 读取类别名称映射（用于显示类别名称）
+    class_names = {}  # {class_id: class_name}
+    yaml_file = None
+    for yaml_name in ['data.yaml', 'dataset.yaml']:
+        yaml_path = data_path / yaml_name
+        if yaml_path.exists():
+            yaml_file = yaml_path
+            break
+    
+    if yaml_file:
+        try:
+            with open(yaml_file, 'r', encoding='utf-8') as f:
+                yaml_config = yaml.safe_load(f)
+                if yaml_config and 'names' in yaml_config:
+                    names_data = yaml_config['names']
+                    if isinstance(names_data, dict):
+                        # {0: 'class1', 1: 'class2'}
+                        class_names = names_data
+                    elif isinstance(names_data, list):
+                        # ['class1', 'class2']
+                        class_names = {i: name for i, name in enumerate(names_data)}
+        except Exception as e:
+            print_warning(f"无法读取类别名称: {e}")
+    
     if detailed:
         # 统计正负样本
         if is_classify:
@@ -2260,20 +2284,38 @@ def dataset_stats(
                         pass
             
             if class_counts:
-                columns = ["类别ID", "数量", "比例"]
+                # 根据是否有类别名称决定列数
+                if class_names:
+                    columns = ["类别ID", "类别名称", "数量", "比例"]
+                else:
+                    columns = ["类别ID", "数量", "比例"]
+                
                 rows = []
                 total = sum(class_counts.values())
                 
                 for class_id in sorted(class_counts.keys()):
                     count = class_counts[class_id]
-                    rows.append([
-                        class_id,
-                        count,
-                        f"{count/total*100:.1f}%"
-                    ])
+                    if class_names:
+                        class_name = class_names.get(class_id, f"未知_{class_id}")
+                        rows.append([
+                            class_id,
+                            class_name,
+                            count,
+                            f"{count/total*100:.1f}%"
+                        ])
+                    else:
+                        rows.append([
+                            class_id,
+                            count,
+                            f"{count/total*100:.1f}%"
+                        ])
                 
                 print_table("类别分布", columns, rows, show_lines=True)
                 print_info(f"总边界框数量: {bbox_counts}")
+                
+                # 显示类别总数
+                if class_names:
+                    print_info(f"类别总数: {len(class_names)}")
             else:
                 print_warning("未找到标注数据")
 
