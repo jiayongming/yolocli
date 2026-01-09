@@ -3117,12 +3117,33 @@ python yolo_cli.py data merge [OPTIONS]
 
 # 转换标注格式 🆕
 python yolo_cli.py data convert-format [OPTIONS]
-  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕
   --from TEXT              源格式 (detect/segment/pose，必需)
   --to TEXT                目标格式 (detect/segment/pose，必需)
   --output TEXT            输出目录（默认: data/processed/converted_*)
   --bbox-expand FLOAT      边界框扩展比例 (0.0-0.5，用于转换到detect)
   --preserve-structure     保留原始train/val/test分割（默认: True）
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data convert-format --from segment --to detect
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data convert-format --dataset data/segment_dataset --from segment --to detect
+
+交互式选择示例:
+  $ python yolo_cli.py data convert-format --from segment --to detect
+  
+  ──────────────────── 数据集格式转换 ────────────────────
+  ℹ 📁 发现 18 个数据集
+  
+  ? 请选择要转换格式的数据集:
+    > clutter
+      背包
+      ...
+  
+  ℹ 已选择数据集: clutter
+  ...
 
 支持的转换方向:
   ✓ segment → detect  (优秀) 计算多边形外接矩形，无精度损失
@@ -3132,12 +3153,7 @@ python yolo_cli.py data convert-format [OPTIONS]
   ⚠️ segment → pose    (一般) 从多边形计算bbox + 默认关键点
   ⚠️ pose → segment    (一般) 使用bbox作为矩形，丢弃关键点
 
-示例:
-  # 分割→检测（最常用）
-  python yolo_cli.py data convert-format \\
-    --dataset data/segment_dataset \\
-    --from segment --to detect
-  
+更多示例:
   # 分割→检测（扩展边界框10%）
   python yolo_cli.py data convert-format \\
     --dataset data/segment_dataset \\
@@ -3162,12 +3178,19 @@ python yolo_cli.py data convert-format [OPTIONS]
 
 # 数据集去重 🆕
 python yolo_cli.py data deduplicate [OPTIONS]
-  --dataset TEXT           数据集路径（必需）
+  --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕
   --mode TEXT              去重模式: hash/perceptual/both（默认: hash）
   --action TEXT            处理方式: report/delete/move（默认: report）
   --priority TEXT          保留优先级（默认: train>val>test）
   --threshold FLOAT        相似度阈值（默认: 0.95，用于感知哈希）
   --cross-split/--within-split  是否跨集合去重（默认: 跨集合）
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data deduplicate --mode hash --action report
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data deduplicate --dataset datasets/mydata --mode hash --action report
 
 去重模式说明:
   • hash: 基于MD5哈希，检测完全相同的图片（快速，推荐）
@@ -3220,10 +3243,33 @@ python yolo_cli.py data deduplicate [OPTIONS]
 
 # 合并多个类别标签 🆕
 python yolo_cli.py data merge-labels [OPTIONS]
-  --dataset TEXT           数据集路径（包含data.yaml的目录，必需）
+  --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕
   --output TEXT            输出目录（默认: data/processed/merged_labels）
   --mapping TEXT           映射规则（可选，不指定则交互式配置）
   --task TEXT              任务类型 (detect/segment/classify/pose，默认: detect)
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data merge-labels --mapping "car,truck,bus:vehicle"
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data merge-labels --dataset data/processed --mapping "car,truck,bus:vehicle"
+
+交互式选择示例:
+  $ python yolo_cli.py data merge-labels --mapping "car,truck,bus:vehicle"
+  
+  ──────────────────── 合并类别标签 ────────────────────
+  ℹ 📁 发现 18 个数据集
+  
+  ? 请选择要合并标签的数据集:
+    > clutter
+      背包
+      扳手
+      ...
+  
+  ℹ 已选择数据集: clutter
+  ℹ 数据集路径: /path/to/datasets/clutter
+  ...
 
 映射规则格式:
   "source1,source2:target;source3,source4:target2"
@@ -3231,10 +3277,7 @@ python yolo_cli.py data merge-labels [OPTIONS]
   - 用冒号分隔源类别和目标类别
   - 用分号分隔多个合并规则
 
-示例:
-  # 交互式配置（推荐）
-  python yolo_cli.py data merge-labels --dataset data/processed
-  
+更多示例:
   # 合并车辆类别
   python yolo_cli.py data merge-labels \\
     --dataset data/processed \\
@@ -3255,6 +3298,77 @@ python yolo_cli.py data merge-labels [OPTIONS]
   - 合并相似或相关的类别
   - 准备二分类任务数据
   - 调整类别粒度（细粒度→粗粒度）
+
+# 批量调整标注大小
+python yolo_cli.py data scale-labels [OPTIONS]
+  --dataset TEXT           数据集目录（可选，不指定则从 datasets 目录中选择）🆕
+  --output TEXT            输出目录（必需）
+  --scale FLOAT            缩放比例（必需，>0，<1表示缩小，>1表示放大）
+  --task TEXT              任务类型 (detect/segment/pose，默认: detect)
+  --splits TEXT            处理的子集，逗号分隔（可选，默认: 全部）
+  --classes TEXT           处理的类别ID，逗号分隔（可选，默认: 全部）
+  --dry-run                预览模式，不实际修改文件（默认: False）
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data scale-labels --output datasets/scaled_0.8 --scale 0.8
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data scale-labels --dataset datasets/original --output datasets/scaled_0.8 --scale 0.8
+
+交互式选择示例:
+  $ python yolo_cli.py data scale-labels --output datasets/scaled_0.8 --scale 0.8
+  
+  ──────────────────── 批量调整标注大小 ────────────────────
+  ℹ 📁 发现 18 个数据集
+  
+  ? 请选择要调整标注的数据集:
+    > clutter
+      背包
+      ...
+  
+  ℹ 已选择数据集: clutter
+  ...
+
+适用场景:
+  - 标注框过大/过小导致模型效果不佳
+  - 需要统一调整标注风格
+  - 标注员标注尺度不一致
+  - 快速调整整个数据集的标注框大小
+
+缩放说明:
+  • scale=0.8: 缩小到80%（标注框过大时使用）
+  • scale=1.0: 保持不变
+  • scale=1.2: 放大到120%（标注框过小时使用）
+  • 推荐范围: 0.1-2.0
+  • 中心点始终保持不变
+
+示例:
+  # 缩小所有标注到80%
+  python yolo_cli.py data scale-labels \\
+    --dataset datasets/original \\
+    --output datasets/scaled_0.8 \\
+    --scale 0.8
+  
+  # 放大训练集标注到120%，只处理类别0和1
+  python yolo_cli.py data scale-labels \\
+    --dataset datasets/original \\
+    --output datasets/scaled \\
+    --scale 1.2 \\
+    --splits train \\
+    --classes 0,1
+  
+  # 预览模式（不实际修改文件）
+  python yolo_cli.py data scale-labels \\
+    --dataset datasets/original \\
+    --output datasets/scaled \\
+    --scale 0.9 \\
+    --dry-run
+
+高级参数:
+  - --splits: 仅处理指定的数据集分割（如：--splits train,val）
+  - --classes: 仅处理指定的类别（如：--classes 0,2,5）
+  - --dry-run: 预览模式，检查效果但不修改文件
 
 # 按标签过滤数据集
 python yolo_cli.py data filter [OPTIONS]

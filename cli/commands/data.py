@@ -1341,16 +1341,34 @@ def verify_dataset(
         print_info(f"📁 发现 {len(available_datasets)} 个数据集")
         console.print()
         
-        # 让用户多选数据集
-        choices = [f"{ds.name}" for ds in available_datasets]
-        selected_names = select_multiple(
-            "请选择要验证的数据集 (空格选择，回车确认):",
-            choices
-        )
+        # 操作说明
+        print_info("💡 操作提示:")
+        print_info("   • 使用 ↑↓ 方向键移动光标")
+        print_info("   • 使用 空格键 选择/取消数据集")
+        print_info("   • 使用 回车键 确认选择")
+        console.print()
         
-        if not selected_names:
-            print_warning("未选择任何数据集")
-            raise typer.Exit(0)
+        # 让用户多选数据集（循环直到选择至少一个）
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_names = None
+        
+        while not selected_names:
+            selected_names = select_multiple(
+                "请选择要验证的数据集:",
+                choices
+            )
+            
+            if not selected_names:
+                console.print()
+                print_warning("⚠️  您还没有选择任何数据集！")
+                print_info("提示: 使用空格键选择数据集，然后按回车确认")
+                console.print()
+                
+                from ..ui.prompts import confirm_action
+                if not confirm_action("重新选择?", default=True):
+                    print_info("操作已取消")
+                    raise typer.Exit(0)
+                console.print()
         
         # 找到对应的路径
         for selected_name in selected_names:
@@ -2240,7 +2258,7 @@ def merge_datasets(
 
 @app.command("convert-format")
 def convert_dataset_format(
-    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    dataset_path: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集路径（可选，不指定则从 datasets 目录中选择）"),
     source_format: str = typer.Option(..., "--from", "-f", help="源格式 (detect/segment/pose)"),
     target_format: str = typer.Option(..., "--to", "-t", help="目标格式 (detect/segment/pose)"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
@@ -2248,13 +2266,17 @@ def convert_dataset_format(
     keep_confidence: bool = typer.Option(False, "--keep-confidence", help="保留置信度信息（如果有）"),
     preserve_structure: bool = typer.Option(True, "--preserve-structure", help="保留原始的train/val/test分割"),
 ):
-    """转换数据集标注格式
+    """转换数据集标注格式（支持交互式选择）
     
     支持多种格式之间的转换，并提供丰富的自定义参数。
     
     示例:
     \b
-      # 分割→检测（计算外接矩形）
+      # 交互式选择数据集
+      yolo-cli data convert-format --from segment --to detect
+      
+    \b
+      # 手动指定数据集路径
       yolo-cli data convert-format \\
         --dataset data/segment_dataset \\
         --from segment --to detect \\
@@ -2306,11 +2328,78 @@ def convert_dataset_format(
         print_error("边界框扩展比例必须在 0.0-0.5 之间")
         raise typer.Exit(1)
     
-    # 解析路径
-    dataset_path = Path(dataset_path)
+    # 确定数据集路径
+    if dataset_path is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要转换格式的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_path)
+    
     if not dataset_path.exists():
         print_error(f"数据集路径不存在: {dataset_path}")
         raise typer.Exit(1)
+    
+    console.print()
+    print_info(f"数据集路径: {dataset_path}")
     
     # 确定输出目录
     if output_dir is None:
@@ -2333,20 +2422,24 @@ def convert_dataset_format(
 
 @app.command("deduplicate")
 def deduplicate_dataset(
-    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含train/val/test的目录）"),
+    dataset_path: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集路径（可选，不指定则从 datasets 目录中选择）"),
     mode: str = typer.Option("hash", "--mode", "-m", help="去重模式: hash (哈希), perceptual (感知哈希), both (两者结合)"),
     action: str = typer.Option("report", "--action", "-a", help="处理方式: report (仅报告), delete (删除), move (移动到duplicates目录)"),
     priority: str = typer.Option("train>val>test", "--priority", "-p", help="保留优先级: train>val>test 或 val>train>test"),
     threshold: float = typer.Option(0.95, "--threshold", "-t", help="相似度阈值 (0.0-1.0，仅用于感知哈希)"),
     cross_split: bool = typer.Option(True, "--cross-split/--within-split", help="是否跨集合去重（train/val/test之间）"),
 ):
-    """对已拆分的数据集进行去重
+    """对已拆分的数据集进行去重（支持交互式选择）
     
     检测并处理训练集、验证集、测试集中的重复图片。
     
     示例:
     \b
-      # 仅生成去重报告
+      # 交互式选择数据集
+      yolo-cli data deduplicate --mode hash --action report
+      
+    \b
+      # 手动指定数据集路径
       yolo-cli data deduplicate \\
         --dataset data/processed \\
         --mode hash \\
@@ -2392,11 +2485,78 @@ def deduplicate_dataset(
         print_info(f"可用方式: {', '.join(valid_actions)}")
         raise typer.Exit(1)
     
-    # 解析数据集路径
-    dataset_path = Path(dataset_path)
+    # 确定数据集路径
+    if dataset_path is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要去重的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_path)
+    
     if not dataset_path.exists():
         print_error(f"数据集路径不存在: {dataset_path}")
         raise typer.Exit(1)
+    
+    console.print()
+    print_info(f"数据集路径: {dataset_path}")
     
     # 解析优先级
     priority_list = [p.strip() for p in priority.split('>')]
@@ -2420,18 +2580,22 @@ def deduplicate_dataset(
 
 @app.command("merge-labels")
 def merge_labels(
-    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
+    dataset_path: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集路径（可选，不指定则从 datasets 目录中选择）"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
     mapping: Optional[str] = typer.Option(None, "--mapping", "-m", help="映射规则，格式: 'source1,source2:target;source3:target2'"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/classify/pose)"),
 ):
-    """合并多个类别标签为一个
+    """合并多个类别标签为一个（支持交互式选择）
     
     将多个相似或相关的类别合并为一个类别，简化模型训练。
     
     示例:
     \b
-      # 合并车辆类别
+      # 交互式选择数据集
+      yolo-cli data merge-labels --mapping "car,truck,bus:vehicle"
+      
+    \b
+      # 手动指定数据集路径
       yolo-cli data merge-labels \\
         --dataset data/processed \\
         --mapping "car,truck,bus:vehicle" \\
@@ -2456,11 +2620,78 @@ def merge_labels(
     # 验证任务类型
     task = validate_task_type(task)
     
-    # 解析数据集路径
-    dataset_path = Path(dataset_path)
+    # 确定数据集路径
+    if dataset_path is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要合并标签的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_path)
+    
     if not dataset_path.exists():
         print_error(f"数据集路径不存在: {dataset_path}")
         raise typer.Exit(1)
+    
+    console.print()
+    print_info(f"数据集路径: {dataset_path}")
     
     # 确定输出目录
     if output_dir is None:
@@ -2751,16 +2982,34 @@ def dataset_stats(
         print_info(f"📁 发现 {len(available_datasets)} 个数据集")
         console.print()
         
-        # 让用户多选数据集
-        choices = [f"{ds.name}" for ds in available_datasets]
-        selected_names = select_multiple(
-            "请选择要统计的数据集 (空格选择，回车确认):",
-            choices
-        )
+        # 操作说明
+        print_info("💡 操作提示:")
+        print_info("   • 使用 ↑↓ 方向键移动光标")
+        print_info("   • 使用 空格键 选择/取消数据集")
+        print_info("   • 使用 回车键 确认选择")
+        console.print()
         
-        if not selected_names:
-            print_warning("未选择任何数据集")
-            raise typer.Exit(0)
+        # 让用户多选数据集（循环直到选择至少一个）
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_names = None
+        
+        while not selected_names:
+            selected_names = select_multiple(
+                "请选择要统计的数据集:",
+                choices
+            )
+            
+            if not selected_names:
+                console.print()
+                print_warning("⚠️  您还没有选择任何数据集！")
+                print_info("提示: 使用空格键选择数据集，然后按回车确认")
+                console.print()
+                
+                from ..ui.prompts import confirm_action
+                if not confirm_action("重新选择?", default=True):
+                    print_info("操作已取消")
+                    raise typer.Exit(0)
+                console.print()
         
         # 找到对应的路径
         for selected_name in selected_names:
@@ -4212,7 +4461,7 @@ def _merge_datasets_impl(
 
 @app.command()
 def scale_labels(
-    dataset_dir: str = typer.Option(..., "--dataset", "-d", help="数据集目录"),
+    dataset_dir: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集目录（可选，不指定则从 datasets 目录中选择）"),
     output_dir: str = typer.Option(..., "--output", "-o", help="输出目录"),
     scale: float = typer.Option(..., "--scale", "-s", help="缩放比例 (>0)，如0.8表示缩小到80%，1.2表示放大到120%"),
     task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment/pose)"),
@@ -4220,7 +4469,7 @@ def scale_labels(
     classes: Optional[str] = typer.Option(None, "--classes", help="处理的类别ID，逗号分隔 (如: 0,2,5)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="预览模式，不实际修改文件"),
 ):
-    """批量调整标注框大小（保持中心点不变）
+    """批量调整标注框大小（支持交互式选择）
     
     适用场景：
     - 标注框过大/过小导致模型效果不佳
@@ -4228,7 +4477,11 @@ def scale_labels(
     
     示例:
     \b
-      # 缩小所有标注到80%
+      # 交互式选择数据集
+      yolo-cli data scale-labels --output datasets/scaled_0.8 --scale 0.8
+      
+    \b
+      # 手动指定数据集路径
       yolo-cli data scale-labels \\
         --dataset datasets/original \\
         --output datasets/scaled_0.8 \\
@@ -4247,13 +4500,81 @@ def scale_labels(
     
     print_section_header("批量调整标注大小")
     
-    # 1. 验证参数
-    dataset_path = Path(dataset_dir)
-    output_path = Path(output_dir)
+    # 1. 确定数据集路径
+    if dataset_dir is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要调整标注的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        console.print()
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_dir)
     
     if not dataset_path.exists():
         print_error(f"数据集目录不存在: {dataset_path}")
         raise typer.Exit(1)
+    
+    print_info(f"数据集路径: {dataset_path}")
+    
+    # 2. 验证其他参数
+    output_path = Path(output_dir)
     
     if scale <= 0:
         print_error(f"缩放比例必须 > 0，当前值: {scale}")

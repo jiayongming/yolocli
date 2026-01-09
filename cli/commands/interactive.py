@@ -496,19 +496,45 @@ def run_data_operations():
                 print_info(f"发现 {len(available_datasets)} 个数据集")
                 console.print()
                 
-                # 让用户多选数据集
+                # 操作说明
+                print_info("💡 操作提示:")
+                print_info("   • 使用 ↑↓ 方向键移动光标")
+                print_info("   • 使用 空格键 选择/取消数据集")
+                print_info("   • 使用 回车键 确认选择")
+                print_info("   • 至少需要选择 2 个数据集进行合并")
+                console.print()
+                
+                # 让用户多选数据集（循环直到选择至少2个）
                 choices = [f"{ds.name} ({ds})" for ds in available_datasets]
-                selected_choices = select_multiple(
-                    "请选择要合并的数据集 (空格选择，回车确认):",
-                    choices
-                )
+                selected_choices = None
                 
-                if not selected_choices:
-                    print_warning("未选择任何数据集")
-                    continue
+                while not selected_choices or len(selected_choices) < 2:
+                    selected_choices = select_multiple(
+                        "请选择要合并的数据集:",
+                        choices
+                    )
+                    
+                    if not selected_choices:
+                        console.print()
+                        print_warning("⚠️  您还没有选择任何数据集！")
+                        print_info("提示: 使用空格键选择数据集，然后按回车确认")
+                        console.print()
+                        
+                        if not confirm_action("重新选择?", default=True):
+                            print_info("操作已取消")
+                            break
+                        console.print()
+                    elif len(selected_choices) < 2:
+                        console.print()
+                        print_warning(f"⚠️  合并操作至少需要选择 2 个数据集，您只选择了 {len(selected_choices)} 个")
+                        console.print()
+                        
+                        if not confirm_action("重新选择?", default=True):
+                            print_info("操作已取消")
+                            break
+                        console.print()
                 
-                if len(selected_choices) < 2:
-                    print_error("至少需要选择2个数据集进行合并")
+                if not selected_choices or len(selected_choices) < 2:
                     continue
                 
                 # 提取选中的数据集路径
@@ -712,29 +738,59 @@ def run_data_operations():
                 
                 # 从类别列表中多选
                 console.print()
+                print_info("💡 操作提示:")
+                print_info("   • 使用 ↑↓ 方向键移动光标")
+                print_info("   • 使用 空格键 选择/取消类别")
+                print_info("   • 使用 回车键 确认选择")
+                console.print()
+                
+                selected_labels = None
+                
                 if is_include_mode:
-                    print_info("💡 选择要保留的类别（空格多选，回车确认）")
-                    selected_labels = select_multiple(
-                        "要保留的类别:",
-                        class_names
-                    )
+                    # 包含模式：选择要保留的类别
+                    while not selected_labels:
+                        selected_labels = select_multiple(
+                            "请选择要保留的类别:",
+                            class_names
+                        )
+                        
+                        if not selected_labels:
+                            console.print()
+                            print_warning("⚠️  您还没有选择任何类别！")
+                            print_info("提示: 使用空格键选择类别，然后按回车确认")
+                            console.print()
+                            
+                            if not confirm_action("重新选择?", default=True):
+                                print_info("操作已取消")
+                                break
+                            console.print()
                     
                     if not selected_labels:
-                        print_warning("未选择任何类别")
                         continue
                     
                     labels_input = ','.join(selected_labels)
                     include_labels = labels_input
                     exclude_labels = None
                 else:
-                    print_info("💡 选择要排除的类别（空格多选，回车确认）")
-                    selected_labels = select_multiple(
-                        "要排除的类别:",
-                        class_names
-                    )
+                    # 排除模式：选择要排除的类别
+                    while not selected_labels:
+                        selected_labels = select_multiple(
+                            "请选择要排除的类别:",
+                            class_names
+                        )
+                        
+                        if not selected_labels:
+                            console.print()
+                            print_warning("⚠️  您还没有选择任何类别！")
+                            print_info("提示: 使用空格键选择类别，然后按回车确认")
+                            console.print()
+                            
+                            if not confirm_action("重新选择?", default=True):
+                                print_info("操作已取消")
+                                break
+                            console.print()
                     
                     if not selected_labels:
-                        print_warning("未选择任何类别")
                         continue
                     
                     labels_input = ','.join(selected_labels)
@@ -842,15 +898,55 @@ def run_data_operations():
                 # 选择任务类型
                 task_type = select_task_type()
                 
-                # 输入数据集路径
-                dataset_path = input_path(
-                    "数据集路径（包含data.yaml的目录）:",
-                    default="data/processed",
-                    must_exist=True
-                )
-                if not dataset_path:
-                    print_warning("操作已取消")
+                # 选择数据集
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
                     continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要合并标签的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_path = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                console.print()
                 
                 # 输出目录
                 output_dir = input_path(
@@ -901,15 +997,55 @@ def run_data_operations():
                 print_info("   • 减少存储空间和训练时间")
                 console.print()
                 
-                # 输入数据集路径
-                dataset_path = input_path(
-                    "数据集路径（包含train/val/test的目录）:",
-                    default="data/processed",
-                    must_exist=True
-                )
-                if not dataset_path:
-                    print_warning("操作已取消")
+                # 选择数据集
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
                     continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要去重的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_path = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                console.print()
                 
                 # 选择去重模式
                 console.print()
@@ -1012,15 +1148,55 @@ def run_data_operations():
                 print_info("   - 支持边界框扩展等高级参数")
                 console.print()
                 
-                # 输入数据集路径
-                dataset_path = input_path(
-                    "数据集路径（包含data.yaml的目录）:",
-                    default="data/processed",
-                    must_exist=True
-                )
-                if not dataset_path:
-                    print_warning("操作已取消")
+                # 选择数据集
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
                     continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要转换格式的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_path = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                console.print()
                 
                 # 选择源格式
                 console.print()
@@ -1124,11 +1300,55 @@ def run_data_operations():
                 print_info("   - 缩放比例：<1表示缩小，>1表示放大，=1不变")
                 console.print()
                 
-                # 输入数据集目录
-                dataset_dir = input_path("数据集目录:", default="data/processed", must_exist=True)
-                if not dataset_dir:
-                    print_warning("操作已取消")
+                # 选择数据集
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
                     continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要调整标注的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_dir = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                console.print()
                 
                 # 智能生成默认输出目录
                 dataset_path = Path(dataset_dir)
