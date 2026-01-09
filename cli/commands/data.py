@@ -1306,12 +1306,12 @@ def verify_dataset(
         # 获取 datasets 目录
         config = ConfigManager()
         datasets_root = config.project_root / 'datasets'
-        
+    
         if not datasets_root.exists():
             print_error(f"datasets 目录不存在: {datasets_root}")
             print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --path 参数指定路径")
-            raise typer.Exit(1)
-        
+        raise typer.Exit(1)
+    
         # 扫描 datasets 目录下的所有子目录
         available_datasets = []
         for item in sorted(datasets_root.iterdir()):
@@ -1399,171 +1399,171 @@ def verify_dataset(
             print_section_header(f"验证数据集 [{idx + 1}/{len(dataset_paths)}]: {data_path.name}")
         
         console.print()
-        print_info(f"数据集路径: {data_path}")
+    print_info(f"数据集路径: {data_path}")
+    
+    # 获取并打印数据集信息
+    if task == 'classify':
+        # 分类任务：统计按类别组织的图像（统一使用 images/ 目录）
+        info = {}
+        for split in ['train', 'val', 'test']:
+            split_dir = data_path / 'images' / split
+            count = 0
+            if split_dir.exists():
+                for class_dir in split_dir.iterdir():
+                    if class_dir.is_dir() and not class_dir.name.startswith('.'):
+                        count += len(list(find_files(class_dir)))
+            info[f'{split}_images'] = count
+            info[f'{split}_labels'] = count  # 分类任务图像=标签
+    else:
+        # 检测/分割任务：从 images/ 和 labels/ 目录统计
+        info = get_dataset_info(data_path)
+    
+    # 打印统计信息
+    print_dataset_info(info)
+    
+    # 验证图像-标签对应关系
+    issues = []
+    
+    if task == 'classify':
+        # 分类任务验证（统一使用 images/ 目录）
+        all_classes = set()
+        split_classes = {}
         
-        # 获取并打印数据集信息
-        if task == 'classify':
-            # 分类任务：统计按类别组织的图像（统一使用 images/ 目录）
-            info = {}
-            for split in ['train', 'val', 'test']:
-                split_dir = data_path / 'images' / split
-                count = 0
-                if split_dir.exists():
-                    for class_dir in split_dir.iterdir():
-                        if class_dir.is_dir() and not class_dir.name.startswith('.'):
-                            count += len(list(find_files(class_dir)))
-                info[f'{split}_images'] = count
-                info[f'{split}_labels'] = count  # 分类任务图像=标签
-        else:
-            # 检测/分割任务：从 images/ 和 labels/ 目录统计
-            info = get_dataset_info(data_path)
-        
-        # 打印统计信息
-        print_dataset_info(info)
-        
-        # 验证图像-标签对应关系
-        issues = []
-        
-        if task == 'classify':
-            # 分类任务验证（统一使用 images/ 目录）
-            all_classes = set()
-            split_classes = {}
+        for split in ['train', 'val', 'test']:
+            split_dir = data_path / 'images' / split
             
-            for split in ['train', 'val', 'test']:
-                split_dir = data_path / 'images' / split
-                
-                if not split_dir.exists():
-                    issues.append(f"缺少 images/{split} 目录")
+            if not split_dir.exists():
+                issues.append(f"缺少 images/{split} 目录")
+                continue
+            
+            # 获取类别目录
+            classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+            split_classes[split] = set(classes)
+            all_classes.update(classes)
+            
+            if not classes:
+                issues.append(f"images/{split}: 没有找到类别子目录")
+                continue
+            
+            # 验证每个类别是否有图像
+            for class_name in classes:
+                class_dir = split_dir / class_name
+                images = list(find_files(class_dir))
+                if not images:
+                    issues.append(f"images/{split}/{class_name}: 类别目录为空")
+        
+        # 检查类别一致性
+        if len(split_classes) > 1:
+            reference_classes = split_classes.get('train', set())
+            for split, classes in split_classes.items():
+                if split == 'train':
                     continue
-                
-                # 获取类别目录
-                classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
-                split_classes[split] = set(classes)
-                all_classes.update(classes)
-                
-                if not classes:
-                    issues.append(f"images/{split}: 没有找到类别子目录")
-                    continue
-                
-                # 验证每个类别是否有图像
-                for class_name in classes:
-                    class_dir = split_dir / class_name
-                    images = list(find_files(class_dir))
-                    if not images:
-                        issues.append(f"images/{split}/{class_name}: 类别目录为空")
-            
-            # 检查类别一致性
-            if len(split_classes) > 1:
-                reference_classes = split_classes.get('train', set())
-                for split, classes in split_classes.items():
-                    if split == 'train':
-                        continue
-                    missing = reference_classes - classes
-                    extra = classes - reference_classes
-                    if missing:
-                        issues.append(f"{split}: 缺少类别 {missing}")
-                    if extra:
-                        issues.append(f"{split}: 多余类别 {extra}")
-            
-            # 显示类别信息
-            if all_classes:
-                console.print()
-                print_info(f"检测到 {len(all_classes)} 个类别:")
-                for cls in sorted(all_classes):
-                    print_info(f"  • {cls}")
+                missing = reference_classes - classes
+                extra = classes - reference_classes
+                if missing:
+                    issues.append(f"{split}: 缺少类别 {missing}")
+                if extra:
+                    issues.append(f"{split}: 多余类别 {extra}")
         
-        else:
-            # 检测/分割任务验证（增强版：包含审计功能）
-            # 审计统计
-            format_stats = {
-                'detect': 0,
-                'segment': 0,
-                'pose': 0,
-                'empty': 0,
-                'unknown': 0
-            }
-            orphan_images = []  # 有图片但没有标签
-            orphan_labels = []  # 有标签但没有图片
-            format_details = {}  # 记录每个文件的格式
+        # 显示类别信息
+        if all_classes:
+            console.print()
+            print_info(f"检测到 {len(all_classes)} 个类别:")
+            for cls in sorted(all_classes):
+                print_info(f"  • {cls}")
+    
+    else:
+        # 检测/分割任务验证（增强版：包含审计功能）
+        # 审计统计
+        format_stats = {
+            'detect': 0,
+            'segment': 0,
+            'pose': 0,
+            'empty': 0,
+            'unknown': 0
+        }
+        orphan_images = []  # 有图片但没有标签
+        orphan_labels = []  # 有标签但没有图片
+        format_details = {}  # 记录每个文件的格式
+        
+        for split in ['train', 'val', 'test']:
+            # 尝试两种目录结构
+            # 结构1: images/train/, labels/train/
+            img_dir = data_path / 'images' / split
+            label_dir = data_path / 'labels' / split
             
-            for split in ['train', 'val', 'test']:
-                # 尝试两种目录结构
-                # 结构1: images/train/, labels/train/
-                img_dir = data_path / 'images' / split
-                label_dir = data_path / 'labels' / split
-                
-                # 结构2: train/images/, train/labels/
-                if not img_dir.exists():
-                    img_dir = data_path / split / 'images'
-                    label_dir = data_path / split / 'labels'
-                
-                # 处理 val/valid 别名
-                if not img_dir.exists() and split == 'val':
-                    # 尝试 valid 作为 val 的别名
-                    img_dir = data_path / 'images' / 'valid'
-                    label_dir = data_path / 'labels' / 'valid'
-                    
-                    if not img_dir.exists():
-                        img_dir = data_path / 'valid' / 'images'
-                        label_dir = data_path / 'valid' / 'labels'
+            # 结构2: train/images/, train/labels/
+            if not img_dir.exists():
+                img_dir = data_path / split / 'images'
+                label_dir = data_path / split / 'labels'
+            
+            # 处理 val/valid 别名
+            if not img_dir.exists() and split == 'val':
+                # 尝试 valid 作为 val 的别名
+                img_dir = data_path / 'images' / 'valid'
+                label_dir = data_path / 'labels' / 'valid'
                 
                 if not img_dir.exists():
-                    continue
-                
-                # 收集所有图片和标签文件名（不含扩展名）
-                image_stems = {img_file.stem for img_file in find_files(img_dir)}
-                label_stems = set()
-                
-                if label_dir.exists():
-                    label_stems = {label_file.stem for label_file in label_dir.glob('*.txt')}
-                
-                # 检查孤儿图片（有图片但没有标签）
-                orphan_imgs = image_stems - label_stems
-                for img_stem in orphan_imgs:
-                    orphan_images.append(f"{split}: {img_stem}")
-                    issues.append(f"{split}: 缺少标签 - {img_stem}")
-                
-                # 检查孤儿标签（有标签但没有图片）
-                orphan_lbls = label_stems - image_stems
-                for lbl_stem in orphan_lbls:
-                    orphan_labels.append(f"{split}: {lbl_stem}")
-                    issues.append(f"{split}: 缺少图片 - {lbl_stem}.txt")
-                
-                # 检查标签文件格式并进行格式审计
-                if label_dir.exists():
-                    for label_file in label_dir.glob('*.txt'):
-                        try:
-                            # 自动检测标签格式
-                            detected_format = _detect_label_format(label_file)
-                            format_stats[detected_format] += 1
+                    img_dir = data_path / 'valid' / 'images'
+                    label_dir = data_path / 'valid' / 'labels'
+            
+            if not img_dir.exists():
+                continue
+            
+            # 收集所有图片和标签文件名（不含扩展名）
+            image_stems = {img_file.stem for img_file in find_files(img_dir)}
+            label_stems = set()
+            
+            if label_dir.exists():
+                label_stems = {label_file.stem for label_file in label_dir.glob('*.txt')}
+            
+            # 检查孤儿图片（有图片但没有标签）
+            orphan_imgs = image_stems - label_stems
+            for img_stem in orphan_imgs:
+                orphan_images.append(f"{split}: {img_stem}")
+                issues.append(f"{split}: 缺少标签 - {img_stem}")
+            
+            # 检查孤儿标签（有标签但没有图片）
+            orphan_lbls = label_stems - image_stems
+            for lbl_stem in orphan_lbls:
+                orphan_labels.append(f"{split}: {lbl_stem}")
+                issues.append(f"{split}: 缺少图片 - {lbl_stem}.txt")
+            
+            # 检查标签文件格式并进行格式审计
+            if label_dir.exists():
+                for label_file in label_dir.glob('*.txt'):
+                    try:
+                        # 自动检测标签格式
+                        detected_format = _detect_label_format(label_file)
+                        format_stats[detected_format] += 1
+                        
+                        # 记录格式不匹配的文件
+                        if detected_format != task and detected_format not in ['empty', 'unknown']:
+                            format_details[f"{split}/{label_file.name}"] = detected_format
+                        
+                        # 根据任务类型验证标签格式
+                        if task == 'segment':
+                            if not _validate_segment_label(label_file):
+                                issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
+                        elif task == 'detect':
+                            is_valid, error_msg = _validate_detect_label(label_file)
+                            if not is_valid:
+                                issues.append(f"{split}: {label_file.name} - {error_msg}")
+                        elif task == 'pose':
+                            # 尝试从 dataset.yaml 读取 kpt_shape
+                            kpt_count = None
+                            dataset_yaml = data_path / 'dataset.yaml'
+                            if dataset_yaml.exists():
+                                with open(dataset_yaml, 'r', encoding='utf-8') as f:
+                                    yaml_data = yaml.safe_load(f)
+                                    kpt_shape = yaml_data.get('kpt_shape')
+                                    if kpt_shape:
+                                        kpt_count = kpt_shape[0]
                             
-                            # 记录格式不匹配的文件
-                            if detected_format != task and detected_format not in ['empty', 'unknown']:
-                                format_details[f"{split}/{label_file.name}"] = detected_format
-                            
-                            # 根据任务类型验证标签格式
-                            if task == 'segment':
-                                if not _validate_segment_label(label_file):
-                                    issues.append(f"{split}: 分割标签格式错误 - {label_file.name}")
-                            elif task == 'detect':
-                                is_valid, error_msg = _validate_detect_label(label_file)
-                                if not is_valid:
-                                    issues.append(f"{split}: {label_file.name} - {error_msg}")
-                            elif task == 'pose':
-                                # 尝试从 dataset.yaml 读取 kpt_shape
-                                kpt_count = None
-                                dataset_yaml = data_path / 'dataset.yaml'
-                                if dataset_yaml.exists():
-                                    with open(dataset_yaml, 'r', encoding='utf-8') as f:
-                                        yaml_data = yaml.safe_load(f)
-                                        kpt_shape = yaml_data.get('kpt_shape')
-                                        if kpt_shape:
-                                            kpt_count = kpt_shape[0]
-                                
-                                if not _validate_pose_label(label_file, kpt_count):
-                                    issues.append(f"{split}: Pose标签格式错误 - {label_file.name}")
-                        except Exception as e:
-                            issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
+                            if not _validate_pose_label(label_file, kpt_count):
+                                issues.append(f"{split}: Pose标签格式错误 - {label_file.name}")
+                    except Exception as e:
+                        issues.append(f"{split}: 无法读取标签 - {label_file.name}: {e}")
         
         # 显示审计报告（仅适用于检测/分割任务）
         if task in ['detect', 'segment', 'pose']:
@@ -1660,55 +1660,55 @@ def verify_dataset(
                             print_info(f"    - {orphan}")
                         print_info(f"    ... 还有 {len(orphan_labels) - 5} 个")
     
-        # 显示验证结果
-        console.print()
-        if issues:
-            print_warning(f"发现 {len(issues)} 个问题:")
+    # 显示验证结果
+    console.print()
+    if issues:
+        print_warning(f"发现 {len(issues)} 个问题:")
         
-            # 分类统计错误类型
-            error_types = {}
-            segment_format_count = 0
+        # 分类统计错误类型
+        error_types = {}
+        segment_format_count = 0
         
-            for issue in issues:
-                if "可能是segment格式" in issue:
-                    segment_format_count += 1
-                    error_type = "segment格式"
-                elif "字段数不足" in issue:
-                    error_type = "字段数不足"
-                elif "超出范围" in issue:
-                    error_type = "坐标超出范围"
-                elif "类别ID为负数" in issue:
-                    error_type = "类别ID错误"
-                elif "缺少标签" in issue:
-                    error_type = "缺少标签文件"
-                elif "缺少图片" in issue:
-                    error_type = "缺少图片文件"
-                else:
-                    error_type = "其他错误"
+        for issue in issues:
+            if "可能是segment格式" in issue:
+                segment_format_count += 1
+                error_type = "segment格式"
+            elif "字段数不足" in issue:
+                error_type = "字段数不足"
+            elif "超出范围" in issue:
+                error_type = "坐标超出范围"
+            elif "类别ID为负数" in issue:
+                error_type = "类别ID错误"
+            elif "缺少标签" in issue:
+                error_type = "缺少标签文件"
+            elif "缺少图片" in issue:
+                error_type = "缺少图片文件"
+            else:
+                error_type = "其他错误"
             
-                error_types[error_type] = error_types.get(error_type, 0) + 1
+            error_types[error_type] = error_types.get(error_type, 0) + 1
         
-            # 显示错误类型统计
-            if error_types:
-                console.print()
-                print_info("错误类型统计:")
-                for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
-                    print_info(f"  • {error_type}: {count} 个")
-        
-            # 如果大量错误是segment格式，给出提示
-            if segment_format_count > len(issues) * 0.5:
-                console.print()
-                print_warning(f"⚠️  检测到 {segment_format_count} 个文件可能是segment格式（字段数>5）")
-                print_info("💡 建议:")
-                print_info("   1. 检查任务类型是否应该是 'segment' 而不是 'detect'")
-                print_info("   2. 或使用 'data format-convert' 命令将segment转换为detect格式")
-        
+        # 显示错误类型统计
+        if error_types:
             console.print()
-            print_info("详细错误信息（前20个）:")
-            for issue in issues[:20]:
-                print_error(f"  • {issue}")
-            if len(issues) > 20:
-                print_warning(f"  ... 还有 {len(issues) - 20} 个问题")
+            print_info("错误类型统计:")
+            for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                print_info(f"  • {error_type}: {count} 个")
+        
+        # 如果大量错误是segment格式，给出提示
+        if segment_format_count > len(issues) * 0.5:
+            console.print()
+            print_warning(f"⚠️  检测到 {segment_format_count} 个文件可能是segment格式（字段数>5）")
+            print_info("💡 建议:")
+            print_info("   1. 检查任务类型是否应该是 'segment' 而不是 'detect'")
+            print_info("   2. 或使用 'data format-convert' 命令将segment转换为detect格式")
+        
+        console.print()
+        print_info("详细错误信息（前20个）:")
+        for issue in issues[:20]:
+            print_error(f"  • {issue}")
+        if len(issues) > 20:
+            print_warning(f"  ... 还有 {len(issues) - 20} 个问题")
     else:
         print_success("✓ 数据集验证通过，未发现问题")
 
@@ -2223,12 +2223,12 @@ def merge_datasets(
     else:
         # 解析数据集路径（手动指定模式）
         dataset_paths = [Path(p.strip()) for p in datasets.split(',')]
-        
-        if len(dataset_paths) < 2:
-            print_error("至少需要指定2个数据集进行合并")
-            raise typer.Exit(1)
-        
-        print_info(f"待合并数据集数量: {len(dataset_paths)}")
+    
+    if len(dataset_paths) < 2:
+        print_error("至少需要指定2个数据集进行合并")
+        raise typer.Exit(1)
+    
+    print_info(f"待合并数据集数量: {len(dataset_paths)}")
     
     # 验证所有数据集路径存在
     for i, ds_path in enumerate(dataset_paths, 1):
@@ -2418,6 +2418,304 @@ def convert_dataset_format(
         keep_confidence=keep_confidence,
         preserve_structure=preserve_structure
     )
+
+
+@app.command("move-dataset")
+def move_dataset(
+    source: Optional[str] = typer.Option(None, "--source", "-s", help="源数据集路径（可选，不指定则交互式选择）"),
+    target: Optional[str] = typer.Option(None, "--target", "-t", help="目标路径（可选）"),
+    direction: str = typer.Option("to-datasets", "--direction", "-d", help="移动方向: to-datasets (移入datasets目录) 或 from-datasets (移出到训练目录)"),
+    copy: bool = typer.Option(False, "--copy", "-c", help="复制而不是移动（保留源文件）"),
+    merge_content: bool = typer.Option(True, "--merge-content/--keep-folder", help="是否将数据集内容直接移动到目标目录（默认: True，适合训练准备）"),
+):
+    """移动数据集到不同位置
+    
+    支持两个方向的移动：
+    1. to-datasets: 将任意位置的数据集移动到 datasets/ 目录集中管理
+    2. from-datasets: 将 datasets/ 下的数据集移动到训练目录（默认: data/processed）
+    
+    示例:
+    \b
+      # 交互式移动数据集到 datasets 目录
+      yolo-cli data move-dataset --direction to-datasets
+      
+    \b
+      # 手动指定源和目标
+      yolo-cli data move-dataset \\
+        --source /path/to/dataset \\
+        --target datasets/my_dataset \\
+        --direction to-datasets
+      
+    \b
+      # 从 datasets 移动到训练目录
+      yolo-cli data move-dataset --direction from-datasets
+      
+    \b
+      # 复制而不是移动
+      yolo-cli data move-dataset \\
+        --source datasets/my_dataset \\
+        --direction from-datasets \\
+        --copy
+    """
+    
+    from pathlib import Path
+    import shutil
+    
+    print_section_header("移动数据集")
+    
+    # 验证方向
+    valid_directions = ['to-datasets', 'from-datasets']
+    if direction not in valid_directions:
+        print_error(f"无效的移动方向: {direction}")
+        print_info(f"可用方向: {', '.join(valid_directions)}")
+        raise typer.Exit(1)
+    
+    config = ConfigManager()
+    datasets_root = config.project_root / 'datasets'
+    
+    # 对于 to-datasets 模式，总是移动整个文件夹
+    if direction == 'to-datasets':
+        merge_content = False
+    
+    # 根据方向处理
+    if direction == 'to-datasets':
+        # 移动到 datasets 目录
+        console.print()
+        print_info("📥 移动模式: 移入 datasets 目录")
+        print_info("   用途: 集中管理数据集")
+        console.print()
+        
+        # 确定源路径
+        if source is None:
+            from ..ui.prompts import input_path
+            source = input_path(
+                "源数据集路径:",
+                must_exist=True
+            )
+            if not source:
+                print_warning("操作已取消")
+                raise typer.Exit(0)
+        
+        source_path = Path(source)
+        if not source_path.exists():
+            print_error(f"源路径不存在: {source_path}")
+            raise typer.Exit(1)
+        
+        if not source_path.is_dir():
+            print_error(f"源路径必须是目录: {source_path}")
+            raise typer.Exit(1)
+        
+        # 确定目标路径
+        if target is None:
+            # 使用源目录的名称作为目标名称
+            target_name = source_path.name
+            target_path = datasets_root / target_name
+            
+            # 如果目标已存在，添加后缀
+            if target_path.exists():
+                counter = 1
+                while target_path.exists():
+                    target_path = datasets_root / f"{target_name}_{counter}"
+                    counter += 1
+        else:
+            target_path = Path(target)
+            if not target_path.is_absolute():
+                target_path = datasets_root / target_path.name
+        
+        # 确保 datasets 目录存在
+        datasets_root.mkdir(parents=True, exist_ok=True)
+        
+    else:  # from-datasets
+        # 从 datasets 目录移出
+        console.print()
+        print_info("📤 移动模式: 移出到训练目录")
+        print_info("   用途: 准备数据用于模型训练")
+        console.print()
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            raise typer.Exit(1)
+        
+        # 确定源路径（从 datasets 目录中选择）
+        if source is None:
+            from ..ui.prompts import select_option
+            
+            # 扫描 datasets 目录
+            available_datasets = []
+            for item in sorted(datasets_root.iterdir()):
+                if item.is_dir() and not item.name.startswith('.'):
+                    available_datasets.append(item)
+            
+            if not available_datasets:
+                print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                raise typer.Exit(1)
+            
+            print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+            console.print()
+            
+            # 让用户单选数据集
+            choices = [f"{ds.name}" for ds in available_datasets]
+            selected_name = select_option(
+                "请选择要移动的数据集:",
+                choices
+            )
+            
+            # 找到对应的路径
+            source_path = None
+            for ds in available_datasets:
+                if ds.name == selected_name:
+                    source_path = ds
+                    break
+            
+            if source_path is None:
+                print_error("未能找到选中的数据集")
+                raise typer.Exit(1)
+            
+            print_info(f"已选择数据集: {source_path.name}")
+        else:
+            source_path = Path(source)
+            if not source_path.is_absolute():
+                source_path = datasets_root / source_path.name
+            
+            if not source_path.exists():
+                print_error(f"源路径不存在: {source_path}")
+                raise typer.Exit(1)
+        
+        # 确定目标路径
+        if target is None:
+            # 默认移动到 data/processed
+            data_processed = config.get_path('data_processed', absolute=True)
+            
+            if merge_content:
+                # 直接使用 data/processed 作为目标（内容会被移动到这里）
+                target_path = data_processed
+            else:
+                # 在 data/processed 下创建数据集子目录
+                target_path = data_processed / source_path.name
+                
+                # 如果目标已存在，添加后缀
+                if target_path.exists():
+                    counter = 1
+                    while target_path.exists():
+                        target_path = data_processed / f"{source_path.name}_{counter}"
+                        counter += 1
+        else:
+            target_path = Path(target)
+            if not target_path.is_absolute():
+                target_path = config.project_root / target_path
+        
+        # 确保目标目录存在
+        target_path.mkdir(parents=True, exist_ok=True)
+    
+    # 显示操作摘要
+    console.print()
+    print_section_header("操作摘要")
+    print_info(f"源路径: {source_path}")
+    print_info(f"目标路径: {target_path}")
+    if direction == 'from-datasets' and merge_content:
+        print_info(f"移动模式: 数据集内容（train/val/test等）将直接移动到目标目录")
+    print_info(f"操作类型: {'复制' if copy else '移动'}")
+    console.print()
+    
+    # 执行移动或复制
+    try:
+        if direction == 'from-datasets' and merge_content:
+            # 移动数据集内容到目标目录
+            
+            # 检查目标目录是否有内容
+            existing_items = []
+            if target_path.exists():
+                existing_items = [item for item in target_path.iterdir() if not item.name.startswith('.')]
+            
+            # 如果目标目录有内容，询问是否清空
+            if existing_items:
+                console.print()
+                print_warning(f"⚠️  目标目录不为空，包含 {len(existing_items)} 个项目:")
+                for item in existing_items[:5]:  # 显示前5个
+                    print_info(f"   • {item.name}")
+                if len(existing_items) > 5:
+                    print_info(f"   ... 还有 {len(existing_items) - 5} 个")
+                
+                console.print()
+                from ..ui.prompts import confirm_action
+                if not confirm_action("是否清空目标目录并继续移动?", default=False):
+                    print_info("操作已取消")
+                    raise typer.Exit(0)
+                
+                # 清空目标目录
+                print_info("正在清空目标目录...")
+                for item in existing_items:
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                        print_info(f"  ✓ 已删除: {item.name}")
+                    except Exception as e:
+                        print_warning(f"  ⚠️  删除失败 {item.name}: {e}")
+                
+                console.print()
+            
+            print_info("正在移动数据集内容...")
+            
+            # 获取源目录下的所有内容并移动
+            moved_count = 0
+            for item in source_path.iterdir():
+                if item.name.startswith('.'):
+                    continue  # 跳过隐藏文件
+                
+                dest_item = target_path / item.name
+                
+                # 移动或复制
+                try:
+                    if copy:
+                        if item.is_dir():
+                            shutil.copytree(item, dest_item)
+                        else:
+                            shutil.copy2(item, dest_item)
+                    else:
+                        shutil.move(str(item), str(dest_item))
+                    
+                    print_info(f"  ✓ {'复制' if copy else '移动'}了: {item.name}")
+                    moved_count += 1
+                except Exception as e:
+                    print_error(f"  ✗ 操作失败 {item.name}: {e}")
+            
+            # 如果是移动模式，删除空的源目录
+            if not copy and moved_count > 0:
+                try:
+                    source_path.rmdir()
+                    print_info(f"  ✓ 已删除空目录: {source_path}")
+                except OSError:
+                    print_warning(f"  ⚠️  源目录不为空，未删除: {source_path}")
+            
+            console.print()
+            print_success(f"✓ 数据集内容已{'复制' if copy else '移动'}到: {target_path}")
+            print_info(f"   共处理 {moved_count} 个项目")
+        else:
+            # 移动整个文件夹
+            if copy:
+                print_info("正在复制数据集...")
+                shutil.copytree(source_path, target_path)
+                print_success(f"✓ 数据集已复制到: {target_path}")
+            else:
+                print_info("正在移动数据集...")
+                shutil.move(str(source_path), str(target_path))
+                print_success(f"✓ 数据集已移动到: {target_path}")
+        
+        # 统计信息
+        console.print()
+        total_files = sum(1 for _ in target_path.rglob('*') if _.is_file())
+        total_size = sum(f.stat().st_size for f in target_path.rglob('*') if f.is_file())
+        size_mb = total_size / (1024 * 1024)
+        
+        print_info(f"📊 数据集信息:")
+        print_info(f"   文件数量: {total_files}")
+        print_info(f"   总大小: {size_mb:.2f} MB")
+        
+    except Exception as e:
+        print_error(f"操作失败: {e}")
+        raise typer.Exit(1)
 
 
 @app.command("deduplicate")
@@ -2947,12 +3245,12 @@ def dataset_stats(
         # 获取 datasets 目录
         config = ConfigManager()
         datasets_root = config.project_root / 'datasets'
-        
+    
         if not datasets_root.exists():
             print_error(f"datasets 目录不存在: {datasets_root}")
             print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --path 参数指定路径")
-            raise typer.Exit(1)
-        
+        raise typer.Exit(1)
+    
         # 扫描 datasets 目录下的所有子目录
         available_datasets = []
         for item in sorted(datasets_root.iterdir()):
@@ -3040,182 +3338,182 @@ def dataset_stats(
             print_section_header(f"数据集统计 [{idx + 1}/{len(dataset_paths)}]: {data_path.name}")
         
         console.print()
-        print_info(f"数据集路径: {data_path}")
-        print_info(f"任务类型: {task}")
-        
-        # 检测任务类型（如果是分类，检查是否有分类结构）
-        is_classify = task == 'classify'
-        if not is_classify:
-            # 自动检测：检查是否是分类数据集结构
-            train_dir = data_path / 'images' / 'train'
-            if train_dir.exists():
-                subdirs = [d for d in train_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
-                # 如果train目录下有子目录，且没有labels目录，可能是分类任务
-                if subdirs and not (data_path / 'labels' / 'train').exists():
-                    is_classify = True
-                    print_info("检测到分类数据集结构")
-        
-        # 获取基本信息
-        info = get_dataset_info(data_path)
-        print_dataset_info(info)
-        
-        # 读取类别名称映射（用于显示类别名称）
-        class_names = {}  # {class_id: class_name}
-        yaml_file = None
-        for yaml_name in ['data.yaml', 'dataset.yaml']:
-            yaml_path = data_path / yaml_name
-            if yaml_path.exists():
-                yaml_file = yaml_path
-                break
-        
-        if yaml_file:
-            try:
-                with open(yaml_file, 'r', encoding='utf-8') as f:
-                    yaml_config = yaml.safe_load(f)
-                    if yaml_config and 'names' in yaml_config:
-                        names_data = yaml_config['names']
-                        if isinstance(names_data, dict):
-                            # {0: 'class1', 1: 'class2'}
-                            class_names = names_data
-                        elif isinstance(names_data, list):
-                            # ['class1', 'class2']
-                            class_names = {i: name for i, name in enumerate(names_data)}
-            except Exception as e:
-                print_warning(f"无法读取类别名称: {e}")
-        
-        if detailed:
-            # 统计正负样本
-            if is_classify:
-                # 分类任务：需要指定正类
-                if positive_classes and isinstance(positive_classes, str):
-                    print_section_header("正负样本统计")
-                    positive_class_list = [c.strip() for c in positive_classes.split(',') if c.strip()]
-                    _print_positive_negative_stats_classify(data_path, positive_class_list)
-            else:
-                # 检测/分割任务
+    print_info(f"数据集路径: {data_path}")
+    print_info(f"任务类型: {task}")
+    
+    # 检测任务类型（如果是分类，检查是否有分类结构）
+    is_classify = task == 'classify'
+    if not is_classify:
+        # 自动检测：检查是否是分类数据集结构
+        train_dir = data_path / 'images' / 'train'
+        if train_dir.exists():
+            subdirs = [d for d in train_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+            # 如果train目录下有子目录，且没有labels目录，可能是分类任务
+            if subdirs and not (data_path / 'labels' / 'train').exists():
+                is_classify = True
+                print_info("检测到分类数据集结构")
+    
+    # 获取基本信息
+    info = get_dataset_info(data_path)
+    print_dataset_info(info)
+    
+    # 读取类别名称映射（用于显示类别名称）
+    class_names = {}  # {class_id: class_name}
+    yaml_file = None
+    for yaml_name in ['data.yaml', 'dataset.yaml']:
+        yaml_path = data_path / yaml_name
+        if yaml_path.exists():
+            yaml_file = yaml_path
+            break
+    
+    if yaml_file:
+        try:
+            with open(yaml_file, 'r', encoding='utf-8') as f:
+                yaml_config = yaml.safe_load(f)
+                if yaml_config and 'names' in yaml_config:
+                    names_data = yaml_config['names']
+                    if isinstance(names_data, dict):
+                        # {0: 'class1', 1: 'class2'}
+                        class_names = names_data
+                    elif isinstance(names_data, list):
+                        # ['class1', 'class2']
+                        class_names = {i: name for i, name in enumerate(names_data)}
+        except Exception as e:
+            print_warning(f"无法读取类别名称: {e}")
+    
+    if detailed:
+        # 统计正负样本
+        if is_classify:
+            # 分类任务：需要指定正类
+            if positive_classes and isinstance(positive_classes, str):
                 print_section_header("正负样本统计")
-                _print_positive_negative_stats(data_path)
+                positive_class_list = [c.strip() for c in positive_classes.split(',') if c.strip()]
+                _print_positive_negative_stats_classify(data_path, positive_class_list)
+        else:
+            # 检测/分割任务
+            print_section_header("正负样本统计")
+            _print_positive_negative_stats(data_path)
         
-            # 统计类别分布
-            print_section_header("类别分布统计")
+        # 统计类别分布
+        print_section_header("类别分布统计")
         
-            if is_classify:
-                # 分类任务：统计每个类别的图片数量
-                for split in ['train', 'val', 'test']:
-                    split_dir = data_path / 'images' / split
-                    if not split_dir.exists():
-                        continue
+        if is_classify:
+            # 分类任务：统计每个类别的图片数量
+            for split in ['train', 'val', 'test']:
+                split_dir = data_path / 'images' / split
+                if not split_dir.exists():
+                    continue
                 
-                    class_counts = {}
-                    classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                class_counts = {}
+                classes = [d.name for d in split_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
                 
-                    for class_name in sorted(classes):
-                        class_dir = split_dir / class_name
-                        images = list(find_files(class_dir))
-                        class_counts[class_name] = len(images)
+                for class_name in sorted(classes):
+                    class_dir = split_dir / class_name
+                    images = list(find_files(class_dir))
+                    class_counts[class_name] = len(images)
                 
-                    if class_counts:
-                        console.print(f"\n[bold]{split.upper()} 集:[/bold]")
-                        columns = ["类别", "图片数量", "比例"]
-                        rows = []
-                        total = sum(class_counts.values())
-                    
-                        for class_name in sorted(class_counts.keys()):
-                            count = class_counts[class_name]
-                            rows.append([
-                                class_name,
-                                count,
-                                f"{count/total*100:.1f}%"
-                            ])
-                    
-                        print_table(f"{split} 类别分布", columns, rows, show_lines=True)
-                        print_info(f"总图片数: {total}, 类别数: {len(class_counts)}")
-            else:
-                # 检测/分割任务：统计边界框和样本数
-                class_counts = defaultdict(int)  # 标注数量
-                class_image_counts = defaultdict(set)  # 样本数（包含该类别的图片）
-                bbox_counts = 0
-            
-                for split in ['train', 'val', 'test']:
-                    # 尝试两种目录结构
-                    label_dir = data_path / 'labels' / split
-                
-                    # 结构2: train/labels/
-                    if not label_dir.exists():
-                        label_dir = data_path / split / 'labels'
-                
-                    # 处理 val/valid 别名
-                    if not label_dir.exists() and split == 'val':
-                        label_dir = data_path / 'labels' / 'valid'
-                        if not label_dir.exists():
-                            label_dir = data_path / 'valid' / 'labels'
-                
-                    if not label_dir.exists():
-                        continue
-                
-                    for label_file in label_dir.glob('*.txt'):
-                        try:
-                            image_name = label_file.stem  # 图片文件名（不含扩展名）
-                            with open(label_file, 'r') as f:
-                                for line in f:
-                                    line = line.strip()
-                                    if not line:
-                                        continue
-                                    parts = line.split()
-                                    if len(parts) >= 5:
-                                        class_id = int(parts[0])
-                                        class_counts[class_id] += 1
-                                        class_image_counts[class_id].add(image_name)  # 记录图片
-                                        bbox_counts += 1
-                        except Exception:
-                            pass
-            
                 if class_counts:
-                    # 根据是否有类别名称决定列数
-                    if class_names:
-                        columns = ["类别ID", "类别名称", "标注数", "标注占比", "样本数", "样本占比"]
-                    else:
-                        columns = ["类别ID", "标注数", "标注占比", "样本数", "样本占比"]
-                
+                    console.print(f"\n[bold]{split.upper()} 集:[/bold]")
+                    columns = ["类别", "图片数量", "比例"]
                     rows = []
-                    total_annotations = sum(class_counts.values())
-                    total_images = len(set().union(*class_image_counts.values()))  # 去重后的总图片数
-                
-                    for class_id in sorted(class_counts.keys()):
-                        annotation_count = class_counts[class_id]
-                        image_count = len(class_image_counts[class_id])
+                    total = sum(class_counts.values())
                     
-                        annotation_ratio = f"{annotation_count/total_annotations*100:.1f}%"
-                        image_ratio = f"{image_count/total_images*100:.1f}%"
+                    for class_name in sorted(class_counts.keys()):
+                        count = class_counts[class_name]
+                        rows.append([
+                            class_name,
+                            count,
+                            f"{count/total*100:.1f}%"
+                        ])
                     
-                        if class_names:
-                            class_name = class_names.get(class_id, f"未知_{class_id}")
-                            rows.append([
-                                class_id,
-                                class_name,
-                                annotation_count,
-                                annotation_ratio,
-                                image_count,
-                                image_ratio
-                            ])
-                        else:
-                            rows.append([
-                                class_id,
-                                annotation_count,
-                                annotation_ratio,
-                                image_count,
-                                image_ratio
-                            ])
+                    print_table(f"{split} 类别分布", columns, rows, show_lines=True)
+                    print_info(f"总图片数: {total}, 类别数: {len(class_counts)}")
+        else:
+            # 检测/分割任务：统计边界框和样本数
+            class_counts = defaultdict(int)  # 标注数量
+            class_image_counts = defaultdict(set)  # 样本数（包含该类别的图片）
+            bbox_counts = 0
+            
+            for split in ['train', 'val', 'test']:
+                # 尝试两种目录结构
+                label_dir = data_path / 'labels' / split
                 
-                    print_table("类别分布", columns, rows, show_lines=True)
-                    print_info(f"总标注数量: {bbox_counts}")
-                    print_info(f"包含标注的图片数: {total_images}")
+                # 结构2: train/labels/
+                if not label_dir.exists():
+                    label_dir = data_path / split / 'labels'
                 
-                    # 显示类别总数
-                    if class_names:
-                        print_info(f"类别总数: {len(class_names)}")
+                # 处理 val/valid 别名
+                if not label_dir.exists() and split == 'val':
+                    label_dir = data_path / 'labels' / 'valid'
+                    if not label_dir.exists():
+                        label_dir = data_path / 'valid' / 'labels'
+                
+                if not label_dir.exists():
+                    continue
+                
+                for label_file in label_dir.glob('*.txt'):
+                    try:
+                        image_name = label_file.stem  # 图片文件名（不含扩展名）
+                        with open(label_file, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                parts = line.split()
+                                if len(parts) >= 5:
+                                    class_id = int(parts[0])
+                                    class_counts[class_id] += 1
+                                    class_image_counts[class_id].add(image_name)  # 记录图片
+                                    bbox_counts += 1
+                    except Exception:
+                        pass
+            
+            if class_counts:
+                # 根据是否有类别名称决定列数
+                if class_names:
+                    columns = ["类别ID", "类别名称", "标注数", "标注占比", "样本数", "样本占比"]
                 else:
-                    print_warning("未找到标注数据")
+                    columns = ["类别ID", "标注数", "标注占比", "样本数", "样本占比"]
+                
+                rows = []
+                total_annotations = sum(class_counts.values())
+                total_images = len(set().union(*class_image_counts.values()))  # 去重后的总图片数
+                
+                for class_id in sorted(class_counts.keys()):
+                    annotation_count = class_counts[class_id]
+                    image_count = len(class_image_counts[class_id])
+                    
+                    annotation_ratio = f"{annotation_count/total_annotations*100:.1f}%"
+                    image_ratio = f"{image_count/total_images*100:.1f}%"
+                    
+                    if class_names:
+                        class_name = class_names.get(class_id, f"未知_{class_id}")
+                        rows.append([
+                            class_id,
+                            class_name,
+                            annotation_count,
+                            annotation_ratio,
+                            image_count,
+                            image_ratio
+                        ])
+                    else:
+                        rows.append([
+                            class_id,
+                            annotation_count,
+                            annotation_ratio,
+                            image_count,
+                            image_ratio
+                        ])
+                
+                print_table("类别分布", columns, rows, show_lines=True)
+                print_info(f"总标注数量: {bbox_counts}")
+                print_info(f"包含标注的图片数: {total_images}")
+                
+                # 显示类别总数
+                if class_names:
+                    print_info(f"类别总数: {len(class_names)}")
+            else:
+                print_warning("未找到标注数据")
 
 
 @app.command("convert-labelstudio")

@@ -1477,6 +1477,196 @@ def run_data_operations():
                         dry_run=False
                     )
             
+            elif operation == 'move-dataset':
+                # 移动数据集
+                print_section_header("移动数据集")
+                
+                console.print()
+                print_info("📦 数据集移动功能：")
+                print_info("   - 移入 datasets: 将任意位置的数据集集中管理")
+                print_info("   - 移出到训练目录: 准备数据用于模型训练")
+                print_info("   - 支持移动或复制操作")
+                console.print()
+                
+                # 选择移动方向
+                direction_choice = select_option(
+                    "选择移动方向:",
+                    [
+                        "to-datasets - 移入 datasets 目录（集中管理）",
+                        "from-datasets - 移出到训练目录（准备训练）",
+                    ]
+                )
+                direction = direction_choice.split(' ')[0]
+                
+                console.print()
+                
+                # 导入必要的模块
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                if direction == 'to-datasets':
+                    # 移入 datasets
+                    print_info("📥 移入模式：将外部数据集移入 datasets 目录")
+                    console.print()
+                    
+                    # 输入源路径
+                    source_path = input_path(
+                        "源数据集路径:",
+                        must_exist=True
+                    )
+                    if not source_path:
+                        print_warning("操作已取消")
+                        continue
+                    
+                    # 询问目标名称（可选）
+                    source_name = Path(source_path).name
+                    console.print()
+                    print_info(f"数据集将以名称 '{source_name}' 保存到 datasets 目录")
+                    
+                    if confirm_action("是否使用其他名称?", default=False):
+                        target_name = input_text("目标名称:", default=source_name)
+                    else:
+                        target_name = source_name
+                    
+                    target_path = f"datasets/{target_name}"
+                    
+                else:  # from-datasets
+                    # 移出 datasets
+                    print_info("📤 移出模式：将数据集移出到训练目录")
+                    console.print()
+                    
+                    # 选择数据集
+                    config = ConfigManager()
+                    datasets_root = config.project_root / 'datasets'
+                    
+                    if not datasets_root.exists():
+                        print_error(f"datasets 目录不存在: {datasets_root}")
+                        print_info("请先创建 datasets 目录")
+                        continue
+                    
+                    # 扫描 datasets 目录
+                    available_datasets = []
+                    for item in sorted(datasets_root.iterdir()):
+                        if item.is_dir() and not item.name.startswith('.'):
+                            available_datasets.append(item)
+                    
+                    if not available_datasets:
+                        print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                        continue
+                    
+                    print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                    console.print()
+                    
+                    # 让用户单选数据集
+                    choices = [f"{ds.name}" for ds in available_datasets]
+                    selected_name = select_option(
+                        "请选择要移动的数据集:",
+                        choices
+                    )
+                    
+                    # 找到对应的路径
+                    dataset_path_obj = None
+                    for ds in available_datasets:
+                        if ds.name == selected_name:
+                            dataset_path_obj = ds
+                            break
+                    
+                    if dataset_path_obj is None:
+                        print_error("未能找到选中的数据集")
+                        continue
+                    
+                    source_path = str(dataset_path_obj)
+                    print_info(f"已选择数据集: {dataset_path_obj.name}")
+                    console.print()
+                    
+                    # 询问目标路径（可选）
+                    data_processed = config.get_path('data_processed', absolute=True)
+                    
+                    print_info(f"默认目标目录: {data_processed}")
+                    print_info(f"数据集将被移动到: {data_processed / dataset_path_obj.name}")
+                    console.print()
+                    
+                    if confirm_action("是否使用自定义目标路径?", default=False):
+                        custom_target = input_path(
+                            "目标路径（将创建数据集子目录）:",
+                            default=str(data_processed),
+                            must_exist=False
+                        )
+                        if not custom_target:
+                            print_warning("操作已取消")
+                            continue
+                        # 传递完整路径（目标目录 + 数据集名称）
+                        target_path = str(Path(custom_target) / dataset_path_obj.name)
+                    else:
+                        # 使用默认：传递 None，让 move_dataset 自动处理
+                        target_path = None
+                
+                # 选择操作类型（移动或复制）
+                console.print()
+                copy_mode = select_option(
+                    "选择操作类型:",
+                    [
+                        "移动 - 删除源文件（节省空间）",
+                        "复制 - 保留源文件（更安全）",
+                    ]
+                )
+                is_copy = "复制" in copy_mode
+                
+                # 对于 from-datasets 模式，询问是移动内容还是整个文件夹
+                merge_content = True  # 默认移动内容
+                if direction == 'from-datasets':
+                    console.print()
+                    print_info("💡 移动模式选择:")
+                    print_info("   • 移动内容: train/val/test 等子目录直接移动到目标目录")
+                    print_info("   • 移动文件夹: 整个数据集文件夹移动到目标目录下")
+                    console.print()
+                    
+                    merge_mode = select_option(
+                        "选择移动模式:",
+                        [
+                            "移动内容 - 直接移动 train/val/test 到目标目录（推荐用于训练）",
+                            "移动文件夹 - 保持数据集文件夹结构",
+                        ]
+                    )
+                    merge_content = "移动内容" in merge_mode
+                
+                # 显示配置摘要
+                console.print()
+                print_section_header("操作摘要")
+                print_info(f"源路径: {source_path}")
+                
+                # 显示目标路径（如果是None，显示实际会使用的路径）
+                if target_path is None and direction == 'from-datasets':
+                    if merge_content:
+                        actual_target = data_processed
+                        print_info(f"目标路径: {actual_target}")
+                        print_info(f"  → train/ val/ test/ 等将直接移动到此目录")
+                    else:
+                        actual_target = data_processed / dataset_path_obj.name
+                        print_info(f"目标路径: {actual_target}")
+                elif target_path is None and direction == 'to-datasets':
+                    # to-datasets 模式下 target_path 不会是 None
+                    print_info(f"目标路径: {target_path}")
+                else:
+                    if direction == 'from-datasets' and merge_content:
+                        print_info(f"目标路径: {target_path}")
+                        print_info(f"  → train/ val/ test/ 等将直接移动到此目录")
+                    else:
+                        print_info(f"目标路径: {target_path}")
+                
+                print_info(f"操作类型: {'复制' if is_copy else '移动'}")
+                console.print()
+                
+                if confirm_action("确认执行操作?"):
+                    from ..commands.data import move_dataset
+                    move_dataset(
+                        source=source_path,
+                        target=target_path,
+                        direction=direction,
+                        copy=is_copy,
+                        merge_content=merge_content
+                    )
+            
             elif operation == 'generate-yaml':
                 # 生成dataset.yaml
                 print_section_header("生成 dataset.yaml")

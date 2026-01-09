@@ -3370,6 +3370,124 @@ python yolo_cli.py data scale-labels [OPTIONS]
   - --classes: 仅处理指定的类别（如：--classes 0,2,5）
   - --dry-run: 预览模式，检查效果但不修改文件
 
+# 移动数据集 🆕
+python yolo_cli.py data move-dataset [OPTIONS]
+  --source TEXT            源数据集路径（可选，不指定则交互式选择）
+  --target TEXT            目标路径（可选）
+  --direction TEXT         移动方向: to-datasets 或 from-datasets（默认: to-datasets）
+  --copy                   复制而不是移动（保留源文件）
+  --merge-content          将数据集内容直接移动到目标目录（默认: True，推荐用于训练准备）
+  --keep-folder            保持数据集文件夹结构（将整个文件夹移动）
+
+使用方式 🆕：
+  # 交互式移入 datasets 目录（推荐）🔥
+  python yolo_cli.py data move-dataset --direction to-datasets
+  
+  # 交互式移出到训练目录（推荐）🔥
+  python yolo_cli.py data move-dataset --direction from-datasets
+  
+  # 或手动指定路径
+  python yolo_cli.py data move-dataset \\
+    --source /path/to/dataset \\
+    --target datasets/my_dataset \\
+    --direction to-datasets
+
+移动模式说明 🔥：
+  • 移动内容模式（--merge-content，默认）：
+    - 将 train/val/test 等子目录直接移动到目标目录
+    - 如果目标目录已有内容，会提示是否清空整个目录（不逐个询问覆盖）
+    - 结果：data/processed/train/, data/processed/val/ 等
+    - 适合：准备训练数据，直接使用 data/processed 作为训练路径
+  
+  • 移动文件夹模式（--keep-folder）：
+    - 将整个数据集文件夹移动到目标目录下
+    - 结果：data/processed/my_dataset/train/, data/processed/my_dataset/val/ 等
+    - 适合：需要保持多个数据集独立管理
+
+功能说明:
+  • to-datasets: 将任意位置的数据集移入 datasets/ 目录集中管理
+    - 默认使用源目录名称
+    - 如果目标已存在，自动添加后缀（_1, _2...）
+    - 适合整理下载或导出的数据集
+  
+  • from-datasets: 将 datasets/ 下的数据集移出到训练目录
+    - 默认目标: data/processed/
+    - 自动选择可用的数据集
+    - 适合准备训练数据
+
+示例:
+  # 将下载的数据集移入 datasets 目录
+  python yolo_cli.py data move-dataset \\
+    --source ~/Downloads/coco_subset \\
+    --direction to-datasets
+  
+  # 从 datasets 移出到训练目录（默认：移动内容）
+  python yolo_cli.py data move-dataset \\
+    --source datasets/coco_subset \\
+    --direction from-datasets
+  # 结果：data/processed/train/, data/processed/val/ 等
+  
+  # 保持文件夹结构移出
+  python yolo_cli.py data move-dataset \\
+    --source datasets/coco_subset \\
+    --direction from-datasets \\
+    --keep-folder
+  # 结果：data/processed/coco_subset/train/, data/processed/coco_subset/val/ 等
+  
+  # 复制到训练目录（保留源文件）
+  python yolo_cli.py data move-dataset \\
+    --source datasets/coco_subset \\
+    --direction from-datasets \\
+    --copy
+  
+  # 指定自定义目标路径
+  python yolo_cli.py data move-dataset \\
+    --source datasets/my_dataset \\
+    --target data/custom_path \\
+    --direction from-datasets
+
+对比示例:
+  源结构：datasets/my_dataset/
+    ├── train/
+    │   ├── images/
+    │   └── labels/
+    ├── val/
+    │   ├── images/
+    │   └── labels/
+    └── data.yaml
+  
+  # 使用 --merge-content（默认）
+  结果：data/processed/
+    ├── train/
+    │   ├── images/
+    │   └── labels/
+    ├── val/
+    │   ├── images/
+    │   └── labels/
+    └── data.yaml
+  
+  # 使用 --keep-folder
+  结果：data/processed/my_dataset/
+    ├── train/
+    │   ├── images/
+    │   └── labels/
+    ├── val/
+    │   ├── images/
+    │   └── labels/
+    └── data.yaml
+
+使用场景:
+  - 集中管理多个数据集（移入 datasets/）
+  - 准备训练数据（移出到 data/processed/）
+  - 数据集备份和迁移
+  - 整理工作区结构
+
+操作特点:
+  • 移动: 删除源文件，节省磁盘空间
+  • 复制: 保留源文件，更安全但占用更多空间
+  • 自动处理冲突（添加后缀避免覆盖）
+  • 显示文件统计信息（文件数、总大小）
+
 # 按标签过滤数据集
 python yolo_cli.py data filter [OPTIONS]
   --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕

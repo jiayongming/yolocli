@@ -837,6 +837,7 @@ def select_data_operation() -> str:
         "convert-format - 转换标注格式 🆕",
         "deduplicate - 数据集去重 🆕",
         "scale-labels - 批量调整标注大小",
+        "move-dataset - 移动数据集 🆕",
         "generate-yaml - 生成dataset.yaml",
         "verify - 验证数据集",
         "stats - 数据统计",
