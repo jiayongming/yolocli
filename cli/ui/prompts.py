@@ -835,6 +835,7 @@ def select_data_operation() -> str:
         "filter - 按标签过滤数据集 🆕",
         "merge-labels - 合并多个类别标签 🆕",
         "convert-format - 转换标注格式 🆕",
+        "deduplicate - 数据集去重 🆕",
         "scale-labels - 批量调整标注大小",
         "generate-yaml - 生成dataset.yaml",
         "verify - 验证数据集",

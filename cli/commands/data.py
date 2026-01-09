@@ -1990,6 +1990,93 @@ def convert_dataset_format(
     )
 
 
+@app.command("deduplicate")
+def deduplicate_dataset(
+    dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含train/val/test的目录）"),
+    mode: str = typer.Option("hash", "--mode", "-m", help="去重模式: hash (哈希), perceptual (感知哈希), both (两者结合)"),
+    action: str = typer.Option("report", "--action", "-a", help="处理方式: report (仅报告), delete (删除), move (移动到duplicates目录)"),
+    priority: str = typer.Option("train>val>test", "--priority", "-p", help="保留优先级: train>val>test 或 val>train>test"),
+    threshold: float = typer.Option(0.95, "--threshold", "-t", help="相似度阈值 (0.0-1.0，仅用于感知哈希)"),
+    cross_split: bool = typer.Option(True, "--cross-split/--within-split", help="是否跨集合去重（train/val/test之间）"),
+):
+    """对已拆分的数据集进行去重
+    
+    检测并处理训练集、验证集、测试集中的重复图片。
+    
+    示例:
+    \b
+      # 仅生成去重报告
+      yolo-cli data deduplicate \\
+        --dataset data/processed \\
+        --mode hash \\
+        --action report
+      
+    \b
+      # 删除重复图片（保留train优先）
+      yolo-cli data deduplicate \\
+        --dataset data/processed \\
+        --mode hash \\
+        --action delete \\
+        --priority "train>val>test"
+      
+    \b
+      # 移动重复图片到duplicates目录
+      yolo-cli data deduplicate \\
+        --dataset data/processed \\
+        --mode perceptual \\
+        --action move \\
+        --threshold 0.95
+      
+    \b
+      # 只在各个集合内部去重，不跨集合
+      yolo-cli data deduplicate \\
+        --dataset data/processed \\
+        --mode hash \\
+        --action delete \\
+        --within-split
+    """
+    
+    print_section_header("数据集去重")
+    
+    # 验证参数
+    valid_modes = ['hash', 'perceptual', 'both']
+    if mode not in valid_modes:
+        print_error(f"无效的去重模式: {mode}")
+        print_info(f"可用模式: {', '.join(valid_modes)}")
+        raise typer.Exit(1)
+    
+    valid_actions = ['report', 'delete', 'move']
+    if action not in valid_actions:
+        print_error(f"无效的处理方式: {action}")
+        print_info(f"可用方式: {', '.join(valid_actions)}")
+        raise typer.Exit(1)
+    
+    # 解析数据集路径
+    dataset_path = Path(dataset_path)
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 解析优先级
+    priority_list = [p.strip() for p in priority.split('>')]
+    valid_splits = ['train', 'val', 'test', 'valid']
+    for split in priority_list:
+        if split not in valid_splits:
+            print_error(f"无效的集合名称: {split}")
+            print_info(f"可用名称: {', '.join(valid_splits)}")
+            raise typer.Exit(1)
+    
+    # 调用去重函数
+    return _deduplicate_dataset_impl(
+        dataset_path=dataset_path,
+        mode=mode,
+        action=action,
+        priority_list=priority_list,
+        threshold=threshold,
+        cross_split=cross_split
+    )
+
+
 @app.command("merge-labels")
 def merge_labels(
     dataset_path: str = typer.Option(..., "--dataset", "-d", help="数据集路径（包含data.yaml的目录）"),
@@ -4436,6 +4523,344 @@ def _convert_format_impl(
     print_info(f"   python yolo_cli.py interactive-mode → fiftyone → load")
     print_info("4. 开始训练")
     print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
+
+
+def _deduplicate_dataset_impl(
+    dataset_path: Path,
+    mode: str,
+    action: str,
+    priority_list: list,
+    threshold: float,
+    cross_split: bool
+):
+    """数据集去重的实现函数"""
+    
+    from ..core.deduplicator import ImageDeduplicator
+    
+    # 1. 扫描所有图片
+    print_section_header("扫描数据集")
+    
+    split_images = {}  # {split_name: [image_paths]}
+    split_labels = {}  # {split_name: [label_paths]}
+    
+    # 检查可能的目录结构
+    for split in ['train', 'val', 'valid', 'test']:
+        images = []
+        labels = []
+        
+        # 尝试 images/split 结构
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        # 尝试 split/images 结构
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        # 尝试直接 split 目录
+        if not img_dir.exists():
+            img_dir = dataset_path / split
+            label_dir = dataset_path / split.replace('images', 'labels')
+        
+        if img_dir.exists():
+            # 收集图片
+            for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
+                images.extend(list(img_dir.glob(f'*{ext}')))
+                images.extend(list(img_dir.glob(f'*{ext.upper()}')))
+            
+            # 收集对应的标签文件
+            if label_dir.exists():
+                for img_file in images:
+                    label_file = label_dir / f"{img_file.stem}.txt"
+                    if label_file.exists():
+                        labels.append(label_file)
+                    else:
+                        labels.append(None)  # 标记为无标签
+            
+            if images:
+                # 统一 valid 为 val
+                split_name = 'val' if split == 'valid' else split
+                split_images[split_name] = images
+                split_labels[split_name] = labels
+                print_info(f"{split_name}: {len(images)} 张图片")
+    
+    if not split_images:
+        print_error("未找到任何图片")
+        print_info("支持的目录结构:")
+        print_info("  • images/train, images/val, images/test")
+        print_info("  • train/images, val/images, test/images")
+        print_info("  • train/, val/, test/")
+        raise typer.Exit(1)
+    
+    total_images = sum(len(imgs) for imgs in split_images.values())
+    print_info(f"\n总图片数: {total_images}")
+    console.print()
+    
+    # 2. 检测重复
+    print_section_header("检测重复图片")
+    
+    print_info(f"去重模式: {mode}")
+    print_info(f"相似度阈值: {threshold}")
+    if cross_split:
+        print_info("跨集合去重: 是（train/val/test 之间）")
+    else:
+        print_info("跨集合去重: 否（仅在各集合内部）")
+    console.print()
+    
+    # 构建图片到集合的映射
+    img_to_split = {}
+    all_images = []
+    
+    if cross_split:
+        # 跨集合去重：所有图片放在一起
+        for split_name, images in split_images.items():
+            for img in images:
+                img_to_split[str(img)] = split_name
+                all_images.append(img)
+        
+        print_info("正在计算图片哈希值...")
+        
+        if mode == 'hash':
+            # 使用 MD5 哈希（完全相同检测）
+            deduplicator = ImageDeduplicator(mode='exact')
+            duplicates = deduplicator.find_duplicates(all_images)
+        elif mode == 'perceptual':
+            # 使用感知哈希（相似图片检测）
+            # 将阈值从 0-1 转换为汉明距离（0-64）
+            hamming_threshold = int((1 - threshold) * 64)
+            deduplicator = ImageDeduplicator(mode='similar', similarity_threshold=hamming_threshold)
+            duplicates = deduplicator.find_duplicates(all_images)
+        else:  # both
+            # 先用哈希检测完全相同的
+            deduplicator_hash = ImageDeduplicator(mode='exact')
+            hash_dups = deduplicator_hash.find_duplicates(all_images)
+            
+            # 再用感知哈希检测相似的
+            hamming_threshold = int((1 - threshold) * 64)
+            deduplicator_perceptual = ImageDeduplicator(mode='similar', similarity_threshold=hamming_threshold)
+            perceptual_dups = deduplicator_perceptual.find_duplicates(all_images)
+            
+            # 合并结果
+            duplicates = hash_dups.copy()
+            for key, files in perceptual_dups.items():
+                if key not in duplicates:
+                    duplicates[key] = files
+                else:
+                    # 合并文件列表
+                    existing = set(duplicates[key])
+                    for f in files:
+                        if f not in existing:
+                            duplicates[key].append(f)
+    else:
+        # 仅在各集合内部去重
+        duplicates = {}
+        for split_name, images in split_images.items():
+            print_info(f"正在检测 {split_name} 集合...")
+            
+            if mode == 'hash':
+                deduplicator = ImageDeduplicator(mode='exact')
+                split_dups = deduplicator.find_duplicates(images)
+            elif mode == 'perceptual':
+                hamming_threshold = int((1 - threshold) * 64)
+                deduplicator = ImageDeduplicator(mode='similar', similarity_threshold=hamming_threshold)
+                split_dups = deduplicator.find_duplicates(images)
+            else:  # both
+                # 哈希去重
+                deduplicator_hash = ImageDeduplicator(mode='exact')
+                hash_dups = deduplicator_hash.find_duplicates(images)
+                
+                # 感知哈希去重
+                hamming_threshold = int((1 - threshold) * 64)
+                deduplicator_perceptual = ImageDeduplicator(mode='similar', similarity_threshold=hamming_threshold)
+                perceptual_dups = deduplicator_perceptual.find_duplicates(images)
+                
+                split_dups = hash_dups.copy()
+                for key, files in perceptual_dups.items():
+                    if key not in split_dups:
+                        split_dups[key] = files
+                    else:
+                        existing = set(split_dups[key])
+                        for f in files:
+                            if f not in existing:
+                                split_dups[key].append(f)
+            
+            duplicates.update(split_dups)
+            for img in images:
+                img_to_split[str(img)] = split_name
+    
+    # 3. 分析重复结果
+    console.print()
+    print_section_header("重复分析")
+    
+    duplicate_groups = []
+    total_duplicates = 0
+    
+    for key, files in duplicates.items():
+        if len(files) > 1:
+            duplicate_groups.append(files)
+            total_duplicates += len(files) - 1  # 保留一个，其余都是重复
+    
+    if not duplicate_groups:
+        print_success("✓ 未发现重复图片！")
+        return
+    
+    print_warning(f"发现 {len(duplicate_groups)} 组重复图片")
+    print_warning(f"重复图片总数: {total_duplicates} 张")
+    console.print()
+    
+    # 显示详细的重复信息
+    print_info("重复详情:")
+    for i, group in enumerate(duplicate_groups[:10], 1):  # 只显示前10组
+        splits_info = {}
+        for img_path in group:
+            split = img_to_split.get(str(img_path), 'unknown')
+            if split not in splits_info:
+                splits_info[split] = []
+            splits_info[split].append(Path(img_path).name)
+        
+        console.print(f"\n  [bold]组 {i}:[/bold] {len(group)} 张重复")
+        for split, names in splits_info.items():
+            console.print(f"    {split}: {', '.join(names[:3])}" + 
+                         (f" ... (+{len(names)-3})" if len(names) > 3 else ""))
+    
+    if len(duplicate_groups) > 10:
+        console.print(f"\n  ... 还有 {len(duplicate_groups) - 10} 组重复未显示")
+    
+    console.print()
+    
+    # 4. 根据优先级决定要保留/删除的文件
+    files_to_remove = []  # [(img_path, label_path, split_name)]
+    files_to_keep = []    # [(img_path, split_name)]
+    
+    for group in duplicate_groups:
+        # 按优先级排序
+        sorted_group = sorted(group, key=lambda x: (
+            priority_list.index(img_to_split.get(str(x), 'unknown')) 
+            if img_to_split.get(str(x), 'unknown') in priority_list 
+            else 999,
+            str(x)  # 相同优先级时按路径排序
+        ))
+        
+        # 保留第一个，删除其余
+        keep_file = sorted_group[0]
+        keep_split = img_to_split.get(str(keep_file), 'unknown')
+        files_to_keep.append((keep_file, keep_split))
+        
+        for dup_file in sorted_group[1:]:
+            dup_split = img_to_split.get(str(dup_file), 'unknown')
+            # 找到对应的标签文件
+            split_idx = split_images[dup_split].index(Path(dup_file))
+            label_file = split_labels[dup_split][split_idx] if split_idx < len(split_labels[dup_split]) else None
+            
+            files_to_remove.append((Path(dup_file), label_file, dup_split))
+    
+    # 5. 执行操作
+    if action == 'report':
+        print_section_header("去重报告（仅报告模式）")
+        
+        print_info(f"保留优先级: {' > '.join(priority_list)}")
+        console.print()
+        
+        # 按集合统计
+        remove_by_split = {}
+        for img_path, label_path, split in files_to_remove:
+            if split not in remove_by_split:
+                remove_by_split[split] = []
+            remove_by_split[split].append((img_path, label_path))
+        
+        print_info("将要删除的文件:")
+        for split in ['train', 'val', 'test']:
+            if split in remove_by_split:
+                count = len(remove_by_split[split])
+                print_warning(f"  {split}: {count} 张图片 + 标签")
+        
+        console.print()
+        print_info("💡 使用 --action delete 删除重复文件")
+        print_info("💡 使用 --action move 移动重复文件到 duplicates 目录")
+    
+    elif action == 'delete':
+        from ..ui.prompts import confirm_action
+        
+        print_section_header("删除重复文件")
+        
+        print_warning(f"即将删除 {len(files_to_remove)} 张重复图片及其标签")
+        console.print()
+        
+        if not confirm_action("确认删除?", default=False):
+            print_info("已取消删除操作")
+            return
+        
+        deleted_count = 0
+        progress = create_progress_bar()
+        task_id = progress.add_task("[red]删除中", total=len(files_to_remove))
+        
+        with progress:
+            for img_path, label_path, split in files_to_remove:
+                try:
+                    # 删除图片
+                    if img_path.exists():
+                        img_path.unlink()
+                        deleted_count += 1
+                    
+                    # 删除标签
+                    if label_path and label_path.exists():
+                        label_path.unlink()
+                    
+                    progress.update(task_id, advance=1)
+                except Exception as e:
+                    print_error(f"删除失败 {img_path.name}: {e}")
+        
+        console.print()
+        print_success(f"✓ 已删除 {deleted_count} 张重复图片")
+        
+    elif action == 'move':
+        print_section_header("移动重复文件")
+        
+        # 创建 duplicates 目录
+        duplicates_dir = dataset_path / 'duplicates'
+        ensure_dir(duplicates_dir)
+        
+        for split in split_images.keys():
+            ensure_dir(duplicates_dir / split / 'images')
+            ensure_dir(duplicates_dir / split / 'labels')
+        
+        moved_count = 0
+        progress = create_progress_bar()
+        task_id = progress.add_task("[yellow]移动中", total=len(files_to_remove))
+        
+        with progress:
+            for img_path, label_path, split in files_to_remove:
+                try:
+                    # 移动图片
+                    dst_img = duplicates_dir / split / 'images' / img_path.name
+                    if img_path.exists():
+                        shutil.move(str(img_path), str(dst_img))
+                        moved_count += 1
+                    
+                    # 移动标签
+                    if label_path and label_path.exists():
+                        dst_label = duplicates_dir / split / 'labels' / label_path.name
+                        shutil.move(str(label_path), str(dst_label))
+                    
+                    progress.update(task_id, advance=1)
+                except Exception as e:
+                    print_error(f"移动失败 {img_path.name}: {e}")
+        
+        console.print()
+        print_success(f"✓ 已移动 {moved_count} 张重复图片到: {duplicates_dir}")
+    
+    # 6. 显示最终统计
+    console.print()
+    print_section_header("去重统计")
+    
+    print_key_value("原始图片总数", total_images)
+    print_key_value("重复组数", len(duplicate_groups))
+    print_key_value("重复图片数", total_duplicates)
+    
+    if action != 'report':
+        remaining = total_images - len(files_to_remove)
+        print_key_value("剩余图片数", remaining)
+        print_key_value("去重率", f"{len(files_to_remove)/total_images*100:.1f}%")
 
 
 def _merge_labels_impl(

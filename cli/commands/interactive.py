@@ -762,6 +762,122 @@ def run_data_operations():
                     task=task_type
                 )
             
+            elif operation == 'deduplicate':
+                # 数据集去重
+                print_section_header("数据集去重")
+                
+                console.print()
+                print_info("🔍 数据集去重功能：")
+                print_info("   - 检测已拆分数据集中的重复图片")
+                print_info("   - 支持哈希和感知哈希两种模式")
+                print_info("   - 可跨集合或仅集合内部去重")
+                print_info("   - 自动处理对应的标签文件")
+                console.print()
+                
+                print_info("💡 使用场景:")
+                print_info("   • 清理训练/验证/测试集中的重复数据")
+                print_info("   • 避免数据泄漏（train和val之间有重复）")
+                print_info("   • 减少存储空间和训练时间")
+                console.print()
+                
+                # 输入数据集路径
+                dataset_path = input_path(
+                    "数据集路径（包含train/val/test的目录）:",
+                    default="data/processed",
+                    must_exist=True
+                )
+                if not dataset_path:
+                    print_warning("操作已取消")
+                    continue
+                
+                # 选择去重模式
+                console.print()
+                mode_choice = select_option(
+                    "选择去重模式:",
+                    [
+                        "哈希去重 - 完全相同的图片（推荐，快速）",
+                        "感知哈希 - 相似的图片（较慢，更全面）",
+                        "组合模式 - 两者结合（最全面，最慢）",
+                    ]
+                )
+                
+                if "哈希去重" in mode_choice:
+                    mode = "hash"
+                elif "感知哈希" in mode_choice:
+                    mode = "perceptual"
+                else:
+                    mode = "both"
+                
+                # 相似度阈值（仅感知哈希需要）
+                threshold = 0.95
+                if mode in ['perceptual', 'both']:
+                    console.print()
+                    threshold = input_number(
+                        "相似度阈值 (0.0-1.0):",
+                        default=0.95,
+                        min_value=0.0,
+                        max_value=1.0
+                    )
+                
+                # 跨集合去重
+                console.print()
+                cross_split = confirm_action(
+                    "是否跨集合去重 (检测train/val/test之间的重复)?",
+                    default=True
+                )
+                
+                # 保留优先级
+                console.print()
+                if cross_split:
+                    priority_choice = select_option(
+                        "选择保留优先级（当跨集合有重复时）:",
+                        [
+                            "train > val > test（优先保留训练集）",
+                            "val > train > test（优先保留验证集）",
+                            "test > val > train（优先保留测试集）",
+                        ]
+                    )
+                    
+                    if "train > val > test" in priority_choice:
+                        priority = "train>val>test"
+                    elif "val > train > test" in priority_choice:
+                        priority = "val>train>test"
+                    else:
+                        priority = "test>val>train"
+                else:
+                    priority = "train>val>test"  # 默认值，不影响集合内部去重
+                
+                # 处理方式
+                console.print()
+                action_choice = select_option(
+                    "选择处理方式:",
+                    [
+                        "仅报告 - 不删除，只查看重复情况",
+                        "删除 - 直接删除重复文件",
+                        "移动 - 移动到duplicates目录保留",
+                    ]
+                )
+                
+                if "仅报告" in action_choice:
+                    action = "report"
+                elif "删除" in action_choice:
+                    action = "delete"
+                else:
+                    action = "move"
+                
+                console.print()
+                
+                # 调用去重函数
+                from ..commands.data import deduplicate_dataset
+                deduplicate_dataset(
+                    dataset_path=dataset_path,
+                    mode=mode,
+                    action=action,
+                    priority=priority,
+                    threshold=threshold,
+                    cross_split=cross_split
+                )
+            
             elif operation == 'convert-format':
                 # 转换标注格式
                 print_section_header("转换标注格式")

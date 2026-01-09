@@ -2319,6 +2319,39 @@ python yolo_cli.py interactive
 - 格式统一以便数据集合并
 - 数据格式预处理
 
+**在交互式模式中进行数据集去重** 🆕：
+
+1. 启动交互式模式：`python yolo_cli.py interactive-mode`
+2. 选择 `数据处理` → `数据集去重`
+3. 输入数据集路径
+4. **选择去重配置**：
+   - 去重模式（哈希/感知哈希/组合）
+   - 相似度阈值（感知哈希模式）
+   - 是否跨集合去重
+   - 保留优先级（train/val/test）
+   - 处理方式（报告/删除/移动）
+5. 系统自动完成：
+   - 扫描所有图片
+   - 计算哈希值
+   - 检测重复
+   - 按优先级保留文件
+   - 执行相应操作
+
+三种去重模式对比：
+- **哈希去重（推荐）**: 检测完全相同的图片，速度快，准确度高
+- **感知哈希**: 检测相似图片（如轻微编辑、裁剪后），较慢但更全面
+- **组合模式**: 两者结合，最全面但最慢
+
+典型应用：
+- **防止数据泄漏**: 确保train和val/test之间没有重复
+- **清理重复数据**: 减少存储和训练时间
+- **提高评估质量**: 避免测试集被"见过"
+
+安全建议：
+- 首次使用建议选择"仅报告"模式
+- 确认无误后再使用"删除"或"移动"
+- "移动"模式会保留备份，更安全
+
 **在交互式模式中合并类别标签** 🆕：
 
 1. 启动交互式模式：`python yolo_cli.py interactive-mode`
@@ -3006,6 +3039,64 @@ python yolo_cli.py data convert-format [OPTIONS]
     • 推荐值: 0.05-0.15 (5%-15%)
     • 用途: segment/pose→detect时扩大检测框
   - --preserve-structure: 保持原数据集的train/val/test分割
+
+# 数据集去重 🆕
+python yolo_cli.py data deduplicate [OPTIONS]
+  --dataset TEXT           数据集路径（必需）
+  --mode TEXT              去重模式: hash/perceptual/both（默认: hash）
+  --action TEXT            处理方式: report/delete/move（默认: report）
+  --priority TEXT          保留优先级（默认: train>val>test）
+  --threshold FLOAT        相似度阈值（默认: 0.95，用于感知哈希）
+  --cross-split/--within-split  是否跨集合去重（默认: 跨集合）
+
+去重模式说明:
+  • hash: 基于MD5哈希，检测完全相同的图片（快速，推荐）
+  • perceptual: 基于感知哈希，检测相似的图片（较慢，更全面）
+  • both: 两者结合，最全面的检测（最慢）
+
+处理方式:
+  • report: 仅生成报告，不修改文件（安全）
+  • delete: 删除重复文件（不可恢复）
+  • move: 移动重复文件到duplicates目录（可恢复）
+
+示例:
+  # 仅生成去重报告
+  python yolo_cli.py data deduplicate \\
+    --dataset data/processed \\
+    --mode hash \\
+    --action report
+  
+  # 删除完全相同的重复图片（优先保留训练集）
+  python yolo_cli.py data deduplicate \\
+    --dataset data/processed \\
+    --mode hash \\
+    --action delete \\
+    --priority "train>val>test"
+  
+  # 移动相似图片到duplicates目录
+  python yolo_cli.py data deduplicate \\
+    --dataset data/processed \\
+    --mode perceptual \\
+    --action move \\
+    --threshold 0.95
+  
+  # 只在各集合内部去重（不跨train/val/test）
+  python yolo_cli.py data deduplicate \\
+    --dataset data/processed \\
+    --mode hash \\
+    --action delete \\
+    --within-split
+
+使用场景:
+  - 清理训练集、验证集、测试集中的重复数据
+  - 防止数据泄漏（train和val/test之间有重复）
+  - 减少存储空间和训练时间
+  - 提高模型评估的准确性
+
+优先级说明:
+  • train>val>test: 跨集合有重复时，优先保留训练集的图片
+  • val>train>test: 优先保留验证集
+  • test>val>train: 优先保留测试集
 
 # 合并多个类别标签 🆕
 python yolo_cli.py data merge-labels [OPTIONS]
