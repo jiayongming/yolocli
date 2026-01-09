@@ -1751,8 +1751,90 @@ def run_train_operations():
                 
                 config = build_training_config()
                 
-                # 数据集路径
-                data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=True)
+                # 选择数据集来源
+                dataset_source_choice = select_option(
+                    "选择数据集来源:",
+                    choices=[
+                        "从 datasets 目录选择（推荐）",
+                        "手动输入路径",
+                    ]
+                )
+                
+                data_path = None
+                if "datasets 目录" in dataset_source_choice:
+                    # 从 datasets 目录选择
+                    from pathlib import Path as PathLib
+                    from ..core.config import ConfigManager
+                    
+                    config_mgr = ConfigManager()
+                    datasets_root = PathLib(config_mgr.get('paths.datasets', 'datasets'))
+                    
+                    if not datasets_root.exists():
+                        print_error(f"datasets 目录不存在: {datasets_root}")
+                        print_info("请先创建 datasets 目录或使用手动输入模式")
+                        continue
+                    
+                    # 扫描 datasets 目录
+                    available_datasets = []
+                    for item in sorted(datasets_root.iterdir()):
+                        if item.is_dir() and not item.name.startswith('.'):
+                            has_images = (item / 'images').exists() or \
+                                         (item / 'train').exists() or \
+                                         (item / 'val').exists() or \
+                                         (item / 'valid').exists() or \
+                                         (item / 'test').exists()
+                            has_config = (item / 'data.yaml').exists() or \
+                                        (item / 'dataset.yaml').exists()
+                            if has_images or has_config:
+                                available_datasets.append(item)
+                    
+                    if not available_datasets:
+                        print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                        print_info("请先合并、过滤或移动数据集到 datasets 目录")
+                        continue
+                    
+                    print_info(f"发现 {len(available_datasets)} 个数据集")
+                    console.print()
+                    
+                    # 选择数据集
+                    dataset_choices = [
+                        f"{ds.name} ({'data.yaml' if (ds / 'data.yaml').exists() else 'dataset.yaml' if (ds / 'dataset.yaml').exists() else '无配置'})"
+                        for ds in available_datasets
+                    ]
+                    
+                    selected_dataset_display = select_option(
+                        "选择训练数据集:",
+                        choices=dataset_choices
+                    )
+                    
+                    # 从显示文本中提取数据集名称（第一个空格之前的部分）
+                    selected_dataset_name = selected_dataset_display.split(' ')[0]
+                    dataset_path_obj = datasets_root / selected_dataset_name
+                    print_info(f"已选择数据集: {dataset_path_obj.name}")
+                    console.print()
+                    
+                    # 查找配置文件
+                    yaml_file = None
+                    for yaml_name in ['data.yaml', 'dataset.yaml']:
+                        yaml_path = dataset_path_obj / yaml_name
+                        if yaml_path.exists():
+                            yaml_file = yaml_path
+                            break
+                    
+                    if not yaml_file:
+                        print_error(f"在 {dataset_path_obj.name} 中未找到 data.yaml 或 dataset.yaml")
+                        continue
+                    
+                    data_path = str(yaml_file)
+                    print_info(f"使用配置文件: {yaml_file.name}")
+                
+                else:
+                    # 手动输入路径
+                    data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=True)
+                
+                if not data_path:
+                    print_error("未指定数据集路径")
+                    continue
                 
                 # 模型名称
                 model_name = YOLOVersionManager.get_model_name(config['version'], config['model_size'])
