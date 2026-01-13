@@ -1108,50 +1108,53 @@ def run_data_operations():
                 
                 console.print()
                 
-                # 第二步：类别筛选（仅在按类别合并模式下提供）
+                # 第二步：类别筛选
+                print_info("步骤 2/3: 选择要处理的类别范围")
                 merge_classes = None
-                if merge_by_class:
-                    print_info("步骤 2/3: 选择要处理的类别范围")
-                    if confirm_action("是否只处理特定类别？（否则处理所有类别）", default=False):
-                        if dataset_classes:
-                            # 使用交互式多选
-                            console.print()
-                            class_choices = [f"{class_id}: {class_name}" for class_id, class_name in sorted(dataset_classes.items())]
-                            selected_classes = select_multiple(
-                                "选择要处理的类别（空格选择，回车确认）:",
-                                class_choices
-                            )
-                            
-                            if selected_classes:
-                                # 提取类别ID
-                                selected_ids = [choice.split(':')[0] for choice in selected_classes]
-                                merge_classes = ','.join(selected_ids)
-                                selected_names = [dataset_classes[int(id_str)] for id_str in selected_ids]
-                                print_info(f"✓ 将只处理类别: {', '.join(selected_names)} (ID: {merge_classes})")
-                            else:
-                                print_info("✓ 未选择类别，将处理所有类别")
-                        else:
-                            # 如果没有读取到类别信息，回退到手动输入
-                            classes_str = input_text(
-                                "输入要处理的类别ID（逗号分隔，如: 0,1,2）:",
-                                default=""
-                            )
-                            if classes_str:
-                                merge_classes = classes_str
-                                print_info(f"✓ 将只处理类别ID: {classes_str}")
-                            else:
-                                print_info("✓ 将处理所有类别")
-                    else:
-                        print_info("✓ 将处理所有类别")
-                    console.print()
-                else:
-                    print_info("步骤 2/3: 类别范围（所有框合并模式将处理所有类别）")
-                    console.print()
                 
-                # 第三步：配置新类别名称（仅在全部合并模式下需要）
+                if confirm_action("是否只处理特定类别？（否则处理所有类别）", default=False):
+                    if dataset_classes:
+                        # 使用交互式多选
+                        console.print()
+                        class_choices = [f"{class_id}: {class_name}" for class_id, class_name in sorted(dataset_classes.items())]
+                        selected_classes = select_multiple(
+                            "选择要处理的类别（空格选择，回车确认）:",
+                            class_choices
+                        )
+                        
+                        if selected_classes:
+                            # 提取类别ID
+                            selected_ids = [choice.split(':')[0] for choice in selected_classes]
+                            merge_classes = ','.join(selected_ids)
+                            selected_names = [dataset_classes[int(id_str)] for id_str in selected_ids]
+                            print_info(f"✓ 将只处理类别: {', '.join(selected_names)} (ID: {merge_classes})")
+                        else:
+                            print_info("✓ 未选择类别，将处理所有类别")
+                    else:
+                        # 如果没有读取到类别信息，回退到手动输入
+                        classes_str = input_text(
+                            "输入要处理的类别ID（逗号分隔，如: 0,1,2）:",
+                            default=""
+                        )
+                        if classes_str:
+                            merge_classes = classes_str
+                            print_info(f"✓ 将只处理类别ID: {classes_str}")
+                        else:
+                            print_info("✓ 将处理所有类别")
+                else:
+                    print_info("✓ 将处理所有类别")
+                
+                console.print()
+                
+                # 第三步：配置新类别名称和其他选项
                 new_class_name = None
+                keep_others = False
+                
                 if not merge_by_class:
-                    print_info("步骤 3/3: 设置合并后的类别名称")
+                    print_info("步骤 3/3: 配置合并选项")
+                    console.print()
+                    
+                    # 3.1 新类别名称
                     new_class_name = input_text(
                         "输入合并后的新类别名称:",
                         default="merged"
@@ -1159,6 +1162,21 @@ def run_data_operations():
                     if not new_class_name:
                         print_warning("必须指定新类别名称")
                         continue
+                    
+                    console.print()
+                    
+                    # 3.2 是否保留其他类别（仅在指定了特定类别时询问）
+                    if merge_classes:
+                        print_info("💡 您选择了部分类别进行合并")
+                        print_info("   未选中的其他类别可以选择保留或忽略")
+                        console.print()
+                        if confirm_action("是否保留未选中的其他类别？", default=True):
+                            keep_others = True
+                            print_info("✓ 将保留其他类别（生成多类别数据集）")
+                        else:
+                            print_info("✓ 将忽略其他类别（只保留合并后的类别）")
+                    else:
+                        print_info("💡 处理所有类别，将全部合并为一个框")
                 else:
                     print_info("步骤 3/3: 类别名称（按类别合并模式保留原类别名称）")
                 
@@ -1171,18 +1189,6 @@ def run_data_operations():
                 # 检查输出目录
                 if not check_and_clear_directory(output_dir):
                     continue
-                
-                # 询问是否保留其他类别（仅在指定了特定类别且非by-class模式时）
-                keep_others = False
-                if merge_classes and not merge_by_class:
-                    console.print()
-                    print_info("💡 提示: 您选择了特定类别进行合并")
-                    if confirm_action("是否保留未选中的其他类别？", default=True):
-                        keep_others = True
-                        print_info("✓ 将保留其他类别")
-                    else:
-                        print_info("✓ 将忽略其他类别")
-                    console.print()
                 
                 # 调用合并函数
                 from ..commands.data import merge_boxes
