@@ -36,7 +36,7 @@ class LabelStudioUploader:
             url: Label Studio服务器URL
             api_key: API密钥（支持Refresh Token或Access Token）
             project_id: 项目ID
-            task_type: 任务类型 (detect/segment/pose)
+            task_type: 任务类型 (detect/segment/pose/classify)
         """
         self.url = url.rstrip('/')
         self.original_token = api_key
@@ -1265,8 +1265,7 @@ class LabelStudioUploader:
             ])
             
             # Pose任务：包含矩形框（用于框住整个对象）和关键点
-            labeling_config = f"""
-<View>
+            labeling_config = f"""<View>
   <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
   <RectangleLabels name="label" toName="image" strokeWidth="3" opacity="0.9">
     {self._generate_label_tags()}
@@ -1274,21 +1273,39 @@ class LabelStudioUploader:
   <KeyPointLabels name="keypoint" toName="image" opacity="0.9">
     {keypoint_labels}
   </KeyPointLabels>
-</View>
-"""
+</View>"""
+        elif task == 'segment':
+            # 分割任务：只需要多边形来标注物体轮廓
+            labeling_config = f"""<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <PolygonLabels name="label" toName="image" strokeWidth="3" pointSize="small" opacity="0.9">
+    {self._generate_label_tags()}
+  </PolygonLabels>
+</View>"""
+        elif task in ['classify', 'classification', 'cls']:
+            # 分类任务：只需要选择图片的类别
+            choice_options = '\n    '.join([
+                f'<Choice value="{cls}"/>'
+                for cls in self.classes
+            ])
+            
+            labeling_config = f"""<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <Choices name="choice" toName="image" choice="single">
+    {choice_options}
+  </Choices>
+</View>"""
         else:
-            # 检测/分割任务：矩形框和多边形
-            labeling_config = f"""
-<View>
+            # 检测任务（detect）或其他：只需要矩形框
+            labeling_config = f"""<View>
   <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
   <RectangleLabels name="label" toName="image" strokeWidth="3" opacity="0.9">
     {self._generate_label_tags()}
   </RectangleLabels>
-  <PolygonLabels name="polygon" toName="image" strokeWidth="3" pointSize="small" opacity="0.9">
-    {self._generate_label_tags()}
-  </PolygonLabels>
-</View>
-"""
+</View>"""
+        
+        # 验证配置，避免重复的标签控件
+        labeling_config = self._validate_and_cleanup_config(labeling_config)
         
         url = f"{self.url}/api/projects/{self.project_id}"
         
@@ -1309,6 +1326,56 @@ class LabelStudioUploader:
         except Exception as e:
             print_error(f"✗ 配置异常: {str(e)}")
             return False
+    
+    def _validate_and_cleanup_config(self, config: str) -> str:
+        """
+        验证并清理配置，移除重复的标签控件
+        
+        Args:
+            config: Label Studio配置XML字符串
+        
+        Returns:
+            清理后的配置字符串
+        """
+        try:
+            # 解析XML
+            root = ET.fromstring(config)
+            
+            # 检查并移除重复的标签控件
+            seen_controls = {}  # {(tag_name, name_attr): element}
+            elements_to_remove = []
+            duplicates = []
+            
+            for elem in root.findall('.//*[@name][@toName]'):
+                tag_name = elem.tag
+                name_attr = elem.get('name')
+                control_key = (tag_name, name_attr)
+                
+                if control_key in seen_controls:
+                    # 发现重复的控件
+                    duplicates.append(f"<{tag_name} name=\"{name_attr}\">")
+                    elements_to_remove.append(elem)
+                else:
+                    seen_controls[control_key] = elem
+            
+            # 如果发现重复，显示警告并移除
+            if elements_to_remove:
+                print_warning(f"⚠ 检测到 {len(elements_to_remove)} 个重复的标签控件，已自动移除")
+                
+                for elem in elements_to_remove:
+                    # 找到父元素并移除
+                    for parent in root.iter():
+                        if elem in list(parent):
+                            parent.remove(elem)
+                            break
+            
+            # 将清理后的XML转换回字符串
+            cleaned_config = ET.tostring(root, encoding='unicode')
+            return cleaned_config
+            
+        except ET.ParseError as e:
+            print_warning(f"⚠ 无法解析配置XML: {e}，将使用原始配置")
+            return config
     
     def _generate_label_tags(self) -> str:
         """生成Label标签"""
