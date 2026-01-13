@@ -834,6 +834,7 @@ def select_data_operation() -> str:
         "merge - 合并多个数据集",
         "filter - 按标签过滤数据集 🆕",
         "merge-labels - 合并多个类别标签 🆕",
+        "merge-boxes - 合并边界框 🆕",
         "convert-format - 转换标注格式 🆕",
         "deduplicate - 数据集去重 🆕",
         "scale-labels - 批量调整标注大小",

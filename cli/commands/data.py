@@ -6495,5 +6495,595 @@ def _merge_labels_impl(
     print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
 
 
+@app.command("merge-boxes")
+def merge_boxes(
+    dataset_path: Optional[str] = typer.Option(None, "--dataset", "-d", help="数据集路径（可选，不指定则从 datasets 目录中选择）"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录"),
+    merge_classes: Optional[str] = typer.Option(None, "--classes", "-c", help="要合并的类别ID（逗号分隔，如: 0,1,2），不指定则合并所有类别"),
+    new_class_name: Optional[str] = typer.Option(None, "--new-class", "-n", help="合并后的新类别名称"),
+    merge_by_class: bool = typer.Option(False, "--by-class", help="按类别分别合并（同一类合并为一个框，不同类保持独立）"),
+    keep_others: bool = typer.Option(False, "--keep-others", help="保留未指定的其他类别（仅在指定--classes时有效）"),
+    task: str = typer.Option("detect", "--task", "-t", help="任务类型 (detect/segment)"),
+):
+    """合并多个边界框为一个大框（支持交互式选择）
+    
+    将同一张图片中的多个小框合并为一个大的外接矩形框。
+    适用场景：数字分段、多字符合并等。
+    
+    示例:
+    \b
+      # 交互式选择数据集，合并所有框
+      yolo-cli data merge-boxes --new-class "display"
+      
+    \b
+      # 手动指定数据集路径
+      yolo-cli data merge-boxes \\
+        --dataset datasets/digit_segments \\
+        --new-class "display" \\
+        --output datasets/merged_display
+      
+    \b
+      # 只合并特定类别的框（类别 0,1,2）
+      yolo-cli data merge-boxes \\
+        --dataset datasets/digit_segments \\
+        --classes 0,1,2 \\
+        --new-class "number" \\
+        --output datasets/merged_numbers
+      
+    \b
+      # 按类别分别合并（每个类别内部合并，不同类别独立）
+      yolo-cli data merge-boxes \\
+        --dataset datasets/multi_class \\
+        --by-class \\
+        --output datasets/merged_by_class
+    """
+    
+    print_section_header("合并边界框")
+    
+    # 验证任务类型
+    task = validate_task_type(task)
+    
+    if task not in ['detect', 'segment']:
+        print_error("边界框合并仅支持 detect 和 segment 任务")
+        raise typer.Exit(1)
+    
+    # 确定数据集路径
+    if dataset_path is None:
+        from ..ui.prompts import select_option
+        
+        # 获取 datasets 目录
+        config = ConfigManager()
+        datasets_root = config.project_root / 'datasets'
+        
+        if not datasets_root.exists():
+            print_error(f"datasets 目录不存在: {datasets_root}")
+            print_info("请先创建 datasets 目录并在其中放置数据集，或使用 --dataset 参数指定路径")
+            raise typer.Exit(1)
+        
+        # 扫描 datasets 目录下的所有子目录
+        available_datasets = []
+        for item in sorted(datasets_root.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # 检查是否是有效的数据集目录
+                has_images = (item / 'images').exists() or \
+                             (item / 'train').exists() or \
+                             (item / 'val').exists() or \
+                             (item / 'valid').exists() or \
+                             (item / 'test').exists()
+                has_config = (item / 'data.yaml').exists() or \
+                            (item / 'dataset.yaml').exists() or \
+                            (item / 'classes.txt').exists()
+                
+                if has_images or has_config:
+                    available_datasets.append(item)
+        
+        if not available_datasets:
+            print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+            print_info("数据集目录应包含以下任一结构:")
+            print_info("  • images/ 目录")
+            print_info("  • train/val/valid/test 目录")
+            print_info("  • data.yaml 或 dataset.yaml 配置文件")
+            print_info("\n或使用 --dataset 参数手动指定数据集路径")
+            raise typer.Exit(1)
+        
+        print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+        console.print()
+        
+        # 让用户单选数据集
+        choices = [f"{ds.name}" for ds in available_datasets]
+        selected_name = select_option(
+            "请选择要处理的数据集:",
+            choices
+        )
+        
+        # 找到对应的路径
+        dataset_path_obj = None
+        for ds in available_datasets:
+            if ds.name == selected_name:
+                dataset_path_obj = ds
+                break
+        
+        if dataset_path_obj is None:
+            print_error("未能找到选中的数据集")
+            raise typer.Exit(1)
+        
+        print_info(f"已选择数据集: {dataset_path_obj.name}")
+        dataset_path = dataset_path_obj
+    else:
+        # 手动指定路径
+        dataset_path = Path(dataset_path)
+    
+    if not dataset_path.exists():
+        print_error(f"数据集路径不存在: {dataset_path}")
+        raise typer.Exit(1)
+    
+    console.print()
+    print_info(f"数据集路径: {dataset_path}")
+    
+    # 确定输出目录
+    if output_dir is None:
+        config = ConfigManager()
+        output_path = config.get_path('data_processed', absolute=True) / 'merged_boxes'
+    else:
+        output_path = Path(output_dir)
+    
+    # 解析要合并的类别
+    merge_class_ids = None
+    if merge_classes:
+        try:
+            merge_class_ids = [int(c.strip()) for c in merge_classes.split(',')]
+            print_info(f"仅合并类别: {merge_class_ids}")
+        except ValueError:
+            print_error(f"类别ID格式错误: {merge_classes}")
+            print_info("正确格式: 0,1,2")
+            raise typer.Exit(1)
+    
+    # 调用合并函数
+    return _merge_boxes_impl(
+        dataset_path=dataset_path,
+        output_path=output_path,
+        merge_class_ids=merge_class_ids,
+        new_class_name=new_class_name,
+        merge_by_class=merge_by_class,
+        keep_others=keep_others,
+        task=task
+    )
+
+
+def _merge_boxes_impl(
+    dataset_path: Path,
+    output_path: Path,
+    merge_class_ids: Optional[List[int]],
+    new_class_name: Optional[str],
+    merge_by_class: bool,
+    keep_others: bool,
+    task: str
+):
+    """合并边界框的实现函数"""
+    
+    # 1. 读取数据集配置
+    print_section_header("读取数据集配置")
+    
+    # 检查输入是文件还是目录
+    if dataset_path.is_file() and dataset_path.suffix in ['.yaml', '.yml']:
+        data_yaml = dataset_path
+        dataset_path = dataset_path.parent
+        print_info(f"使用配置文件: {data_yaml.name}")
+    elif dataset_path.is_dir():
+        yaml_files = list(dataset_path.glob('*.yaml')) + list(dataset_path.glob('*.yml'))
+        data_yaml = None
+        for yaml_file in yaml_files:
+            if yaml_file.name in ['data.yaml', 'dataset.yaml']:
+                data_yaml = yaml_file
+                break
+        
+        if data_yaml is None and yaml_files:
+            data_yaml = yaml_files[0]
+        
+        if data_yaml is None:
+            print_error(f"在 {dataset_path} 中未找到 data.yaml 或 dataset.yaml")
+            raise typer.Exit(1)
+        
+        print_info(f"找到配置文件: {data_yaml.name}")
+    else:
+        print_error(f"路径不存在或不是有效的文件/目录: {dataset_path}")
+        raise typer.Exit(1)
+    
+    # 读取配置
+    with open(data_yaml, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    # 获取类别信息
+    if 'names' not in config:
+        print_error("数据集配置中缺少 'names' 字段")
+        raise typer.Exit(1)
+    
+    if isinstance(config['names'], dict):
+        original_classes = config['names']  # {id: name}
+    elif isinstance(config['names'], list):
+        original_classes = {i: name for i, name in enumerate(config['names'])}
+    else:
+        print_error("数据集配置中的 'names' 字段格式不正确")
+        raise typer.Exit(1)
+    
+    print_info(f"原始类别数: {len(original_classes)}")
+    print_info(f"类别列表: {', '.join(original_classes.values())}")
+    
+    # 2. 确定新的类别名称
+    console.print()
+    print_section_header("配置新类别")
+    
+    if not merge_by_class:
+        # 所有框合并为一个类
+        if new_class_name is None:
+            from ..ui.prompts import input_text
+            
+            print_info("💡 所有框将合并为一个大框")
+            console.print()
+            
+            # 交互式输入新类别名称
+            new_class_name = input_text(
+                "请输入合并后的类别名称:",
+                default="merged"
+            )
+            
+            if not new_class_name:
+                print_error("必须指定新类别名称")
+                raise typer.Exit(1)
+        
+        print_info(f"合并后的类别名称: {new_class_name}")
+        
+        # 新的类别配置
+        if merge_class_ids and keep_others:
+            # 合并指定类别，保留其他类别
+            new_classes = {0: new_class_name}
+            # 添加其他未合并的类别
+            other_class_id = 1
+            for class_id, class_name in original_classes.items():
+                if class_id not in merge_class_ids:
+                    new_classes[other_class_id] = class_name
+                    other_class_id += 1
+            print_info(f"保留其他类别: {', '.join([name for id, name in new_classes.items() if id > 0])}")
+        else:
+            new_classes = {0: new_class_name}
+        
+        target_class_id = 0
+    else:
+        # 按类别分别合并
+        print_info("按类别分别合并，保留原有类别")
+        
+        if merge_class_ids:
+            # 只保留要合并的类别
+            new_classes = {i: original_classes[class_id] 
+                          for i, class_id in enumerate(sorted(merge_class_ids)) 
+                          if class_id in original_classes}
+        else:
+            # 保留所有类别
+            new_classes = original_classes.copy()
+        
+        target_class_id = None  # 不需要统一的目标类别
+    
+    # 3. 创建输出目录
+    for split in ['train', 'val', 'test']:
+        ensure_dir(output_path / 'images' / split)
+        if task != 'classify':
+            ensure_dir(output_path / 'labels' / split)
+    
+    # 4. 处理数据集
+    console.print()
+    print_section_header("合并边界框")
+    
+    total_images = 0
+    processed_images = 0
+    total_boxes_before = 0
+    total_boxes_after = 0
+    
+    for split in ['train', 'val', 'test']:
+        # 查找图片目录
+        img_dir = dataset_path / 'images' / split
+        label_dir = dataset_path / 'labels' / split
+        
+        # 尝试另一种目录结构
+        if not img_dir.exists():
+            img_dir = dataset_path / split / 'images'
+            label_dir = dataset_path / split / 'labels'
+        
+        # 处理 val/valid 别名
+        if not img_dir.exists() and split == 'val':
+            img_dir = dataset_path / 'images' / 'valid'
+            label_dir = dataset_path / 'labels' / 'valid'
+            if not img_dir.exists():
+                img_dir = dataset_path / 'valid' / 'images'
+                label_dir = dataset_path / 'valid' / 'labels'
+        
+        if not img_dir.exists():
+            continue
+        
+        # 获取所有图片
+        image_files = list(find_files(img_dir, ['.jpg', '.jpeg', '.png']))
+        if not image_files:
+            continue
+        
+        total_images += len(image_files)
+        print_info(f"处理 {split} 数据集: {len(image_files)} 张图片")
+        
+        progress = create_progress_bar()
+        task_id = progress.add_task(f"[cyan]{split}", total=len(image_files))
+        
+        with progress:
+            for img_file in image_files:
+                progress.update(task_id, advance=1)
+                
+                # 复制图片
+                dst_img = output_path / 'images' / split / img_file.name
+                shutil.copy2(img_file, dst_img)
+                
+                # 处理标签文件
+                label_file = label_dir / f"{img_file.stem}.txt"
+                dst_label = output_path / 'labels' / split / f"{img_file.stem}.txt"
+                
+                if not label_file.exists():
+                    # 创建空标签
+                    dst_label.touch()
+                    continue
+                
+                # 读取并合并边界框
+                merged_labels, boxes_before, boxes_after = _process_label_for_merge(
+                    label_file,
+                    merge_class_ids,
+                    target_class_id,
+                    merge_by_class,
+                    original_classes if merge_by_class else None,
+                    keep_others,
+                    new_classes if keep_others else None
+                )
+                
+                total_boxes_before += boxes_before
+                total_boxes_after += boxes_after
+                
+                # 写入新标签文件
+                with open(dst_label, 'w') as f:
+                    for line in merged_labels:
+                        f.write(line + '\n')
+                
+                processed_images += 1
+    
+    # 5. 生成新的 data.yaml
+    console.print()
+    print_section_header("生成配置文件")
+    
+    new_config = {
+        'path': '.',
+        'train': 'images/train',
+        'val': 'images/val',
+        'test': 'images/test',
+        'nc': len(new_classes),
+        'names': new_classes
+    }
+    
+    # 如果是 segment 任务，保留相关配置（如果有）
+    if task == 'segment' and 'segment' in config:
+        new_config['segment'] = config['segment']
+    
+    output_yaml = output_path / 'data.yaml'
+    with open(output_yaml, 'w', encoding='utf-8') as f:
+        f.write("# YOLO 数据集配置文件\n")
+        f.write("# 边界框已合并\n\n")
+        yaml.dump(new_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    
+    print_success(f"配置文件已生成: {output_yaml}")
+    
+    # 6. 显示统计信息
+    console.print()
+    print_section_header("合并统计")
+    
+    print_key_value("总图片数", total_images)
+    print_key_value("处理图片数", processed_images)
+    print_key_value("原始框数", total_boxes_before)
+    print_key_value("合并后框数", total_boxes_after)
+    
+    if total_boxes_before > 0:
+        reduction = total_boxes_before - total_boxes_after
+        reduction_rate = (reduction / total_boxes_before) * 100
+        print_key_value("减少框数", f"{reduction} ({reduction_rate:.1f}%)")
+    
+    console.print()
+    print_key_value("原始类别数", len(original_classes))
+    print_key_value("新类别数", len(new_classes))
+    
+    console.print()
+    print_info("新类别列表:")
+    for class_id, class_name in new_classes.items():
+        print_info(f"  {class_id}: {class_name}")
+    
+    console.print()
+    print_success(f"✓ 边界框合并完成！输出目录: {output_path}")
+    
+    # 后续步骤
+    console.print()
+    print_section_header("后续步骤")
+    print_info("1. 验证合并后的数据集")
+    print_info(f"   python yolo_cli.py data verify --path {output_path}")
+    print_info("2. 查看数据统计")
+    print_info(f"   python yolo_cli.py data stats --path {output_path} --detailed")
+    print_info("3. 使用FiftyOne可视化检查")
+    print_info(f"   python yolo_cli.py interactive-mode → fiftyone → load")
+    print_info("4. 使用合并后的数据集训练")
+    print_info(f"   python yolo_cli.py train start --data {output_path}/data.yaml")
+
+
+def _process_label_for_merge(
+    label_path: Path,
+    merge_class_ids: Optional[List[int]],
+    target_class_id: Optional[int],
+    merge_by_class: bool,
+    original_classes: Optional[dict],
+    keep_others: bool = False,
+    new_classes: Optional[dict] = None
+) -> tuple:
+    """
+    处理单个标签文件，合并边界框
+    
+    Args:
+        label_path: 标签文件路径
+        merge_class_ids: 要合并的类别ID列表（None表示所有类别）
+        target_class_id: 合并后的目标类别ID（merge_by_class=False时使用）
+        merge_by_class: True=按类别分别合并；False=所有框合并为一个
+        original_classes: 原始类别映射（merge_by_class=True时使用）
+        keep_others: 是否保留未指定的其他类别
+        new_classes: 新的类别映射（keep_others=True时使用）
+    
+    Returns:
+        (merged_labels, boxes_before, boxes_after): 新标签行列表、原始框数、合并后框数
+    """
+    if not label_path.exists():
+        return [], 0, 0
+    
+    with open(label_path, 'r') as f:
+        lines = f.readlines()
+    
+    if not lines:
+        return [], 0, 0
+    
+    # 解析所有标注
+    annotations = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parts = line.split()
+            class_id = int(parts[0])
+            coords = list(map(float, parts[1:]))
+            annotations.append((class_id, coords))
+        except:
+            continue
+    
+    if not annotations:
+        return [], 0, 0
+    
+    boxes_before = len(annotations)
+    
+    # 筛选要合并的框
+    if merge_class_ids is not None:
+        boxes_to_merge = [(class_id, coords) for class_id, coords in annotations 
+                         if class_id in merge_class_ids]
+        boxes_to_keep = [(class_id, coords) for class_id, coords in annotations 
+                        if class_id not in merge_class_ids]
+    else:
+        boxes_to_merge = annotations
+        boxes_to_keep = []
+    
+    if not boxes_to_merge:
+        # 没有需要合并的框，保持原样
+        merged_lines = [line.strip() for line in lines if line.strip()]
+        return merged_lines, boxes_before, boxes_before
+    
+    merged_lines = []
+    
+    if merge_by_class:
+        # 按类别分别合并
+        class_boxes = defaultdict(list)
+        for class_id, coords in boxes_to_merge:
+            class_boxes[class_id].append(coords)
+        
+        for class_id, coords_list in class_boxes.items():
+            if len(coords_list) == 1:
+                # 只有一个框，直接保留
+                coords = coords_list[0]
+                merged_lines.append(f"{class_id} " + " ".join(f"{c:.6f}" for c in coords))
+            else:
+                # 多个框，合并
+                merged_coords = _merge_box_coordinates(coords_list)
+                merged_lines.append(f"{class_id} " + " ".join(f"{c:.6f}" for c in merged_coords))
+    else:
+        # 所有框合并为一个
+        coords_list = [coords for _, coords in boxes_to_merge]
+        merged_coords = _merge_box_coordinates(coords_list)
+        merged_lines.append(f"{target_class_id} " + " ".join(f"{c:.6f}" for c in merged_coords))
+    
+    # 添加不需要合并的框
+    if keep_others and boxes_to_keep and new_classes:
+        # 保留其他类别，需要重映射ID
+        for class_id, coords in boxes_to_keep:
+            # 在新类别映射中找到对应的新ID
+            new_id = None
+            for nid, nname in new_classes.items():
+                if nid > 0:  # 跳过合并后的类别（ID=0）
+                    # 通过名称匹配找到新ID
+                    for oid, oname in (original_classes or {}).items():
+                        if oname == nname and oid == class_id:
+                            new_id = nid
+                            break
+                if new_id is not None:
+                    break
+            
+            if new_id is not None:
+                merged_lines.append(f"{new_id} " + " ".join(f"{c:.6f}" for c in coords))
+    elif not keep_others:
+        # 不保留其他类别，直接丢弃
+        pass
+    
+    boxes_after = len(merged_lines)
+    
+    return merged_lines, boxes_before, boxes_after
+
+
+def _merge_box_coordinates(coords_list: List[List[float]]) -> List[float]:
+    """
+    合并多个框的坐标（YOLO格式：x_center, y_center, width, height）
+    
+    Args:
+        coords_list: 坐标列表，每个元素为 [x_center, y_center, width, height, ...]
+    
+    Returns:
+        合并后的坐标 [x_center, y_center, width, height]
+    """
+    if not coords_list:
+        return [0, 0, 0, 0]
+    
+    if len(coords_list) == 1:
+        # 只有一个框，返回前4个坐标（bbox部分）
+        return coords_list[0][:4]
+    
+    # 计算每个框的边界
+    x_mins = []
+    y_mins = []
+    x_maxs = []
+    y_maxs = []
+    
+    for coords in coords_list:
+        # YOLO格式：x_center, y_center, width, height
+        if len(coords) >= 4:
+            x_center, y_center, width, height = coords[:4]
+            
+            x_min = x_center - width / 2
+            y_min = y_center - height / 2
+            x_max = x_center + width / 2
+            y_max = y_center + height / 2
+            
+            x_mins.append(x_min)
+            y_mins.append(y_min)
+            x_maxs.append(x_max)
+            y_maxs.append(y_max)
+    
+    if not x_mins:
+        return [0, 0, 0, 0]
+    
+    # 计算合并后的大框边界
+    merged_x_min = min(x_mins)
+    merged_y_min = min(y_mins)
+    merged_x_max = max(x_maxs)
+    merged_y_max = max(y_maxs)
+    
+    # 转换回 YOLO 格式
+    merged_x_center = (merged_x_min + merged_x_max) / 2
+    merged_y_center = (merged_y_min + merged_y_max) / 2
+    merged_width = merged_x_max - merged_x_min
+    merged_height = merged_y_max - merged_y_min
+    
+    return [merged_x_center, merged_y_center, merged_width, merged_height]
+
+
 if __name__ == "__main__":
     app()

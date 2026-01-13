@@ -979,6 +979,223 @@ def run_data_operations():
                     task=task_type
                 )
             
+            elif operation == 'merge-boxes':
+                # 合并边界框
+                print_section_header("合并边界框")
+                
+                console.print()
+                print_info("📦 边界框合并功能：")
+                print_info("   - 将多个小框合并为一个大框")
+                print_info("   - 适合数字分段、多字符合并等场景")
+                print_info("   - 自动生成新的 data.yaml 配置")
+                print_info("   - 支持按类别分别合并或全部合并")
+                console.print()
+                
+                print_info("💡 使用场景示例:")
+                print_info("   • 数字显示屏的多个数字框 → 一个整体框")
+                print_info("   • 多个字符框 → 一个文本框")
+                print_info("   • 多个组件框 → 一个完整目标框")
+                console.print()
+                
+                # 选择任务类型
+                task_choices = ["detect", "segment"]
+                task_type = select_option("选择任务类型:", task_choices)
+                
+                # 选择数据集
+                from pathlib import Path
+                from ..core.config import ConfigManager
+                
+                config = ConfigManager()
+                datasets_root = config.project_root / 'datasets'
+                
+                if not datasets_root.exists():
+                    print_error(f"datasets 目录不存在: {datasets_root}")
+                    print_info("请先创建 datasets 目录并在其中放置数据集")
+                    continue
+                
+                # 扫描 datasets 目录
+                available_datasets = []
+                for item in sorted(datasets_root.iterdir()):
+                    if item.is_dir() and not item.name.startswith('.'):
+                        has_images = (item / 'images').exists() or (item / 'train').exists() or (item / 'val').exists() or (item / 'valid').exists() or (item / 'test').exists()
+                        has_config = (item / 'data.yaml').exists() or (item / 'dataset.yaml').exists() or (item / 'classes.txt').exists()
+                        if has_images or has_config:
+                            available_datasets.append(item)
+                
+                if not available_datasets:
+                    print_error(f"在 {datasets_root} 目录下没有找到任何数据集")
+                    continue
+                
+                print_info(f"📁 发现 {len(available_datasets)} 个数据集")
+                console.print()
+                
+                # 让用户单选数据集
+                choices = [f"{ds.name}" for ds in available_datasets]
+                selected_name = select_option(
+                    "请选择要处理的数据集:",
+                    choices
+                )
+                
+                # 找到对应的路径
+                dataset_path_obj = None
+                for ds in available_datasets:
+                    if ds.name == selected_name:
+                        dataset_path_obj = ds
+                        break
+                
+                if dataset_path_obj is None:
+                    print_error("未能找到选中的数据集")
+                    continue
+                
+                dataset_path = str(dataset_path_obj)
+                print_info(f"已选择数据集: {dataset_path_obj.name}")
+                
+                # 读取数据集类别信息
+                import yaml
+                dataset_classes = {}  # {id: name}
+                try:
+                    data_yaml = dataset_path_obj / 'data.yaml'
+                    if not data_yaml.exists():
+                        data_yaml = dataset_path_obj / 'dataset.yaml'
+                    
+                    if data_yaml.exists():
+                        with open(data_yaml, 'r', encoding='utf-8') as f:
+                            yaml_data = yaml.safe_load(f)
+                        
+                        if 'names' in yaml_data:
+                            if isinstance(yaml_data['names'], dict):
+                                dataset_classes = yaml_data['names']
+                            elif isinstance(yaml_data['names'], list):
+                                dataset_classes = {i: name for i, name in enumerate(yaml_data['names'])}
+                        
+                        if dataset_classes:
+                            print_info(f"✓ 读取到 {len(dataset_classes)} 个类别: {', '.join(dataset_classes.values())}")
+                except Exception as e:
+                    print_warning(f"无法读取类别信息: {e}")
+                
+                console.print()
+                
+                # 输出目录
+                output_dir = input_path(
+                    "输出目录:",
+                    default="data/merged_boxes",
+                    must_exist=False
+                )
+                if not output_dir:
+                    print_warning("操作已取消")
+                    continue
+                
+                console.print()
+                
+                # 第一步：选择合并模式
+                print_info("步骤 1/3: 选择合并模式")
+                console.print()
+                print_info("💡 模式说明:")
+                print_info("  • 所有框合并: 每张图 → 1个大框，单一类别（不区分类别）")
+                print_info("  • 按类别合并: 每张图 → 每类1个框，保留类别区分")
+                console.print()
+                print_info("📝 示例对比（假设图片有2个person框+3个car框）:")
+                print_info("  • 所有框合并: 输出1个框（新类别如'object'）")
+                print_info("  • 按类别合并: 输出2个框（1个person + 1个car）")
+                console.print()
+                
+                merge_mode_choices = [
+                    "all - 所有框合并为一个大框",
+                    "by-class - 按类别分别合并"
+                ]
+                merge_mode = select_option("选择合并模式:", merge_mode_choices)
+                merge_by_class = merge_mode.startswith("by-class")
+                
+                console.print()
+                
+                # 第二步：类别筛选（仅在按类别合并模式下提供）
+                merge_classes = None
+                if merge_by_class:
+                    print_info("步骤 2/3: 选择要处理的类别范围")
+                    if confirm_action("是否只处理特定类别？（否则处理所有类别）", default=False):
+                        if dataset_classes:
+                            # 使用交互式多选
+                            console.print()
+                            class_choices = [f"{class_id}: {class_name}" for class_id, class_name in sorted(dataset_classes.items())]
+                            selected_classes = select_multiple(
+                                "选择要处理的类别（空格选择，回车确认）:",
+                                class_choices
+                            )
+                            
+                            if selected_classes:
+                                # 提取类别ID
+                                selected_ids = [choice.split(':')[0] for choice in selected_classes]
+                                merge_classes = ','.join(selected_ids)
+                                selected_names = [dataset_classes[int(id_str)] for id_str in selected_ids]
+                                print_info(f"✓ 将只处理类别: {', '.join(selected_names)} (ID: {merge_classes})")
+                            else:
+                                print_info("✓ 未选择类别，将处理所有类别")
+                        else:
+                            # 如果没有读取到类别信息，回退到手动输入
+                            classes_str = input_text(
+                                "输入要处理的类别ID（逗号分隔，如: 0,1,2）:",
+                                default=""
+                            )
+                            if classes_str:
+                                merge_classes = classes_str
+                                print_info(f"✓ 将只处理类别ID: {classes_str}")
+                            else:
+                                print_info("✓ 将处理所有类别")
+                    else:
+                        print_info("✓ 将处理所有类别")
+                    console.print()
+                else:
+                    print_info("步骤 2/3: 类别范围（所有框合并模式将处理所有类别）")
+                    console.print()
+                
+                # 第三步：配置新类别名称（仅在全部合并模式下需要）
+                new_class_name = None
+                if not merge_by_class:
+                    print_info("步骤 3/3: 设置合并后的类别名称")
+                    new_class_name = input_text(
+                        "输入合并后的新类别名称:",
+                        default="merged"
+                    )
+                    if not new_class_name:
+                        print_warning("必须指定新类别名称")
+                        continue
+                else:
+                    print_info("步骤 3/3: 类别名称（按类别合并模式保留原类别名称）")
+                
+                console.print()
+                
+                # 确认执行
+                if not confirm_action("开始合并边界框?"):
+                    continue
+                
+                # 检查输出目录
+                if not check_and_clear_directory(output_dir):
+                    continue
+                
+                # 询问是否保留其他类别（仅在指定了特定类别且非by-class模式时）
+                keep_others = False
+                if merge_classes and not merge_by_class:
+                    console.print()
+                    print_info("💡 提示: 您选择了特定类别进行合并")
+                    if confirm_action("是否保留未选中的其他类别？", default=True):
+                        keep_others = True
+                        print_info("✓ 将保留其他类别")
+                    else:
+                        print_info("✓ 将忽略其他类别")
+                    console.print()
+                
+                # 调用合并函数
+                from ..commands.data import merge_boxes
+                merge_boxes(
+                    dataset_path=dataset_path,
+                    output_dir=output_dir,
+                    merge_classes=merge_classes,
+                    new_class_name=new_class_name,
+                    merge_by_class=merge_by_class,
+                    keep_others=keep_others,
+                    task=task_type
+                )
+            
             elif operation == 'deduplicate':
                 # 数据集去重
                 print_section_header("数据集去重")

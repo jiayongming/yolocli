@@ -3326,6 +3326,70 @@ python yolo_cli.py data merge-labels [OPTIONS]
   - 准备二分类任务数据
   - 调整类别粒度（细粒度→粗粒度）
 
+# 合并边界框 🆕
+python yolo_cli.py data merge-boxes [OPTIONS]
+  --dataset TEXT           数据集路径（可选，不指定则从 datasets 目录中选择）🆕
+  --output TEXT            输出目录（默认: data/processed/merged_boxes）
+  --classes TEXT           要合并的类别ID（逗号分隔，如: 0,1,2，不指定则合并所有类别）
+  --new-class TEXT         合并后的新类别名称（可选，不指定则交互式输入）
+  --by-class               按类别分别合并（同一类合并为一个框，不同类保持独立）
+  --keep-others            保留未指定的其他类别（仅在指定--classes时有效）
+  --task TEXT              任务类型 (detect/segment，默认: detect)
+
+使用方式 🆕：
+  # 交互式选择数据集（推荐）🔥
+  python yolo_cli.py data merge-boxes --new-class "display"
+  
+  # 或手动指定数据集路径
+  python yolo_cli.py data merge-boxes --dataset datasets/digit_segments --new-class "display"
+
+更多示例:
+  # 只合并特定类别的框（类别 0,1,2），忽略其他类别
+  python yolo_cli.py data merge-boxes \\
+    --dataset datasets/digit_segments \\
+    --classes 0,1,2 \\
+    --new-class "number" \\
+    --output datasets/merged_numbers
+  
+  # 合并person和car为一个框，同时保留bike等其他类别
+  python yolo_cli.py data merge-boxes \\
+    --dataset datasets/multi_class \\
+    --classes 0,1 \\
+    --new-class "person_car" \\
+    --keep-others \\
+    --output datasets/merged_with_others
+  
+  # 按类别分别合并（每个类别内部合并，不同类别独立）
+  python yolo_cli.py data merge-boxes \\
+    --dataset datasets/multi_class \\
+    --by-class \\
+    --output datasets/merged_by_class
+  
+  # 合并数字显示屏的多个数字框
+  python yolo_cli.py data merge-boxes \\
+    --dataset datasets/digit_segments \\
+    --new-class "digital_display" \\
+    --output datasets/merged_display
+
+使用场景:
+  - 将多个字符/数字框合并为一个整体框（如数字显示屏）
+  - 合并多个组件为一个完整目标
+  - 将细粒度标注转换为粗粒度标注
+  - 简化复杂的多框标注
+
+功能说明:
+  • 物理合并边界框（减少框的数量），而非仅改变类别ID
+  • 默认模式：每张图所有框 → 1个大框，单一类别（不区分类别）
+  • --by-class 模式：每张图 → 每类1个框，保留类别区分
+  • 自动生成新的 data.yaml 配置文件
+  • 保留原始图片，生成新的标注文件
+
+模式对比示例（假设图片有2个person框+3个car框+1个bike框）:
+  • 默认模式（全部合并）：输出1个框（新类别如"object"）
+  • --by-class 模式：输出3个框（1个person + 1个car + 1个bike）
+  • --classes 0,1 --new-class "person_car"：输出1个person_car框（忽略bike）
+  • --classes 0,1 --new-class "person_car" --keep-others：输出2个框（1个person_car + 1个bike）
+
 # 批量调整标注大小
 python yolo_cli.py data scale-labels [OPTIONS]
   --dataset TEXT           数据集目录（可选，不指定则从 datasets 目录中选择）🆕
