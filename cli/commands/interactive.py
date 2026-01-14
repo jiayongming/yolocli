@@ -3061,7 +3061,7 @@ def run_labelstudio_operations():
                     continue
                 
                 # 执行上传
-                from ..integrations.labelstudio_uploader import LabelStudioUploader
+                from ..integrations.labelstudio_uploader import LabelStudioUploader, FatalUploadError
                 
                 try:
                     uploader = LabelStudioUploader(default_url, default_token, project_id, task_type=task_type)
@@ -3111,6 +3111,13 @@ def run_labelstudio_operations():
                         print_section_header("验证上传结果")
                         uploader.verify_uploaded_tasks(num_samples=5)
                     
+                except FatalUploadError as e:
+                    # 致命错误（如认证失败）
+                    console.print()
+                    print_error(f"❌ 上传失败（致命错误）")
+                    print_info("💾 已保存当前进度")
+                    print_info("\n📝 修复问题后，可选择相同操作从断点继续上传")
+                
                 except KeyboardInterrupt:
                     # 用户中断，不显示错误堆栈
                     console.print()

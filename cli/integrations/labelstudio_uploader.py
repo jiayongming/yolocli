@@ -25,6 +25,14 @@ import threading
 from ..ui.display import print_info, print_success, print_warning, print_error
 
 
+class FatalUploadError(Exception):
+    """致命上传错误，需要立即停止整个上传过程"""
+    def __init__(self, message: str, status_code: int = None, response_text: str = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
+
 class LabelStudioUploader:
     """Label Studio上传器"""
     
@@ -250,11 +258,13 @@ class LabelStudioUploader:
         使用 Export API 获取所有任务，提取 data.original_filename 字段，
         构建 {original_filename: task_id} 映射表。
         
+        原始文件名格式为 'split/filename' (例如: 'train/image.jpg')
+        
         Args:
             show_progress: 是否显示进度信息
             
         Returns:
-            Dict[str, int]: {filename: task_id} 映射表
+            Dict[str, int]: {'split/filename': task_id} 映射表
         """
         if show_progress:
             print_info("\n🔍 正在检查服务器上已有的任务...")
@@ -279,15 +289,29 @@ class LabelStudioUploader:
             if show_progress:
                 print_info(f"  服务器返回 {len(all_tasks)} 个任务")
             
-            # 构建映射表
+            # 构建映射表（兼容新旧格式）
             mapping = {}
+            old_format_count = 0
             for task in all_tasks:
                 task_id = task.get('id')
                 data = task.get('data', {})
                 original_filename = data.get('original_filename')
+                split_info = data.get('split')  # 新格式会包含这个字段
                 
                 if task_id and original_filename:
+                    # 新格式：split/filename（如 train/image.jpg）
                     mapping[original_filename] = task_id
+                    
+                    # 兼容旧格式：如果不包含"/"，假设是train数据
+                    # （因为之前只上传了train数据）
+                    if '/' not in original_filename and not split_info:
+                        train_key = f"train/{original_filename}"
+                        if train_key not in mapping:
+                            mapping[train_key] = task_id
+                            old_format_count += 1
+            
+            if show_progress and old_format_count > 0:
+                print_info(f"  💡 检测到 {old_format_count} 个旧格式任务（已映射为 train split）")
             
             if show_progress:
                 print_success(f"✓ 成功构建任务映射表（{len(mapping)} 个文件）")
@@ -329,6 +353,9 @@ class LabelStudioUploader:
             
         Returns:
             Tuple[bool, Any, str]: (成功/失败, 返回值, 错误信息)
+            
+        Raises:
+            FatalUploadError: 遇到致命错误时立即抛出，不重试
         """
         last_error = ""
         
@@ -336,6 +363,9 @@ class LabelStudioUploader:
             try:
                 result = func()
                 return (True, result, "")
+            except FatalUploadError:
+                # 致命错误，立即停止，不重试
+                raise
             except (requests.exceptions.ConnectionError, 
                    requests.exceptions.Timeout,
                    requests.exceptions.RequestException) as e:
@@ -730,8 +760,14 @@ class LabelStudioUploader:
             f"  3. 参考: https://api.labelstud.io/api-reference/api-reference/files/"
         )
     
-    def _create_task(self, image_path: Path, label_path: Path) -> Dict:
-        """创建Label Studio任务（文件上传模式）"""
+    def _create_task(self, image_path: Path, label_path: Path, split_name: str = None) -> Dict:
+        """创建Label Studio任务（文件上传模式）
+        
+        Args:
+            image_path: 图片路径
+            label_path: 标签路径
+            split_name: 数据集分割名称（如 'train', 'val', 'test'）
+        """
         # 获取图片尺寸
         img_width, img_height = self._get_image_dimensions(image_path)
         
@@ -777,11 +813,17 @@ class LabelStudioUploader:
         if file_url.startswith('/upload/'):
             file_url = f"/data{file_url}"
         
+        # 构建 original_filename（包含 split 信息以区分同名文件）
+        original_filename = file_info['original_name']
+        if split_name:
+            original_filename = f"{split_name}/{original_filename}"
+        
         # 创建任务数据
         task = {}
         task['data'] = {
             'image': file_url,  # 使用处理后的相对路径
-            'original_filename': file_info['original_name'],
+            'original_filename': original_filename,  # 使用 split/filename 格式
+            'split': split_name,  # 额外保存 split 信息
             'image_width': img_width,
             'image_height': img_height
         }
@@ -911,17 +953,19 @@ class LabelStudioUploader:
                 if progress_tracker and not force:
                     original_count = len(image_files)
                     
-                    # 过滤本地缓存中的文件
+                    # 过滤本地缓存中的文件（使用 split/filename 作为键）
                     uploaded_set = progress_tracker.get_uploaded_set()
-                    image_files = [f for f in image_files if f.name not in uploaded_set]
+                    image_files = [f for f in image_files if f"{split}/{f.name}" not in uploaded_set]
                     cached_count = original_count - len(image_files)
                     
-                    # 过滤服务器上已存在的文件
+                    # 过滤服务器上已存在的文件（使用 split/filename 作为键）
                     server_exists_count = 0
                     if existing_map:
                         remaining_files = []
                         for f in image_files:
-                            if f.name not in existing_map:
+                            # 使用 split/filename 格式查找
+                            split_filename = f"{split}/{f.name}"
+                            if split_filename not in existing_map:
                                 remaining_files.append(f)
                             else:
                                 server_exists_count += 1
@@ -957,6 +1001,11 @@ class LabelStudioUploader:
                 
                 total_uploaded += uploaded
                 total_failed += failed
+        
+        except FatalUploadError as e:
+            # 致命错误：已经在 _upload_images_concurrent 中处理和保存进度了
+            # 这里只需要重新抛出，让上层处理
+            raise
         
         except KeyboardInterrupt:
             # 用户中断，保存进度并重新抛出
@@ -1022,7 +1071,7 @@ class LabelStudioUploader:
             
             def _do_upload():
                 """实际上传函数（用于重试）"""
-                task = self._create_task(image_path, label_path)
+                task = self._create_task(image_path, label_path, split_name=split_name)
                 success = self._upload_batch([task])
                 
                 if not success:
@@ -1070,8 +1119,10 @@ class LabelStudioUploader:
                         # 更新进度跟踪器（立即保存，确保一致性）
                         # 这是唯一的真实来源
                         if progress_tracker:
+                            # 使用 split/filename 格式作为唯一标识
+                            file_key = f"{split_name}/{image_path.name}"
                             progress_tracker.mark_uploaded(
-                                filename=image_path.name,
+                                filename=file_key,
                                 task_id=task_id or 0,
                                 auto_save=True  # 立即保存，确保进度一致性
                             )
@@ -1094,12 +1145,66 @@ class LabelStudioUploader:
                             
                             # 标记为失败（立即保存失败信息）
                             if progress_tracker:
+                                # 使用 split/filename 格式作为唯一标识
+                                file_key = f"{split_name}/{image_path.name}"
                                 progress_tracker.mark_failed(
-                                    filename=image_path.name,
+                                    filename=file_key,
                                     error=message
                                 )
                             
                             print_error(f"✗ {message}")
+                
+                except FatalUploadError as e:
+                    # 致命错误：立即停止所有上传
+                    print_error(f"\n\n❌ 致命错误：{str(e)}")
+                    
+                    if e.status_code == 401:
+                        print_error("\n🔑 认证失败，可能的原因：")
+                        print_error("  1. API Token 已过期")
+                        print_error("  2. API Token 无效或被撤销")
+                        print_error("  3. Label Studio 服务器要求重新登录")
+                        print_error("\n💡 解决方法：")
+                        print_error("  1. 重新登录 Label Studio 获取新的 Token")
+                        print_error("  2. 更新配置文件中的 api_token")
+                        print_error("  3. 使用交互式命令重新配置连接")
+                    elif e.status_code == 403:
+                        print_error("\n🚫 权限不足，可能的原因：")
+                        print_error("  1. 当前账号没有项目的上传权限")
+                        print_error("  2. 项目已被锁定或归档")
+                        print_error("\n💡 解决方法：")
+                        print_error("  1. 联系项目管理员授予上传权限")
+                        print_error("  2. 确认项目处于活动状态")
+                    
+                    # 取消所有未完成的任务
+                    print_warning("\n⚠️  正在停止所有上传任务...")
+                    cancelled_count = 0
+                    for f in futures:
+                        if f != future and f.cancel():
+                            cancelled_count += 1
+                    
+                    if cancelled_count > 0:
+                        print_info(f"  已取消 {cancelled_count} 个未开始的任务")
+                    
+                    # 保存当前进度
+                    if progress_tracker:
+                        try:
+                            progress_tracker.force_save()
+                            stats = progress_tracker.get_stats()
+                            print_info(f"\n💾 已保存进度到: {stats['progress_file']}")
+                            print_info(f"  已上传: {stats['uploaded_count']} 个文件")
+                            print_info(f"  失败: {stats['failed_count']} 个文件")
+                        except Exception as save_error:
+                            print_warning(f"⚠️  保存进度失败: {save_error}")
+                    
+                    # 关闭线程池（Python 3.8 兼容）
+                    try:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        # Python < 3.9 不支持 cancel_futures 参数
+                        executor.shutdown(wait=False)
+                    
+                    # 重新抛出异常
+                    raise
                 
                 except Exception as e:
                     with lock:
@@ -1108,8 +1213,10 @@ class LabelStudioUploader:
                         
                         # 标记为失败（立即保存失败信息）
                         if progress_tracker:
+                            # 使用 split/filename 格式作为唯一标识
+                            file_key = f"{split_name}/{image_path.name}"
                             progress_tracker.mark_failed(
-                                filename=image_path.name,
+                                filename=file_key,
                                 error=error_msg
                             )
                         
@@ -1155,8 +1262,10 @@ class LabelStudioUploader:
                                 auto_save=True
                             )
                         elif not success and progress_tracker:
+                            # 使用 split/filename 格式作为唯一标识
+                            file_key = f"{split_name}/{image_path.name}"
                             progress_tracker.mark_failed(
-                                filename=image_path.name,
+                                filename=file_key,
                                 error=message
                             )
                     except Exception as e:
@@ -1184,8 +1293,10 @@ class LabelStudioUploader:
                                         auto_save=True
                                     )
                                 elif not success and progress_tracker:
+                                    # 使用 split/filename 格式作为唯一标识
+                                    file_key = f"{split_name}/{image_path.name}"
                                     progress_tracker.mark_failed(
-                                        filename=image_path.name,
+                                        filename=file_key,
                                         error=message
                                     )
                             except Exception as e:
@@ -1223,7 +1334,12 @@ class LabelStudioUploader:
         return actual_uploaded, actual_failed
     
     def _upload_batch(self, tasks: List[Dict]) -> bool:
-        """批量上传任务到Label Studio"""
+        """
+        批量上传任务到Label Studio
+        
+        Raises:
+            FatalUploadError: 遇到致命错误（如401认证失败）时抛出
+        """
         url = f"{self.url}/api/projects/{self.project_id}/import"
         
         try:
@@ -1236,11 +1352,33 @@ class LabelStudioUploader:
             
             if response.status_code in [200, 201]:
                 return True
+            
+            # 检查是否为致命错误
+            elif response.status_code in [401, 403]:
+                # 认证失败或权限不足，立即停止
+                error_msg = f"认证失败 (HTTP {response.status_code})"
+                try:
+                    error_data = response.json()
+                    if 'detail' in error_data:
+                        error_msg += f": {error_data['detail']}"
+                except:
+                    error_msg += f": {response.text[:200]}"
+                
+                raise FatalUploadError(
+                    message=error_msg,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
             else:
-                print_error(f"错误: {response.status_code} - {response.text}")
+                # 其他错误，可重试
+                print_error(f"错误: {response.status_code} - {response.text[:200]}")
                 return False
                 
+        except FatalUploadError:
+            # 重新抛出致命错误
+            raise
         except Exception as e:
+            # 网络错误等，可重试
             print_error(f"上传异常: {str(e)}")
             return False
     

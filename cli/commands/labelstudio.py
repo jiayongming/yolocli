@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from ..core.config import ConfigManager
 from ..ui.display import print_section_header, print_info, print_success, print_error, print_warning
-from ..integrations.labelstudio_uploader import LabelStudioUploader
+from ..integrations.labelstudio_uploader import LabelStudioUploader, FatalUploadError
 
 
 app = typer.Typer(help="Label Studio集成")
@@ -154,6 +154,13 @@ def upload_dataset(
         if verify and total_uploaded > 0:
             uploader.verify_uploaded_tasks(num_samples=5)
         
+    except FatalUploadError as e:
+        # 致命错误（如认证失败）
+        print_error(f"\n❌ 上传失败（致命错误）")
+        print_info("💾 已保存当前进度")
+        print_info("\n📝 修复问题后，重新运行相同命令即可从断点继续上传")
+        raise typer.Exit(1)
+    
     except KeyboardInterrupt:
         # 用户中断
         print_warning("\n\n⚠️  上传已被用户中断")
