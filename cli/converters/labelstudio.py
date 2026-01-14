@@ -204,6 +204,49 @@ class LabelStudioClient:
         except Exception as e:
             return (False, None, f"获取项目详情失败：{str(e)}")
     
+    def get_project_keypoint_labels(self, project_id: int) -> Tuple[List[str], Optional[str]]:
+        """
+        从 Label Studio 项目配置中获取关键点标签名称
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            Tuple[List[str], Optional[str]]: (关键点标签名称列表, 错误信息)
+        """
+        try:
+            # 获取项目详情
+            success, project, error = self.get_project_details(project_id)
+            if not success:
+                return ([], error)
+            
+            label_config = project.get('label_config', '')
+            if not label_config:
+                return ([], "项目没有标签配置")
+            
+            # 解析 XML 配置中的 KeyPointLabels
+            import re
+            # 先找到 <KeyPointLabels> ... </KeyPointLabels> 块
+            keypoint_block_pattern = r'<KeyPointLabels[^>]*>.*?</KeyPointLabels>'
+            keypoint_blocks = re.findall(keypoint_block_pattern, label_config, re.DOTALL)
+            
+            if not keypoint_blocks:
+                return ([], "项目配置中没有 KeyPointLabels 控件")
+            
+            keypoint_block = keypoint_blocks[0]
+            
+            # 在 KeyPointLabels 块中提取所有 <Label value="xxx"/> 标签
+            label_pattern = r'<Label\s+value="([^"]+)"'
+            matches = re.findall(label_pattern, keypoint_block)
+            
+            if matches:
+                return (matches, None)
+            else:
+                return ([], "KeyPointLabels 控件中没有定义关键点标签")
+            
+        except Exception as e:
+            return ([], f"解析项目配置失败：{str(e)}")
+    
     def export_project(self, project_id: int, export_format: str = 'JSON') -> Tuple[bool, Optional[List[Dict]], str]:
         """导出项目标注数据
         
@@ -615,8 +658,9 @@ class LabelStudioConverter:
             keypoints = [ann for ann in item['annotations'] if ann.get('type') == 'keypoint']
             
             # 记录有完整关键点的样本的顺序（用于多数投票）
-            if len(keypoints) >= 4:
-                order = tuple([kp.get('label', 'unknown') for kp in keypoints[:4]])
+            # 修复：收集所有关键点，而不仅仅是前4个
+            if len(keypoints) >= 4:  # 至少有4个关键点才收集顺序
+                order = tuple([kp.get('label', 'unknown') for kp in keypoints])  # 收集所有关键点
                 sample_orders.append(order)
             
             for kp in keypoints:
@@ -633,27 +677,29 @@ class LabelStudioConverter:
             most_common_order, count = order_counter.most_common(1)[0]
             keypoint_order = list(most_common_order)
             
+            # 简化输出：只显示检测到的样本数量和关键点统计
             print(f"ℹ 检测到 {len(sample_orders)} 个完整样本", file=sys.stderr)
-            print(f"✓ 最常见的关键点顺序: {keypoint_order} (出现 {count}/{len(sample_orders)} 次)", file=sys.stderr)
+            
+            # 输出每个标签的实际统计信息
+            if label_occurrence_count:
+                print(f"ℹ 关键点统计:", file=sys.stderr)
+                for label in all_labels:  # 按照出现顺序显示所有关键点
+                    count = label_occurrence_count.get(label, 0)
+                    print(f"  {label}: {count} 个", file=sys.stderr)
             
             # 如果有多种顺序，显示警告
             if len(order_counter) > 1:
-                print(f"⚠ 发现 {len(order_counter)} 种不同的标注顺序:", file=sys.stderr)
-                for order, cnt in order_counter.most_common(3):
-                    print(f"   {list(order)}: {cnt} 次", file=sys.stderr)
+                print(f"⚠ 发现 {len(order_counter)} 种不同的标注顺序，可能存在标注不一致", file=sys.stderr)
         else:
-            # 回退到预定义顺序
-            expected_order = ['start', 'end', 'center', 'pointer']
-            keypoint_order = expected_order
-            print(f"⚠ 无法检测实际顺序，使用默认顺序: {expected_order}", file=sys.stderr)
-        
-        # 输出每个标签的统计信息（用于调试）
-        if label_occurrence_count:
-            import sys
-            print(f"ℹ 关键点统计:", file=sys.stderr)
-            for label in keypoint_order:
-                count = label_occurrence_count.get(label, 0)
-                print(f"  {label}: {count} 个", file=sys.stderr)
+            # 回退到预定义顺序（使用所有检测到的关键点）
+            # 按照 label_first_occurrence 中记录的顺序
+            if all_labels:
+                keypoint_order = all_labels
+                print(f"⚠ 无法检测完整样本顺序，使用首次出现顺序: {keypoint_order}", file=sys.stderr)
+            else:
+                # 如果连一个关键点都没有，使用空列表
+                keypoint_order = []
+                print(f"⚠ 未检测到任何关键点", file=sys.stderr)
         
         processed_data = []
         inconsistent_samples = []  # 记录关键点顺序不一致的样本

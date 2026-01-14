@@ -1153,26 +1153,55 @@ def generate_yaml(
     # Pose任务需要额外的配置
     if task == 'pose':
         # 优先级1: 从已有的 dataset.yaml 读取标签信息
-        existing_yaml = data_path / 'dataset.yaml'
-        existing_label_config = None
-        if existing_yaml.exists() and existing_yaml != Path(output):
-            try:
-                with open(existing_yaml, 'r', encoding='utf-8') as f:
-                    existing_data = yaml.safe_load(f)
-                if existing_data and 'kpt_shape' in existing_data:
-                    existing_label_config = {
-                        'kpt_shape': existing_data.get('kpt_shape'),
-                        'keypoint_names': existing_data.get('keypoint_names'),
-                        'flip_idx': existing_data.get('flip_idx'),
-                    }
-                    yaml_config.update(existing_label_config)
-                    print_info(f"✓ 从已有 dataset.yaml 读取 Pose 配置")
-                    print_info(f"  关键点名称: {existing_label_config.get('keypoint_names')}")
-            except Exception as e:
-                print_warning(f"读取已有 dataset.yaml 失败: {e}")
+        # 优先级顺序：先读源数据目录（最可靠），再读当前目录
+        possible_yaml_locations = []
         
-        # 优先级2: 从标签文件中检测关键点数量
-        if not existing_label_config:
+        # 1. 从 classes_file 所在目录推断源数据位置（最可靠）
+        if classes_file:
+            source_yaml = classes_file.parent / 'dataset.yaml'
+            if source_yaml.exists() and source_yaml != (data_path / 'dataset.yaml'):
+                possible_yaml_locations.append(source_yaml)
+        
+        # 2. 常见的源数据目录
+        possible_yaml_locations.extend([
+            data_path.parent / 'raw' / 'dataset.yaml',  # data/raw/
+            Path('data/raw/dataset.yaml'),  # 绝对路径
+        ])
+        
+        # 3. 当前目录（最后，优先级最低）
+        possible_yaml_locations.append(data_path / 'dataset.yaml')
+        
+        existing_label_config = None
+        has_existing_config = False
+        
+        for yaml_path in possible_yaml_locations:
+            if yaml_path.exists():
+                try:
+                    with open(yaml_path, 'r', encoding='utf-8') as f:
+                        existing_data = yaml.safe_load(f)
+                    if existing_data and 'kpt_shape' in existing_data:
+                        existing_label_config = {
+                            'kpt_shape': existing_data.get('kpt_shape'),
+                            'keypoint_names': existing_data.get('keypoint_names'),
+                            'flip_idx': existing_data.get('flip_idx'),
+                        }
+                        # 验证读取的数据是否完整
+                        if existing_label_config['keypoint_names']:
+                            yaml_config.update(existing_label_config)
+                            has_existing_config = True
+                            print_success(f"✓ 从 {yaml_path} 读取 Pose 配置")
+                            kpt_count = existing_label_config['kpt_shape'][0]
+                            print_info(f"  关键点数量: {kpt_count}")
+                            print_info(f"  关键点名称: {existing_label_config.get('keypoint_names')}")
+                            break
+                        else:
+                            print_warning(f"⚠ {yaml_path} 缺少关键点名称，继续查找...")
+                except Exception as e:
+                    print_warning(f"读取 {yaml_path} 失败: {e}")
+                    continue
+        
+        # 优先级2: 从标签文件中检测关键点数量（仅当没有已有配置时）
+        if not has_existing_config:
             kpt_count = 17  # 默认
             detected_kpt_count = None
             
@@ -1220,33 +1249,40 @@ def generate_yaml(
                         continue
             else:
                 print_warning("未找到标签文件，使用默认配置")
-        
-        yaml_config['kpt_shape'] = [kpt_count, 3]
-        
-        # 根据关键点数量设置 flip_idx 和关键点名称
-        if kpt_count == 17:
-            # COCO 17 关键点的对称索引
-            yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
-            yaml_config['keypoint_names'] = [
-                'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
-                'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-                'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-                'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
-            ]
-        elif kpt_count == 4:
-            # 4个关键点（start, end, center, pointer）
-            # 假设没有对称关系，使用原始顺序
-            yaml_config['flip_idx'] = [0, 1, 2, 3]
-            yaml_config['keypoint_names'] = ['start', 'end', 'center', 'pointer']
-        else:
-            # 其他数量，使用原始顺序
-            yaml_config['flip_idx'] = list(range(kpt_count))
-            yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
-        
-        if detected_kpt_count:
-            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
-        else:
-            print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
+            
+            # 只有在没有已有配置时才设置这些值
+            if 'kpt_shape' not in yaml_config:
+                yaml_config['kpt_shape'] = [kpt_count, 3]
+            
+            # 根据关键点数量设置 flip_idx 和关键点名称（仅在未从源配置读取时）
+            if 'flip_idx' not in yaml_config:
+                if kpt_count == 17:
+                    # COCO 17 关键点的对称索引（业界标准）
+                    yaml_config['flip_idx'] = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+                else:
+                    # 其他数量，假设无对称性，使用原始顺序
+                    yaml_config['flip_idx'] = list(range(kpt_count))
+            
+            if 'keypoint_names' not in yaml_config:
+                if kpt_count == 17:
+                    # COCO 17 关键点（业界标准）
+                    yaml_config['keypoint_names'] = [
+                        'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                        'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                        'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                        'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+                    ]
+                    print_info(f"使用 COCO 17 关键点标准名称")
+                else:
+                    # 其他数量，使用通用默认命名
+                    yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
+                    print_warning(f"⚠ 未找到关键点名称配置，使用默认命名: kp_0, kp_1, ...")
+                    print_info(f"💡 建议：从 Label Studio 下载数据集时会自动从标签模板获取正确的关键点名称")
+            
+            if detected_kpt_count:
+                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
+            else:
+                print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
         
         # 显示关键点名称
         if 'keypoint_names' in yaml_config:
@@ -3521,8 +3557,9 @@ def convert_labelstudio(
     input_file: str = typer.Option(..., "--input", "-i", help="Label Studio导出文件 (JSON/CSV)"),
     url: str = typer.Option(..., "--url", "-u", help="Label Studio服务器URL"),
     token: str = typer.Option(..., "--token", "-t", help="API访问令牌"),
+    project_id: Optional[int] = typer.Option(None, "--project-id", "-p", help="Label Studio项目ID（用于获取标签模板配置）"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="输出目录 (默认: data/raw)"),
-    task: str = typer.Option("detect", "--task", help="任务类型 (detect/classify)"),
+    task: str = typer.Option("detect", "--task", help="任务类型 (detect/classify/pose)"),
     format_type: str = typer.Option("auto", "--format", "-f", help="输入格式 (auto/json/csv)"),
     skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip", help="跳过已下载的图片"),
     max_workers: int = typer.Option(4, "--max-workers", "-w", help="并发下载线程数"),
@@ -3537,6 +3574,9 @@ def convert_labelstudio(
     对于检测任务，无标注的图片将作为负样本被下载并创建空标签文件。
     负样本有助于减少误报，提高模型鲁棒性（推荐包含10-20%负样本）。
     
+    重要：对于 pose 任务，强烈建议使用 --project-id 参数，这样可以从项目配置
+    中准确获取关键点标签，而不是从标注数据中推断（更可靠）。
+    
     部分数据集下载选项:
         --max-tasks: 限制下载数量（如：--max-tasks 100 只下载前100个任务）
         --task-ids: 指定任务ID（如：--task-ids 100,200,300）
@@ -3544,17 +3584,20 @@ def convert_labelstudio(
         --filter-labels: 按标签筛选（如：--filter-labels person,car）
     
     示例:
+        # Pose 任务：从项目配置获取关键点（推荐）
+        python yolo_cli.py data convert-labelstudio -i export.json --url http://localhost:8080 --token xxx --project-id 1 --task pose
+        
         # 只下载前50个任务（快速测试）
-        python yolo_cli.py data convert-labelstudio -i export.json --max-tasks 50
+        python yolo_cli.py data convert-labelstudio -i export.json --url http://localhost:8080 --token xxx --max-tasks 50
         
         # 下载特定任务
-        python yolo_cli.py data convert-labelstudio -i export.json --task-ids 100,200,300
+        python yolo_cli.py data convert-labelstudio -i export.json --url http://localhost:8080 --token xxx --task-ids 100,200,300
         
         # 下载ID范围的任务
-        python yolo_cli.py data convert-labelstudio -i export.json --task-range 100 500
+        python yolo_cli.py data convert-labelstudio -i export.json --url http://localhost:8080 --token xxx --task-range 100 500
         
         # 只下载包含特定标签的任务
-        python yolo_cli.py data convert-labelstudio -i export.json --filter-labels person,car
+        python yolo_cli.py data convert-labelstudio -i export.json --url http://localhost:8080 --token xxx --filter-labels person,car
     """
     
     print_section_header("Label Studio 数据转换")
@@ -3915,17 +3958,75 @@ def convert_labelstudio(
     }
     
     # 提取关键点信息（如果是 pose 任务）
-    if task == 'pose' and parsed_data:
-        keypoint_names = None
-        # 从第一个有关键点的样本中提取关键点顺序
-        for item in parsed_data:
-            for ann in item.get('annotations', []):
-                if ann.get('type') == 'pose' and ann.get('keypoints'):
-                    keypoint_names = [kp.get('label', f'kp_{i}') for i, kp in enumerate(ann['keypoints'])]
-                    break
-            if keypoint_names:
-                break
+    if task == 'pose':
+        keypoint_names_from_data = None
+        keypoint_names_from_config = None
         
+        # 1. 先从标注数据中提取实际存在的关键点
+        if parsed_data:
+            print_info("从标注数据中提取关键点...")
+            for item in parsed_data:
+                for ann in item.get('annotations', []):
+                    if ann.get('type') == 'pose' and ann.get('keypoints'):
+                        keypoint_names_from_data = [kp.get('label', f'kp_{i}') for i, kp in enumerate(ann['keypoints'])]
+                        break
+                if keypoint_names_from_data:
+                    break
+            
+            if keypoint_names_from_data:
+                print_success(f"✓ 从标注数据提取到 {len(keypoint_names_from_data)} 个关键点: {keypoint_names_from_data}")
+            else:
+                print_warning("⚠ 标注数据中未找到关键点")
+        
+        # 2. 从项目配置中获取关键点定义（用于验证）
+        if project_id:
+            print_info("从 Label Studio 项目配置获取关键点定义...")
+            keypoint_labels, error = client.get_project_keypoint_labels(project_id)
+            
+            if keypoint_labels:
+                keypoint_names_from_config = keypoint_labels
+                print_info(f"  项目配置定义了 {len(keypoint_names_from_config)} 个关键点: {keypoint_names_from_config}")
+            elif error:
+                print_warning(f"⚠ 无法从项目配置获取关键点: {error}")
+        
+        # 3. 决定最终使用哪个关键点配置
+        keypoint_names = None
+        
+        if keypoint_names_from_data:
+            # 优先使用标注数据中实际存在的关键点
+            keypoint_names = keypoint_names_from_data
+            
+            # 如果项目配置也有关键点，进行验证
+            if keypoint_names_from_config:
+                if len(keypoint_names_from_data) != len(keypoint_names_from_config):
+                    console.print()
+                    print_warning(f"⚠ 检测到关键点数量不一致：")
+                    print_warning(f"   - 标注数据中实际标注了 {len(keypoint_names_from_data)} 个关键点: {keypoint_names_from_data}")
+                    print_warning(f"   - 项目配置定义了 {len(keypoint_names_from_config)} 个关键点: {keypoint_names_from_config}")
+                    console.print()
+                    print_info(f"💡 说明：")
+                    print_info(f"   - 缺失的关键点: {[kp for kp in keypoint_names_from_config if kp not in keypoint_names_from_data]}")
+                    print_info(f"   - 生成的 dataset.yaml 将使用实际标注的 {len(keypoint_names_from_data)} 个关键点")
+                    print_info(f"   - 标签文件将是 {1+4+len(keypoint_names_from_data)*3} 列（1 class + 4 bbox + {len(keypoint_names_from_data)}×3 keypoints）")
+                    console.print()
+                    print_info(f"🔧 建议：")
+                    print_info(f"   如果需要使用全部 {len(keypoint_names_from_config)} 个关键点，请在 Label Studio 中完成标注后重新下载")
+                    console.print()
+                elif keypoint_names_from_data != keypoint_names_from_config:
+                    print_warning(f"⚠ 关键点名称不一致：")
+                    print_warning(f"   - 标注数据: {keypoint_names_from_data}")
+                    print_warning(f"   - 项目配置: {keypoint_names_from_config}")
+                    print_warning(f"   → 使用标注数据中的关键点名称")
+                else:
+                    print_success(f"✓ 关键点配置一致，使用 {len(keypoint_names)} 个关键点")
+        elif keypoint_names_from_config:
+            # 如果标注数据中没有关键点，使用项目配置
+            keypoint_names = keypoint_names_from_config
+            print_warning(f"⚠ 标注数据中无关键点，使用项目配置: {keypoint_names}")
+        else:
+            print_warning("⚠ 未找到关键点信息")
+        
+        # 生成关键点配置
         if keypoint_names:
             num_kpts = len(keypoint_names)
             yaml_config['kpt_shape'] = [num_kpts, 3]

@@ -207,10 +207,20 @@ def run_data_operations():
                 
                 if confirm_action(f"确认转换 {task_type} 数据?"):
                     from ..commands.data import convert_labelstudio
+                    
+                    # 对于 pose 任务，询问项目ID以获取准确的关键点配置
+                    project_id_input = None
+                    if task_type == 'pose':
+                        console.print()
+                        print_info("💡 提示: 提供项目ID可以从Label Studio配置中准确获取关键点信息")
+                        if confirm_action("是否提供项目ID?", default=True):
+                            project_id_input = input_number("项目ID:", default=None, allow_none=True)
+                    
                     convert_labelstudio(
                         input_file=input_file,
                         url=url,
                         token=token,
+                        project_id=project_id_input,
                         output_dir=None,
                         task=task_type,
                         format_type='auto',
@@ -3441,6 +3451,7 @@ def run_labelstudio_operations():
                         input_file=str(export_json_path),
                         url=default_url,
                         token=default_token,
+                        project_id=project_id,  # 传递项目ID以获取标签配置
                         output_dir=str(output_path),
                         task=task_type,
                         format_type='json',
