@@ -2026,15 +2026,16 @@ def _print_positive_negative_stats_classify(data_path: Path, positive_classes: L
         print_warning("未找到有效的数据集")
 
 
-def _print_positive_negative_stats(data_path: Path):
+def _print_positive_negative_stats(data_path: Path, class_names: dict = None):
     """
     统计并打印正负样本数量（检测/分割任务）
     
-    正样本：标签文件存在且非空（包含至少一个标注）
-    负样本：标签文件不存在或为空
+    正样本：标签文件存在且包含有效标注（格式正确且 class_id 在有效范围内）
+    负样本：标签文件不存在、为空或所有标注无效
     
     Args:
         data_path: 数据集路径
+        class_names: 类别名称映射 {class_id: class_name}，用于验证 class_id 范围
     """
     split_stats = {}
     
@@ -2063,22 +2064,45 @@ def _print_positive_negative_stats(data_path: Path):
         negative_count = 0
         positive_with_objects = 0  # 有标注对象的图片数
         total_objects = 0  # 总标注对象数
+        invalid_labels = 0  # 格式错误的标签文件
         
         # 遍历所有图像
         for img_file in find_files(img_dir):
             label_file = label_dir / f"{img_file.stem}.txt"
             
             if label_file.exists():
-                # 检查标签文件是否非空
+                # 检查标签文件是否非空且格式正确
                 try:
                     with open(label_file, 'r') as f:
                         lines = [line.strip() for line in f if line.strip()]
                     
                     if lines:
-                        # 标签文件存在且有内容 -> 正样本
-                        positive_count += 1
-                        positive_with_objects += 1
-                        total_objects += len(lines)
+                        # 验证标签格式（至少5个字段 + class_id 必须是有效整数 + 在有效范围内）
+                        valid_lines = []
+                        for line in lines:
+                            parts = line.split()
+                            if len(parts) >= 5:
+                                try:
+                                    # 验证 class_id 是否为有效整数
+                                    class_id = int(parts[0])
+                                    
+                                    # 如果提供了 class_names，还要验证 class_id 是否在有效范围内
+                                    if class_names is None or (0 <= class_id < len(class_names)):
+                                        valid_lines.append(line)
+                                    # 如果 class_id 超出范围，跳过这一行（不算作有效标注）
+                                except ValueError:
+                                    # class_id 不是整数，跳过这一行
+                                    pass
+                        
+                        if valid_lines:
+                            # 有有效标注 -> 正样本
+                            positive_count += 1
+                            positive_with_objects += 1
+                            total_objects += len(valid_lines)
+                        else:
+                            # 标签文件有内容但格式全部错误（字段不足或class_id无效）
+                            negative_count += 1
+                            invalid_labels += 1
                     else:
                         # 标签文件存在但为空 -> 负样本
                         negative_count += 1
@@ -2097,7 +2121,8 @@ def _print_positive_negative_stats(data_path: Path):
                 'negative': negative_count,
                 'total': total,
                 'total_objects': total_objects,
-                'avg_objects': total_objects / positive_with_objects if positive_with_objects > 0 else 0
+                'avg_objects': total_objects / positive_with_objects if positive_with_objects > 0 else 0,
+                'invalid_labels': invalid_labels
             }
     
     # 打印统计表格
@@ -2141,8 +2166,23 @@ def _print_positive_negative_stats(data_path: Path):
         # 打印详细信息
         console.print()
         print_info("样本说明:")
-        print_info("  • 正样本: 包含标注对象的图像（标签文件存在且非空）")
-        print_info("  • 负样本: 不包含标注对象的图像（标签文件不存在或为空）")
+        print_info("  • 正样本: 包含有效标注的图像（格式：class_id x y w h，class_id 必须是整数）")
+        print_info("  • 负样本: 不包含有效标注的图像（文件不存在、为空、字段不足或 class_id 无效）")
+        
+        # 检查是否有格式错误的标签
+        total_invalid = sum(split_stats[split].get('invalid_labels', 0) for split in split_stats)
+        if total_invalid > 0:
+            console.print()
+            print_warning(f"⚠️  发现 {total_invalid} 个无效标签文件！")
+            print_warning("   这些文件有内容但标注无效（字段数少于5个或 class_id 不是整数）")
+            print_info("💡 可能原因：")
+            print_info("   1. class_id 是浮点数（如 '1.0'）而非整数（如 '1'）")
+            print_info("   2. class_id 是类别名称（如 'person'）而非索引")
+            print_info("   3. 字段数不足 5 个")
+            print_info("💡 建议：检查下方详细列表或使用 'yolo_cli data verify' 查看更多信息")
+            for split in ['train', 'val', 'test']:
+                if split in split_stats and split_stats[split].get('invalid_labels', 0) > 0:
+                    print_warning(f"   {split.upper()}: {split_stats[split]['invalid_labels']} 个")
         
         # 打印每个集的平均标注数
         console.print()
@@ -3428,7 +3468,7 @@ def dataset_stats(
         else:
             # 检测/分割任务
             print_section_header("正负样本统计")
-            _print_positive_negative_stats(data_path)
+            _print_positive_negative_stats(data_path, class_names)
         
         # 统计类别分布
         print_section_header("类别分布统计")
@@ -3469,6 +3509,8 @@ def dataset_stats(
             class_counts = defaultdict(int)  # 标注数量
             class_image_counts = defaultdict(set)  # 样本数（包含该类别的图片）
             bbox_counts = 0
+            invalid_class_id_files = []  # 记录 class_id 无效的文件
+            out_of_range_class_ids = defaultdict(list)  # 记录超出范围的 class_id: {class_id: [files]}
             
             for split in ['train', 'val', 'test']:
                 # 尝试两种目录结构
@@ -3490,6 +3532,9 @@ def dataset_stats(
                 for label_file in label_dir.glob('*.txt'):
                     try:
                         image_name = label_file.stem  # 图片文件名（不含扩展名）
+                        # 使用 split/filename 格式作为唯一标识，区分不同目录下的同名文件
+                        unique_image_id = f"{split}/{image_name}"
+                        file_has_valid_annotation = False
                         with open(label_file, 'r') as f:
                             for line in f:
                                 line = line.strip()
@@ -3497,10 +3542,29 @@ def dataset_stats(
                                     continue
                                 parts = line.split()
                                 if len(parts) >= 5:
-                                    class_id = int(parts[0])
-                                    class_counts[class_id] += 1
-                                    class_image_counts[class_id].add(image_name)  # 记录图片
-                                    bbox_counts += 1
+                                    try:
+                                        class_id = int(parts[0])
+                                        
+                                        # 检查 class_id 是否在有效范围内
+                                        if class_names and (class_id < 0 or class_id >= len(class_names)):
+                                            # class_id 超出范围
+                                            out_of_range_class_ids[class_id].append(unique_image_id)
+                                        
+                                        class_counts[class_id] += 1
+                                        class_image_counts[class_id].add(unique_image_id)  # 记录图片（包含 split）
+                                        bbox_counts += 1
+                                        file_has_valid_annotation = True
+                                    except ValueError:
+                                        # class_id 不是有效整数
+                                        if label_file not in invalid_class_id_files:
+                                            invalid_class_id_files.append((label_file, parts[0]))
+                        
+                        # 如果文件有内容但没有任何有效标注，也记录
+                        if not file_has_valid_annotation:
+                            with open(label_file, 'r') as f:
+                                if any(line.strip() for line in f):
+                                    if label_file not in [f for f, _ in invalid_class_id_files]:
+                                        invalid_class_id_files.append((label_file, "unknown"))
                     except Exception:
                         pass
             
@@ -3548,6 +3612,51 @@ def dataset_stats(
                 # 显示类别总数
                 if class_names:
                     print_info(f"类别总数: {len(class_names)}")
+                
+                # 显示统计范围说明（如果有超范围的 class_id）
+                if out_of_range_class_ids:
+                    valid_images = len(set().union(*[class_image_counts[cid] for cid in class_counts.keys() if cid < len(class_names)]))
+                    out_of_range_images = len(set().union(*[set(files) for files in out_of_range_class_ids.values()]))
+                    print_info(f"⚠ 注意：以上统计仅包含有效类别（0-{len(class_names)-1}）的标注")
+                    print_info(f"  有效类别的图片数：{valid_images}")
+                    print_info(f"  超范围标注的图片数：{out_of_range_images}")
+                
+                # 显示无效 class_id 的警告
+                if invalid_class_id_files:
+                    console.print()
+                    print_warning(f"⚠️  发现 {len(invalid_class_id_files)} 个标签文件的 class_id 无效！")
+                    print_warning("   这些文件的 class_id 不是有效整数，导致无法统计")
+                    print_info("💡 问题示例（前5个）：")
+                    for i, (file, class_id_value) in enumerate(invalid_class_id_files[:5]):
+                        print_warning(f"   {i+1}. {file.name}: class_id='{class_id_value}'")
+                    if len(invalid_class_id_files) > 5:
+                        print_warning(f"   ... 还有 {len(invalid_class_id_files) - 5} 个文件")
+                    print_info("💡 建议：检查标签文件第一列是否为有效整数（0到类别数-1）")
+                
+                # 显示超出范围的 class_id 警告
+                if out_of_range_class_ids:
+                    total_out_of_range_images = len(set().union(*[set(files) for files in out_of_range_class_ids.values()]))
+                    console.print()
+                    print_warning(f"⚠️  发现 {total_out_of_range_images} 个图片的标注包含超出范围的 class_id！")
+                    print_warning(f"   有效范围：0 到 {len(class_names)-1}（共 {len(class_names)} 个类别）")
+                    print_info("💡 超出范围的 class_id 详情：")
+                    for class_id in sorted(out_of_range_class_ids.keys())[:10]:
+                        image_list = out_of_range_class_ids[class_id]
+                        print_warning(f"   class_id={class_id}: {len(image_list)} 个图片")
+                        if len(image_list) <= 3:
+                            for img in image_list:
+                                print_warning(f"     - {img}.txt")
+                        else:
+                            for img in image_list[:3]:
+                                print_warning(f"     - {img}.txt")
+                            print_warning(f"     ... 还有 {len(image_list) - 3} 个")
+                    if len(out_of_range_class_ids) > 10:
+                        remaining = len(out_of_range_class_ids) - 10
+                        print_warning(f"   ... 还有 {remaining} 个不同的超范围 class_id")
+                    print_info("💡 建议：")
+                    print_info("   1. 检查标签文件是否使用了错误的类别索引")
+                    print_info("   2. 确认 dataset.yaml 中的类别数量是否正确")
+                    print_info("   3. 这些标注不会被训练使用，可能导致数据不一致")
             else:
                 print_warning("未找到标注数据")
 
