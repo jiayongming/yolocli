@@ -2625,6 +2625,7 @@ def move_dataset(
             from ..ui.prompts import input_path
             source = input_path(
                 "源数据集路径:",
+                default="data/processed",
                 must_exist=True
             )
             if not source:
