@@ -89,11 +89,11 @@ def input_text(message: str, default: str = "", validate: Optional[callable] = N
 
 def input_path(message: str, default: str = "", must_exist: bool = False) -> str:
     """
-    输入路径
+    输入路径（支持 Tab 键补全）
     
     Args:
         message: 提示消息
-        default: 默认路径
+        default: 默认路径（会直接填充到输入框中）
         must_exist: 是否必须存在
     
     Returns:
@@ -108,16 +108,13 @@ def input_path(message: str, default: str = "", must_exist: bool = False) -> str
             return "路径不存在"
         return True
     
-    # 使用 text 而不是 path，因为 path 不会正确显示默认值
-    # 如果有默认值，在提示消息中显示
-    display_message = message
-    if default:
-        display_message = f"{message} (默认: {default})"
-    
-    return questionary.text(
-        display_message,
+    # 使用 questionary.path() 以支持 Tab 键路径补全
+    # default 参数会自动填充到输入框中
+    return questionary.path(
+        message,
         default=default,
         validate=validate_path if must_exist else None,
+        only_directories=False,  # 允许文件和目录
     ).ask()
 
 
