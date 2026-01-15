@@ -270,7 +270,8 @@ class FiftyOneManager:
                         debug_info.append(f"Using detected keypoint count: {num_keypoints}")
                 
                 # 获取关键点标签
-                keypoint_labels = dataset_config.get('keypoint_names', None)
+                # 支持两种字段名
+                keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
                 if not keypoint_labels:
                     # 使用默认标签
                     if num_keypoints == 4:

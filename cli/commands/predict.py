@@ -74,14 +74,20 @@ def save_dataset_yaml(model, output_dir: Path, images_dir: str = 'images', label
         keypoint_names = None
         flip_idx = None
         
-        # 方法1: 从模型的 yaml 配置中获取
-        if hasattr(model.model, 'yaml') and isinstance(model.model.yaml, dict):
+        # 方法1: 从模型的 kpt_names 属性中获取（推荐）
+        if hasattr(model.model, 'kpt_names') and model.model.kpt_names:
+            keypoint_names = model.model.kpt_names
+            print_info(f"✓ 从模型读取关键点名称: {keypoint_names}")
+        
+        # 方法2: 从模型的 yaml 配置中获取
+        if not keypoint_names and hasattr(model.model, 'yaml') and isinstance(model.model.yaml, dict):
             yaml_data = model.model.yaml
             kpt_shape = yaml_data.get('kpt_shape')
-            keypoint_names = yaml_data.get('keypoint_names')
+            # 尝试两种字段名
+            keypoint_names = yaml_data.get('kpt_names') or yaml_data.get('keypoint_names')
             flip_idx = yaml_data.get('flip_idx')
         
-        # 方法2: 从模型结构获取
+        # 方法3: 从模型结构获取
         if not kpt_shape and hasattr(model.model, 'kpt_shape'):
             kpt_shape = model.model.kpt_shape
         
@@ -109,7 +115,8 @@ def save_dataset_yaml(model, output_dir: Path, images_dir: str = 'images', label
                     flip_idx = list(range(num_kpts))
             
             if keypoint_names:
-                yaml_config['keypoint_names'] = keypoint_names
+                # 使用 Ultralytics 标准字段
+                yaml_config['kpt_names'] = keypoint_names
             
             if flip_idx:
                 yaml_config['flip_idx'] = flip_idx

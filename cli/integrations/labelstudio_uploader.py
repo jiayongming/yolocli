@@ -409,9 +409,10 @@ class LabelStudioUploader:
                     
                     # 加载pose相关配置
                     if self.task_type == 'pose':
-                        self.keypoint_names = config.get('keypoint_names', [])
+                        # 支持两种字段名（优先使用 kpt_names）
+                        self.keypoint_names = config.get('kpt_names') or config.get('keypoint_names', [])
                         if not self.keypoint_names:
-                            # 如果没有keypoint_names，根据kpt_shape生成
+                            # 如果没有 kpt_names/keypoint_names，根据 kpt_shape 生成
                             kpt_shape = config.get('kpt_shape', [])
                             if kpt_shape and len(kpt_shape) > 0:
                                 kpt_count = kpt_shape[0]
@@ -1394,7 +1395,7 @@ class LabelStudioUploader:
         if task == 'pose':
             # Pose任务：关键点标注
             if not self.keypoint_names:
-                print_error("未加载关键点信息，请确保dataset.yaml包含keypoint_names")
+                print_error("未加载关键点信息，请确保dataset.yaml包含 kpt_names 或 keypoint_names")
                 return False
             
             keypoint_labels = '\n    '.join([
@@ -2873,8 +2874,8 @@ class LabelStudioUploader:
                         if ls_keypoint_labels:
                             print_warning(f"Label Studio 关键点数量({len(ls_keypoint_labels)})与模型不匹配({num_kpts})，使用模型配置")
                         
-                        # 尝试从模型获取关键点名称
-                        self.keypoint_names = getattr(yolo_model.model, 'keypoint_names', None)
+                        # 尝试从模型获取关键点名称（使用 kpt_names）
+                        self.keypoint_names = getattr(yolo_model.model, 'kpt_names', None)
                         
                         if not self.keypoint_names:
                             # 使用默认名称

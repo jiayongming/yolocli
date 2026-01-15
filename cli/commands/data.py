@@ -1037,8 +1037,10 @@ def _auto_generate_dataset_yaml_for_split(source_dir: Path, output_dir: Path, ta
                     label_config['names'] = source_data['names']
                 if 'kpt_shape' in source_data:
                     label_config['kpt_shape'] = source_data['kpt_shape']
-                if 'keypoint_names' in source_data:
-                    label_config['keypoint_names'] = source_data['keypoint_names']
+                # 读取时支持两种字段名（兼容旧数据）
+                kpt_names_value = source_data.get('kpt_names') or source_data.get('keypoint_names')
+                if kpt_names_value:
+                    label_config['kpt_names'] = kpt_names_value
                 if 'flip_idx' in source_data:
                     label_config['flip_idx'] = source_data['flip_idx']
                 
@@ -1090,8 +1092,11 @@ def _auto_generate_dataset_yaml_for_split(source_dir: Path, output_dir: Path, ta
     
     # 显示关键信息
     print_info(f"  类别数: {yaml_config.get('nc', 'N/A')}")
-    if task == 'pose' and 'keypoint_names' in yaml_config:
-        print_info(f"  关键点: {yaml_config['keypoint_names']}")
+    if task == 'pose':
+        # 使用 kpt_names 作为主字段名
+        kpt_names = yaml_config.get('kpt_names') or yaml_config.get('keypoint_names')
+        if kpt_names:
+            print_info(f"  关键点: {kpt_names}")
 
 
 @app.command("generate-yaml")
@@ -1222,13 +1227,15 @@ def generate_yaml(
                     with open(yaml_path, 'r', encoding='utf-8') as f:
                         existing_data = yaml.safe_load(f)
                     if existing_data and 'kpt_shape' in existing_data:
+                        # 读取时支持两种字段名（兼容旧数据）
+                        kpt_names_value = existing_data.get('kpt_names') or existing_data.get('keypoint_names')
                         existing_label_config = {
                             'kpt_shape': existing_data.get('kpt_shape'),
-                            'keypoint_names': existing_data.get('keypoint_names'),
+                            'kpt_names': kpt_names_value,
                             'flip_idx': existing_data.get('flip_idx'),
                         }
                         # 验证读取的数据是否完整
-                        if existing_label_config['keypoint_names']:
+                        if kpt_names_value:
                             yaml_config.update(existing_label_config)
                             has_existing_config = True
                             print_success(f"✓ 从 {yaml_path} 读取 Pose 配置")
@@ -1305,10 +1312,11 @@ def generate_yaml(
                     # 其他数量，假设无对称性，使用原始顺序
                     yaml_config['flip_idx'] = list(range(kpt_count))
             
-            if 'keypoint_names' not in yaml_config:
+            # 检查是否已有关键点名称（支持两种字段名）
+            if 'kpt_names' not in yaml_config and 'keypoint_names' not in yaml_config:
                 if kpt_count == 17:
                     # COCO 17 关键点（业界标准）
-                    yaml_config['keypoint_names'] = [
+                    kpt_names_list = [
                         'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
@@ -1317,18 +1325,22 @@ def generate_yaml(
                     print_info(f"使用 COCO 17 关键点标准名称")
                 else:
                     # 其他数量，使用通用默认命名
-                    yaml_config['keypoint_names'] = [f'kp_{i}' for i in range(kpt_count)]
+                    kpt_names_list = [f'kp_{i}' for i in range(kpt_count)]
                     print_warning(f"⚠ 未找到关键点名称配置，使用默认命名: kp_0, kp_1, ...")
                     print_info(f"💡 建议：从 Label Studio 下载数据集时会自动从标签模板获取正确的关键点名称")
+                
+                # 使用 Ultralytics 标准字段
+                yaml_config['kpt_names'] = kpt_names_list
             
             if detected_kpt_count:
                 print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (检测到 {kpt_count} 个关键点)")
             else:
                 print_info(f"已添加 Pose 任务配置: kpt_shape=[{kpt_count}, 3] (默认 COCO 17关键点)")
         
-        # 显示关键点名称
-        if 'keypoint_names' in yaml_config:
-            print_info(f"关键点名称: {yaml_config['keypoint_names']}")
+        # 显示关键点名称（优先使用 kpt_names）
+        kpt_names = yaml_config.get('kpt_names') or yaml_config.get('keypoint_names')
+        if kpt_names:
+            print_info(f"关键点名称: {kpt_names}")
     
     # 保存YAML文件
     output_path = Path(output)
@@ -1336,8 +1348,8 @@ def generate_yaml(
     
     # 调试：在保存前检查 yaml_config
     import sys
-    if task == 'pose' and 'keypoint_names' not in yaml_config:
-        print_warning("警告: yaml_config 中缺少 keypoint_names 字段！", file=sys.stderr)
+    if task == 'pose' and 'kpt_names' not in yaml_config and 'keypoint_names' not in yaml_config:
+        print_warning("警告: yaml_config 中缺少 kpt_names/keypoint_names 字段！", file=sys.stderr)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write("# YOLO 数据集配置文件\n")
@@ -1356,7 +1368,10 @@ def generate_yaml(
     print_key_value("names", ", ".join(yaml_config['names'].values()))
     if task == 'pose':
         print_key_value("kpt_shape", str(yaml_config['kpt_shape']))
-        print_key_value("keypoint_names", ", ".join(yaml_config['keypoint_names']))
+        # 优先使用 kpt_names
+        kpt_names = yaml_config.get('kpt_names') or yaml_config.get('keypoint_names', [])
+        if kpt_names:
+            print_key_value("kpt_names", ", ".join(kpt_names))
         print_key_value("flip_idx", "已配置")
 
 
@@ -4185,7 +4200,8 @@ def convert_labelstudio(
         if keypoint_names:
             num_kpts = len(keypoint_names)
             yaml_config['kpt_shape'] = [num_kpts, 3]
-            yaml_config['keypoint_names'] = keypoint_names
+            # 使用 Ultralytics 标准字段
+            yaml_config['kpt_names'] = keypoint_names
             
             # 设置 flip_idx
             if num_kpts == 17:
