@@ -236,6 +236,47 @@ def _validate_pose_label(label_file: Path, expected_kpt_count: Optional[int] = N
         return False
 
 
+def _update_dataset_yaml_path(dataset_dir: Path):
+    """更新dataset.yaml中的path字段为正确的路径
+    
+    Args:
+        dataset_dir: 数据集目录
+    """
+    yaml_file = dataset_dir / 'dataset.yaml'
+    if not yaml_file.exists():
+        yaml_file = dataset_dir / 'data.yaml'
+    
+    if not yaml_file.exists():
+        print_warning(f"⚠ 未找到 dataset.yaml 或 data.yaml，跳过路径更新")
+        return
+    
+    try:
+        # 读取现有配置
+        with open(yaml_file, 'r', encoding='utf-8') as f:
+            yaml_data = yaml.safe_load(f) or {}
+        
+        old_path = yaml_data.get('path', '')
+        
+        # 将path更新为当前目录（相对于yaml文件自身）
+        yaml_data['path'] = '.'
+        
+        # 保存更新后的配置
+        with open(yaml_file, 'w', encoding='utf-8') as f:
+            f.write("# YOLO Dataset Configuration (Complete)\n")
+            f.write("# 此文件在数据集移动后自动更新，path字段指向当前目录\n\n")
+            yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        
+        if old_path != '.':
+            print_success(f"✓ 已更新 {yaml_file.name} 的 path 字段")
+            print_info(f"  原路径: {old_path}")
+            print_info(f"  新路径: . (当前目录)")
+        else:
+            print_info(f"ℹ {yaml_file.name} 的 path 字段已是正确值")
+    
+    except Exception as e:
+        print_warning(f"⚠ 更新 dataset.yaml 失败: {e}")
+
+
 @app.command("split")
 def split_dataset(
     images_dir: Optional[str] = typer.Option(None, "--images", "-i", help="图像目录 (检测/分割任务)"),
@@ -1029,8 +1070,9 @@ def _auto_generate_dataset_yaml_for_split(source_dir: Path, output_dir: Path, ta
         return
     
     # 补全路径信息
+    # 使用相对路径 '.' 表示当前目录（dataset.yaml所在目录）
     yaml_config = {
-        'path': str(output_dir),
+        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
@@ -2788,6 +2830,10 @@ def move_dataset(
         print_info(f"📊 数据集信息:")
         print_info(f"   文件数量: {total_files}")
         print_info(f"   总大小: {size_mb:.2f} MB")
+        
+        # 更新 dataset.yaml 的 path 字段
+        console.print()
+        _update_dataset_yaml_path(target_path)
         
     except Exception as e:
         print_error(f"操作失败: {e}")
