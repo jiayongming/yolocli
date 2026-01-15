@@ -976,12 +976,27 @@ class FiftyOneManager:
             is_classify = detected_task_type == 'classify'
             num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
             
-            # 获取关键点标签（尝试从数据集的 ground_truth_keypoints 中提取）
+            # 获取关键点标签
             keypoint_labels = None
             if is_pose:
-                # 尝试从已有的 ground_truth_keypoints 中获取标签
-                if 'ground_truth_keypoints' in dataset.get_field_schema():
-                    # 获取第一个有关键点的样本
+                # 优先级1: 尝试从预测目录的 dataset.yaml 读取
+                dataset_yaml_file = predictions_path / 'dataset.yaml'
+                if dataset_yaml_file.exists():
+                    try:
+                        import yaml
+                        with open(dataset_yaml_file, 'r', encoding='utf-8') as f:
+                            dataset_config = yaml.safe_load(f)
+                        # 读取时支持两种字段名（兼容旧数据）
+                        keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
+                        if keypoint_labels:
+                            from ..ui.display import print_info
+                            print_info(f"从 dataset.yaml 读取关键点标签: {keypoint_labels}")
+                    except Exception as e:
+                        from ..ui.display import print_warning
+                        print_warning(f"读取 dataset.yaml 失败: {e}")
+                
+                # 优先级2: 尝试从已有的 ground_truth_keypoints 中获取标签
+                if not keypoint_labels and 'ground_truth_keypoints' in dataset.get_field_schema():
                     samples_with_kpts = dataset.match(self.fo.ViewField('ground_truth_keypoints').exists())
                     if len(samples_with_kpts) > 0:
                         first_sample = samples_with_kpts.first()
@@ -990,7 +1005,7 @@ class FiftyOneManager:
                             if hasattr(first_kpt, 'point_labels') and first_kpt.point_labels:
                                 keypoint_labels = first_kpt.point_labels
                 
-                # 如果还是没有，使用默认标签
+                # 优先级3: 使用默认标签
                 if not keypoint_labels:
                     if num_keypoints == 4:
                         keypoint_labels = ['start', 'end', 'center', 'pointer']
@@ -1280,17 +1295,35 @@ class FiftyOneManager:
             is_classify = detected_task_type == 'classify'
             num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
             
-            # 如果是pose任务且没有提供关键点标签，使用默认标签
+            # 如果是pose任务且没有提供关键点标签，尝试从预测目录的 dataset.yaml 读取
             if is_pose and not keypoint_labels:
-                if num_keypoints == 4:
-                    keypoint_labels = ['start', 'end', 'center', 'pointer']
-                elif num_keypoints == 17:
-                    keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
-                                     'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-                                     'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-                                     'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
-                else:
-                    keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+                # 尝试从预测目录的 dataset.yaml 读取 kpt_names
+                dataset_yaml_file = predictions_path / 'dataset.yaml'
+                if dataset_yaml_file.exists():
+                    try:
+                        import yaml
+                        with open(dataset_yaml_file, 'r', encoding='utf-8') as f:
+                            dataset_config = yaml.safe_load(f)
+                        # 读取时支持两种字段名（兼容旧数据）
+                        keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
+                        if keypoint_labels:
+                            from ..ui.display import print_info
+                            print_info(f"从 dataset.yaml 读取关键点标签: {keypoint_labels}")
+                    except Exception as e:
+                        from ..ui.display import print_warning
+                        print_warning(f"读取 dataset.yaml 失败: {e}")
+                
+                # 如果还是没有，使用默认标签
+                if not keypoint_labels:
+                    if num_keypoints == 4:
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
+                    elif num_keypoints == 17:
+                        keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                         'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                    else:
+                        keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
             
             # 打印任务类型信息
             if is_pose:
