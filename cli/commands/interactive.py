@@ -1745,6 +1745,7 @@ def run_data_operations():
                     # 输入源路径
                     source_path = input_path(
                         "源数据集路径:",
+                        default="data/processed",
                         must_exist=True
                     )
                     if not source_path:

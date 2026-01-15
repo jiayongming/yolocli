@@ -100,12 +100,22 @@ def input_path(message: str, default: str = "", must_exist: bool = False) -> str
         str: 输入的路径
     """
     def validate_path(text):
+        # 允许空字符串（用户取消输入）
+        if not text or not text.strip():
+            return True
+        # 验证路径是否存在
         if must_exist and not Path(text).exists():
             return "路径不存在"
         return True
     
-    return questionary.path(
-        message,
+    # 使用 text 而不是 path，因为 path 不会正确显示默认值
+    # 如果有默认值，在提示消息中显示
+    display_message = message
+    if default:
+        display_message = f"{message} (默认: {default})"
+    
+    return questionary.text(
+        display_message,
         default=default,
         validate=validate_path if must_exist else None,
     ).ask()
