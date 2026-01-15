@@ -276,9 +276,12 @@ def start_training(
         project = str(config.get_path('results', absolute=True) / 'training')
     
     if not _is_valid_param(name, str):
+        from ..core.utils import extract_dataset_name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_name = Path(model).stem
-        name = f"{model_name}_{timestamp}"
+        # 优先使用用户指定的数据集名称，否则从路径中提取
+        dataset_name = kwargs.get('dataset_name') or extract_dataset_name(data)
+        name = f"{model_name}_{dataset_name}_{timestamp}"
     
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model, task)

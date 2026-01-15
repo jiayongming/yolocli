@@ -2060,10 +2060,29 @@ def run_train_operations():
                     
                     data_path = str(yaml_file)
                     print_info(f"使用配置文件: {yaml_file.name}")
+                    custom_dataset_name = None  # 从datasets目录选择时不需要自定义名称
                 
                 else:
                     # 手动输入路径
                     data_path = input_path("数据集配置文件:", default="data/processed/dataset.yaml", must_exist=True)
+                    
+                    # 询问是否自定义数据集名称
+                    console.print()
+                    print_info("💡 数据集名称说明：")
+                    print_info("   - 用于生成训练结果目录名称")
+                    print_info("   - 如不填写，将自动从路径中提取")
+                    print_info("   - 建议使用有意义的名称，如：water_meter, coco128")
+                    console.print()
+                    
+                    custom_dataset_name = None
+                    if confirm_action("自定义数据集名称?", default=False):
+                        custom_dataset_name = input_text(
+                            "数据集名称 (用于训练目录):",
+                            default=""
+                        )
+                        if custom_dataset_name:
+                            custom_dataset_name = custom_dataset_name.strip()
+                            print_info(f"将使用数据集名称: {custom_dataset_name}")
                 
                 if not data_path:
                     print_error("未指定数据集路径")
@@ -2084,24 +2103,32 @@ def run_train_operations():
                 
                 if confirm_action("确认开始训练?"):
                     from ..commands.train import start_training
-                    start_training(
-                        model=model_name,
-                        data=data_path,
-                        task=config['task'],
-                        epochs=config['epochs'],
-                        batch=config['batch'],
-                        imgsz=config['imgsz'],
-                        device=config['device'],
-                        project=None,
-                        name=None,
-                        augmentation=config['augmentation'],
-                        optimizer=config.get('optimizer_type', 'auto'),
-                        freeze=config.get('freeze'),
-                        patience=config['patience'],
-                        save_period=config['save_period'],
-                        resume=False,
-                        pretrained=True,
-                    )
+                    
+                    # 准备训练参数
+                    train_params = {
+                        'model': model_name,
+                        'data': data_path,
+                        'task': config['task'],
+                        'epochs': config['epochs'],
+                        'batch': config['batch'],
+                        'imgsz': config['imgsz'],
+                        'device': config['device'],
+                        'project': None,
+                        'name': None,
+                        'augmentation': config['augmentation'],
+                        'optimizer': config.get('optimizer_type', 'auto'),
+                        'freeze': config.get('freeze'),
+                        'patience': config['patience'],
+                        'save_period': config['save_period'],
+                        'resume': False,
+                        'pretrained': True,
+                    }
+                    
+                    # 如果用户提供了自定义数据集名称，通过 kwargs 传递
+                    if custom_dataset_name:
+                        train_params['dataset_name'] = custom_dataset_name
+                    
+                    start_training(**train_params)
             
             elif operation == 'resume':
                 # 恢复训练

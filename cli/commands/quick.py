@@ -411,9 +411,12 @@ def quick_train(
         
         # 生成默认名称（如果未指定）
         if not name:
+            from ..core.utils import extract_dataset_name
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             model_stem = Path(full_model_path).stem if Path(full_model_path).exists() else model_name
-            actual_name = f"{model_stem}_{timestamp}"
+            # 优先使用用户指定的数据集名称，否则从路径中提取
+            dataset_name = kwargs.get('dataset_name') or extract_dataset_name(dataset_yaml)
+            actual_name = f"{model_stem}_{dataset_name}_{timestamp}"
         else:
             actual_name = name
         

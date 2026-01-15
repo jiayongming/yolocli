@@ -559,3 +559,60 @@ def parse_model_name(model_name: str) -> Tuple[str, str]:
         return (base[:-5], TaskType.POSE.value)
     else:
         return (base, TaskType.DETECT.value)
+
+
+def extract_dataset_name(data_path: Union[str, Path]) -> str:
+    """
+    从数据集路径中提取数据集名称
+    
+    Args:
+        data_path: 数据集路径（YAML文件或目录）
+        
+    Returns:
+        str: 数据集名称
+        
+    Examples:
+        >>> extract_dataset_name('data/processed/dataset.yaml')
+        'processed'
+        >>> extract_dataset_name('/path/to/coco128')
+        'coco128'
+        >>> extract_dataset_name('datasets/my_dataset/data.yaml')
+        'my_dataset'
+    """
+    import yaml
+    
+    data_path = Path(data_path)
+    
+    # 如果是YAML文件
+    if data_path.is_file() and data_path.suffix in ['.yaml', '.yml']:
+        try:
+            # 尝试从YAML中读取path字段
+            with open(data_path, 'r', encoding='utf-8') as f:
+                yaml_content = yaml.safe_load(f)
+            
+            if yaml_content and 'path' in yaml_content:
+                # 使用path字段中的最后一级目录名
+                path_in_yaml = Path(yaml_content['path'])
+                if path_in_yaml.name and path_in_yaml.name not in ['.', '..']:
+                    return path_in_yaml.name
+        except Exception:
+            pass
+        
+        # 如果无法从YAML中获取，使用父目录名
+        parent = data_path.parent
+        if parent.name and parent.name not in ['.', '..', 'data']:
+            return parent.name
+        # 如果父目录是'data'，尝试上一级
+        elif parent.name == 'data' and parent.parent.name:
+            return parent.parent.name
+    
+    # 如果是目录
+    elif data_path.is_dir():
+        return data_path.name
+    
+    # 如果路径不存在，尝试从路径字符串中提取
+    if data_path.parent.name and data_path.parent.name not in ['.', '..', 'data']:
+        return data_path.parent.name
+    
+    # 默认返回generic名称
+    return 'dataset'
