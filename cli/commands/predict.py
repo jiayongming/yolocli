@@ -58,8 +58,8 @@ def save_dataset_yaml(model, output_dir: Path, images_dir: str = 'images', label
     """
     import yaml
     
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
     yaml_config = {
-        'path': '.',
         'train': f'{images_dir}',
         'val': f'{images_dir}',
         'test': f'{images_dir}',

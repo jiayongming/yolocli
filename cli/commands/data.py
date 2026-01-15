@@ -257,19 +257,21 @@ def _update_dataset_yaml_path(dataset_dir: Path):
         
         old_path = yaml_data.get('path', '')
         
-        # 将path更新为当前目录（相对于yaml文件自身）
-        yaml_data['path'] = '.'
+        # 删除 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录
+        # 注意：path: . 表示当前工作目录，而不是 yaml 文件所在目录！
+        if 'path' in yaml_data:
+            del yaml_data['path']
         
         # 保存更新后的配置
         with open(yaml_file, 'w', encoding='utf-8') as f:
             f.write("# YOLO Dataset Configuration (Complete)\n")
-            f.write("# 此文件在数据集移动后自动更新，path字段指向当前目录\n\n")
+            f.write("# 此文件在数据集移动后自动更新，path字段已删除以使用默认路径（dataset.yaml所在目录）\n\n")
             yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         
-        if old_path != '.':
+        if old_path:
             print_success(f"✓ 已更新 {yaml_file.name} 的 path 字段")
             print_info(f"  原路径: {old_path}")
-            print_info(f"  新路径: . (当前目录)")
+            print_info(f"  新路径: (默认 - dataset.yaml 所在目录)")
         else:
             print_info(f"ℹ {yaml_file.name} 的 path 字段已是正确值")
     
@@ -1072,9 +1074,9 @@ def _auto_generate_dataset_yaml_for_split(source_dir: Path, output_dir: Path, ta
         return
     
     # 补全路径信息
-    # 使用相对路径 '.' 表示当前目录（dataset.yaml所在目录）
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
+    # 注意：path: . 表示当前工作目录，而不是 yaml 文件所在目录！
     yaml_config = {
-        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
@@ -5756,8 +5758,8 @@ def _filter_dataset_impl(
     # 5. 生成新的 data.yaml
     print_section_header("生成配置文件")
     
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
     new_config = {
-        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
@@ -6011,8 +6013,8 @@ def _convert_format_impl(
     console.print()
     print_section_header("生成配置文件")
     
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
     new_config = {
-        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
@@ -6700,8 +6702,8 @@ def _merge_labels_impl(
     console.print()
     print_section_header("生成配置文件")
     
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
     new_config = {
-        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
@@ -7124,8 +7126,8 @@ def _merge_boxes_impl(
     console.print()
     print_section_header("生成配置文件")
     
+    # 不设置 path 字段，让 YOLO 自动使用 dataset.yaml 所在目录作为基准
     new_config = {
-        'path': '.',
         'train': 'images/train',
         'val': 'images/val',
         'test': 'images/test',
