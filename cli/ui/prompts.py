@@ -318,9 +318,12 @@ def select_export_formats() -> List[str]:
     return [r.split(' ')[0] for r in results]
 
 
-def build_training_config() -> Dict[str, Any]:
+def build_training_config(dataset_path: str = None) -> Dict[str, Any]:
     """
     交互式构建训练配置
+    
+    Args:
+        dataset_path: 数据集配置文件路径，用于pose任务自动读取关键点配置
     
     Returns:
         Dict[str, Any]: 训练配置
@@ -722,15 +725,21 @@ def build_training_config() -> Dict[str, Any]:
             if "从数据集" in preset_choice:
                 # 从数据集读取配置
                 import yaml
-                dataset_path = input_path(
-                    "  数据集配置文件 (data.yaml/dataset.yaml):",
-                    default="data/processed/dataset.yaml",
-                    must_exist=False
-                )
                 
-                if dataset_path and Path(dataset_path).exists():
+                # 如果已经提供了dataset_path参数，直接使用；否则询问用户
+                if dataset_path:
+                    dataset_config_path = dataset_path
+                    print_info(f"  使用已选择的数据集: {dataset_config_path}")
+                else:
+                    dataset_config_path = input_path(
+                        "  数据集配置文件 (data.yaml/dataset.yaml):",
+                        default="data/processed/dataset.yaml",
+                        must_exist=False
+                    )
+                
+                if dataset_config_path and Path(dataset_config_path).exists():
                     try:
-                        with open(dataset_path, 'r', encoding='utf-8') as f:
+                        with open(dataset_config_path, 'r', encoding='utf-8') as f:
                             yaml_data = yaml.safe_load(f)
                             
                         if yaml_data and 'kpt_shape' in yaml_data:

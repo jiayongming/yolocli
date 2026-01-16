@@ -1983,9 +1983,7 @@ def run_train_operations():
                 # 开始训练
                 print_section_header("配置训练")
                 
-                config = build_training_config()
-                
-                # 选择数据集来源
+                # 先选择数据集来源
                 dataset_source_choice = select_option(
                     "选择数据集来源:",
                     choices=[
@@ -2088,6 +2086,10 @@ def run_train_operations():
                 if not data_path:
                     print_error("未指定数据集路径")
                     continue
+                
+                # 构建训练配置（传入数据集路径，用于pose任务自动读取关键点配置）
+                console.print()
+                config = build_training_config(data_path)
                 
                 # 模型名称
                 model_name = YOLOVersionManager.get_model_name(config['version'], config['model_size'])
