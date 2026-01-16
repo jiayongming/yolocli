@@ -141,10 +141,18 @@ def export(
     
     print_section_header("导出模型")
     
+    # 解析模型路径（自动查找已下载的模型）
+    from ..core.utils import resolve_model_path
+    model, found_local = resolve_model_path(model)
+    
     # 检查模型文件
     model_path = Path(model)
     if not model_path.exists():
-        print_error(f"模型文件不存在: {model}")
+        if found_local:
+            print_error(f"模型文件损坏或不可访问: {model}")
+        else:
+            print_error(f"模型文件不存在: {model}")
+            print_info(f"请先下载模型或提供完整的模型路径")
         raise typer.Exit(1)
     
     # 自动检测设备
@@ -301,16 +309,17 @@ def model_info(
     
     print_section_header("模型信息")
     
+    # 解析模型路径（自动查找已下载的模型）
+    from ..core.utils import resolve_model_path
+    model, found_local = resolve_model_path(model)
+    
     model_path = Path(model)
-    
-    # 如果不是完整路径，尝试在默认目录查找
     if not model_path.exists():
-        config = ConfigManager()
-        model_dir = config.get_path('models', absolute=True) / 'weights'
-        model_path = model_dir / model
-    
-    if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        if found_local:
+            print_error(f"模型文件损坏或不可访问: {model}")
+        else:
+            print_error(f"模型不存在: {model}")
+            print_info(f"请先下载模型或提供完整的模型路径")
         raise typer.Exit(1)
     
     # 解析模型信息

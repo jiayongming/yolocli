@@ -288,7 +288,7 @@ def start_training(
     if found_local:
         print_success(f"✓ 使用已下载的模型: {model}")
     else:
-        print_info(f"使用模型: {model} (将自动下载)")
+        print_info(f"使用模型: {model} (将自动下载到 models/weights/)")
     
     # 获取数据增强配置
     # Pose任务使用专用的数据增强预设
@@ -398,7 +398,48 @@ def start_training(
                 print_warning("未找到last.pt，将开始新训练")
                 yolo_model = YOLO(model)
         else:
+            # 如果模型不在本地，YOLO会自动下载
+            # 下载后检查是否需要移动到 models/weights/ 目录
+            import os
+            import shutil
+            original_cwd = os.getcwd()
+            model_filename = Path(model).name
+            
             yolo_model = YOLO(model)
+            
+            # YOLO可能下载到以下位置之一：
+            # 1. 当前目录
+            # 2. 缓存目录 ~/.cache/ultralytics/
+            # 3. 旧版缓存目录 ~/.ultralytics/
+            possible_locations = [
+                Path(original_cwd) / model_filename,  # 当前目录
+                Path.home() / '.cache' / 'ultralytics' / model_filename,  # 新版缓存
+                Path.home() / '.ultralytics' / model_filename,  # 旧版缓存
+            ]
+            
+            source_path = None
+            for location in possible_locations:
+                if location.exists():
+                    source_path = location
+                    break
+            
+            if not found_local and source_path:
+                # 找到下载的模型，复制到 models/weights/
+                config = ConfigManager()
+                weights_dir = config.get_path('models', absolute=True) / 'weights'
+                ensure_dir(weights_dir)
+                
+                target_path = weights_dir / model_filename
+                if not target_path.exists():
+                    # 复制到目标位置（而不是移动，保留缓存）
+                    shutil.copy2(str(source_path), str(target_path))
+                    print_success(f"✓ 模型已保存到: {target_path}")
+                    
+                    # 如果源文件在当前目录（临时下载），删除它
+                    if source_path == Path(original_cwd) / model_filename:
+                        source_path.unlink()
+                else:
+                    print_info(f"✓ 模型已存在于: {target_path}")
         
         # 开始训练
         print_info("开始训练...")
@@ -602,9 +643,16 @@ def validate_model(
     
     print_section_header("模型验证")
     
+    # 解析模型路径（自动查找已下载的模型）
+    model, found_local = resolve_model_path(model, task)
+    
     model_path = Path(model)
     if not model_path.exists():
-        print_error(f"模型不存在: {model}")
+        if found_local:
+            print_error(f"模型文件损坏或不可访问: {model}")
+        else:
+            print_error(f"模型不存在: {model}")
+            print_info(f"请先下载模型或提供完整的模型路径")
         raise typer.Exit(1)
     
     # 如果未指定任务类型，从模型名称推断
