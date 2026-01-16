@@ -286,6 +286,8 @@ def start_training(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model, task)
     if found_local:
+        # 确保使用绝对路径（特别是在DDP模式下，避免子进程找不到模型）
+        model = str(Path(model).absolute())
         print_success(f"✓ 使用已下载的模型: {model}")
     else:
         print_info(f"使用模型: {model} (将自动下载到 models/weights/)")
@@ -393,10 +395,12 @@ def start_training(
             last_pt = Path(project) / name / 'weights' / 'last.pt'
             if last_pt.exists():
                 print_info(f"从检查点恢复: {last_pt}")
-                yolo_model = YOLO(str(last_pt))
+                yolo_model = YOLO(str(last_pt.absolute()))
             else:
                 print_warning("未找到last.pt，将开始新训练")
-                yolo_model = YOLO(model)
+                # 确保使用绝对路径（特别是在DDP模式下）
+                model_abs = Path(model).absolute() if Path(model).exists() else model
+                yolo_model = YOLO(str(model_abs))
         else:
             # 如果模型不在本地，YOLO会自动下载
             # 下载后检查是否需要移动到 models/weights/ 目录
@@ -440,6 +444,11 @@ def start_training(
                         source_path.unlink()
                 else:
                     print_info(f"✓ 模型已存在于: {target_path}")
+                
+                # 重新加载模型，使用 models/weights/ 中的路径
+                # 这样DDP子进程就能找到正确的模型路径，避免重复下载
+                print_info(f"从 {target_path} 重新加载模型以支持DDP...")
+                yolo_model = YOLO(str(target_path))
         
         # 开始训练
         print_info("开始训练...")
@@ -572,7 +581,9 @@ def resume_training(
     try:
         # 加载模型并恢复训练
         print_info("加载检查点...")
-        yolo_model = YOLO(str(checkpoint))
+        # 使用绝对路径以支持DDP模式
+        checkpoint_abs = Path(checkpoint).absolute()
+        yolo_model = YOLO(str(checkpoint_abs))
         
         print_info("恢复训练...")
         results = yolo_model.train(resume=True)
@@ -646,7 +657,8 @@ def validate_model(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model, task)
     
-    model_path = Path(model)
+    # 使用绝对路径以支持DDP模式
+    model_path = Path(model).absolute() if Path(model).exists() else Path(model)
     if not model_path.exists():
         if found_local:
             print_error(f"模型文件损坏或不可访问: {model}")

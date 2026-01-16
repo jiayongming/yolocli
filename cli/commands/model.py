@@ -145,8 +145,8 @@ def export(
     from ..core.utils import resolve_model_path
     model, found_local = resolve_model_path(model)
     
-    # 检查模型文件
-    model_path = Path(model)
+    # 使用绝对路径以支持DDP模式
+    model_path = Path(model).absolute() if Path(model).exists() else Path(model)
     if not model_path.exists():
         if found_local:
             print_error(f"模型文件损坏或不可访问: {model}")

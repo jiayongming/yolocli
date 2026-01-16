@@ -186,6 +186,8 @@ def predict_image(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model, task)
     if found_local:
+        # 使用绝对路径以支持DDP模式
+        model = str(Path(model).absolute())
         print_success(f"✓ 使用已下载的模型: {model}")
         model_path = Path(model)
         if not model_path.exists():
@@ -480,6 +482,8 @@ def detect_batch(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
+        # 使用绝对路径以支持DDP模式
+        model = str(Path(model).absolute())
         print_success(f"✓ 使用已下载的模型: {model}")
         model_path = Path(model)
         if not model_path.exists():
@@ -753,6 +757,8 @@ def detect_video(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
+        # 使用绝对路径以支持DDP模式
+        model = str(Path(model).absolute())
         print_success(f"✓ 使用已下载的模型: {model}")
         model_path = Path(model)
         if not model_path.exists():
@@ -856,6 +862,8 @@ def detect_webcam(
     # 解析模型路径（自动查找已下载的模型）
     model, found_local = resolve_model_path(model)
     if found_local:
+        # 使用绝对路径以支持DDP模式
+        model = str(Path(model).absolute())
         print_success(f"✓ 使用已下载的模型: {model}")
         model_path = Path(model)
         if not model_path.exists():

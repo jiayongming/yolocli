@@ -102,8 +102,8 @@ def validate_model(
     from ..core.utils import resolve_model_path
     model, found_local = resolve_model_path(model, task)
     
-    # 验证模型文件
-    model_path = Path(model)
+    # 使用绝对路径以支持DDP模式
+    model_path = Path(model).absolute() if Path(model).exists() else Path(model)
     if not model_path.exists():
         if found_local:
             print_error(f"模型文件损坏或不可访问: {model}")
@@ -1315,7 +1315,9 @@ def compare_models(
         print_info(f"[{i}/{len(model_paths)}] 验证模型: {model_path.name}")
         
         try:
-            yolo_model = YOLO(str(model_path))
+            # 使用绝对路径以支持DDP模式
+            model_abs_path = model_path.absolute()
+            yolo_model = YOLO(str(model_abs_path))
             
             # 根据任务类型设置验证参数
             val_kwargs = {

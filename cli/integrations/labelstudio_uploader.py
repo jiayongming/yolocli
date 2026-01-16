@@ -2829,7 +2829,9 @@ class LabelStudioUploader:
         try:
             # 加载模型
             print_info("\n加载模型...")
-            yolo_model = YOLO(str(model_path))
+            # 使用绝对路径以支持DDP模式
+            model_path_abs = model_path.absolute() if model_path.exists() else model_path
+            yolo_model = YOLO(str(model_path_abs))
             
             # 确定任务类型
             if task_type:
