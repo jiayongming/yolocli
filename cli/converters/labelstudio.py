@@ -675,15 +675,23 @@ class LabelStudioConverter:
         if sample_orders:
             order_counter = Counter(sample_orders)
             most_common_order, count = order_counter.most_common(1)[0]
-            keypoint_order = list(most_common_order)
+            # 关键修复：只保留唯一的关键点标签（去重但保持顺序）
+            seen = set()
+            keypoint_order = []
+            for label in most_common_order:
+                if label not in seen:
+                    seen.add(label)
+                    keypoint_order.append(label)
             
             # 简化输出：只显示检测到的样本数量和关键点统计
             print(f"ℹ 检测到 {len(sample_orders)} 个完整样本", file=sys.stderr)
+            print(f"ℹ 每个对象的关键点模板: {keypoint_order}", file=sys.stderr)
             
             # 输出每个标签的实际统计信息
             if label_occurrence_count:
                 print(f"ℹ 关键点统计:", file=sys.stderr)
-                for label in all_labels:  # 按照出现顺序显示所有关键点
+                unique_labels = list(dict.fromkeys(all_labels))  # 保持顺序的去重
+                for label in unique_labels:
                     count = label_occurrence_count.get(label, 0)
                     print(f"  {label}: {count} 个", file=sys.stderr)
             
@@ -692,9 +700,9 @@ class LabelStudioConverter:
                 print(f"⚠ 发现 {len(order_counter)} 种不同的标注顺序，可能存在标注不一致", file=sys.stderr)
         else:
             # 回退到预定义顺序（使用所有检测到的关键点）
-            # 按照 label_first_occurrence 中记录的顺序
+            # 按照 label_first_occurrence 中记录的顺序，去重
             if all_labels:
-                keypoint_order = all_labels
+                keypoint_order = list(dict.fromkeys(all_labels))  # 保持顺序的去重
                 print(f"⚠ 无法检测完整样本顺序，使用首次出现顺序: {keypoint_order}", file=sys.stderr)
             else:
                 # 如果连一个关键点都没有，使用空列表
@@ -721,96 +729,115 @@ class LabelStudioConverter:
                 # 如果有矩形框标注，使用它的类别标签
                 object_labels = rectangles[0].get('labels', [])
             
-            # 创建一个字典来存储每个标签的关键点
-            kp_dict = {}
-            actual_labels = []  # 记录实际标注的顺序
-            for kp in keypoints:
-                label = kp.get('label', 'unknown')
-                kp_dict[label] = (kp['x'], kp['y'])
-                actual_labels.append(label)
+            # 检测一组关键点的数量（例如：top_left, top_right, bottom_left, bottom_right = 4个关键点为一组）
+            # 根据keypoint_order推断出每个对象应该有多少个关键点
+            keypoint_set_size = len(set(keypoint_order))  # 去重后得到一组的大小
             
-            # 检查是否所有预期的关键点都存在
-            missing_labels = [l for l in keypoint_order if l not in kp_dict]
-            if missing_labels:
-                inconsistent_samples.append({
-                    'filename': item.get('filename', 'unknown'),
-                    'issue': 'missing_labels',
-                    'missing': missing_labels
-                })
+            # 将关键点按照在annotations中的顺序分组
+            # 每keypoint_set_size个关键点为一组，代表一个对象
+            total_keypoints = len(keypoints)
+            num_objects = total_keypoints // keypoint_set_size if keypoint_set_size > 0 else 0
             
-            # 按照预定义顺序组织关键点，如果某个关键点缺失，使用 (0, 0) 和 visibility=0
-            ordered_keypoints = []
-            all_x = []
-            all_y = []
+            if num_objects == 0:
+                # 没有足够的关键点，保持原样
+                processed_data.append(item)
+                continue
             
-            for label in keypoint_order:
-                if label in kp_dict:
-                    x, y = kp_dict[label]
-                    ordered_keypoints.append({
-                        'x': x,
-                        'y': y,
-                        'visibility': 2,  # 2 = 可见
-                        'label': label
+            # 为每个对象创建一个pose annotation
+            pose_annotations = []
+            
+            for obj_idx in range(num_objects):
+                # 提取当前对象的关键点
+                start_idx = obj_idx * keypoint_set_size
+                end_idx = start_idx + keypoint_set_size
+                obj_keypoints = keypoints[start_idx:end_idx]
+                
+                # 创建一个字典来存储每个标签的关键点
+                kp_dict = {}
+                for kp in obj_keypoints:
+                    label = kp.get('label', 'unknown')
+                    kp_dict[label] = (kp['x'], kp['y'])
+                
+                # 检查是否所有预期的关键点都存在
+                missing_labels = [l for l in keypoint_order if l not in kp_dict]
+                if missing_labels:
+                    inconsistent_samples.append({
+                        'filename': item.get('filename', 'unknown'),
+                        'object_index': obj_idx + 1,
+                        'issue': 'missing_labels',
+                        'missing': missing_labels
                     })
-                    all_x.append(x)
-                    all_y.append(y)
+                
+                # 按照预定义顺序组织关键点，如果某个关键点缺失，使用 (0, 0) 和 visibility=0
+                ordered_keypoints = []
+                all_x = []
+                all_y = []
+                
+                for label in keypoint_order:
+                    if label in kp_dict:
+                        x, y = kp_dict[label]
+                        ordered_keypoints.append({
+                            'x': x,
+                            'y': y,
+                            'visibility': 2,  # 2 = 可见
+                            'label': label
+                        })
+                        all_x.append(x)
+                        all_y.append(y)
+                    else:
+                        # 关键点缺失
+                        ordered_keypoints.append({
+                            'x': 0,
+                            'y': 0,
+                            'visibility': 0,  # 0 = 未标注
+                            'label': label
+                        })
+                
+                # 从关键点计算边界框（不使用矩形框，因为可能有多个对象）
+                if all_x and all_y:
+                    # 从关键点计算边界框
+                    min_x = min(all_x)
+                    max_x = max(all_x)
+                    min_y = min(all_y)
+                    max_y = max(all_y)
+                    
+                    # 添加一些边距（10%）
+                    margin_x = (max_x - min_x) * 0.1
+                    margin_y = (max_y - min_y) * 0.1
+                    
+                    bbox_x = max(0, min_x - margin_x)
+                    bbox_y = max(0, min_y - margin_y)
+                    bbox_w = min(100, max_x + margin_x) - bbox_x
+                    bbox_h = min(100, max_y + margin_y) - bbox_y
                 else:
-                    # 关键点缺失
-                    ordered_keypoints.append({
-                        'x': 0,
-                        'y': 0,
-                        'visibility': 0,  # 0 = 未标注
-                        'label': label
-                    })
-            
-            # 确定边界框：优先使用矩形框标注的边界框，否则从关键点计算
-            if rectangles:
-                # 如果有矩形框标注，直接使用它的边界框（框住整个表盘）
-                rect = rectangles[0]
-                bbox_x = rect['x']
-                bbox_y = rect['y']
-                bbox_w = rect['width']
-                bbox_h = rect['height']
-            elif all_x and all_y:
-                # 没有矩形框标注，从关键点计算边界框
-                min_x = min(all_x)
-                max_x = max(all_x)
-                min_y = min(all_y)
-                max_y = max(all_y)
+                    # 没有有效关键点，使用默认边界框
+                    bbox_x = 0
+                    bbox_y = 0
+                    bbox_w = 100
+                    bbox_h = 100
                 
-                # 添加一些边距（10%）
-                margin_x = (max_x - min_x) * 0.1
-                margin_y = (max_y - min_y) * 0.1
+                # 如果还是没有获取到类别标签，使用默认值
+                if not object_labels:
+                    obj_labels = ['object']
+                else:
+                    obj_labels = object_labels
                 
-                bbox_x = max(0, min_x - margin_x)
-                bbox_y = max(0, min_y - margin_y)
-                bbox_w = min(100, max_x + margin_x) - bbox_x
-                bbox_h = min(100, max_y + margin_y) - bbox_y
-            else:
-                # 既没有矩形框也没有有效关键点，使用默认边界框
-                bbox_x = 0
-                bbox_y = 0
-                bbox_w = 100
-                bbox_h = 100
-            
-            # 如果还是没有获取到类别标签，使用默认值
-            if not object_labels:
-                object_labels = ['object']
-            
-            # 创建 Pose 格式的标注
-            pose_annotation = {
-                'type': 'pose',
-                'x': bbox_x,
-                'y': bbox_y,
-                'width': bbox_w,
-                'height': bbox_h,
-                'keypoints': ordered_keypoints,
-                'labels': object_labels,  # 使用从矩形框获取的类别标签
-            }
+                # 创建 Pose 格式的标注
+                pose_annotation = {
+                    'type': 'pose',
+                    'x': bbox_x,
+                    'y': bbox_y,
+                    'width': bbox_w,
+                    'height': bbox_h,
+                    'keypoints': ordered_keypoints,
+                    'labels': obj_labels,  # 使用从矩形框获取的类别标签
+                }
+                
+                pose_annotations.append(pose_annotation)
             
             # 替换原来的关键点标注
             new_item = item.copy()
-            new_item['annotations'] = [pose_annotation]
+            new_item['annotations'] = pose_annotations
             new_item['is_negative'] = False
             
             processed_data.append(new_item)
