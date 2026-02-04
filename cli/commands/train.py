@@ -235,12 +235,15 @@ def start_training(
             with open(data_path, 'r', encoding='utf-8') as f:
                 yaml_content = yaml.safe_load(f)
             
-            if 'path' not in yaml_content:
-                print_error("dataset.yaml 中缺少 'path' 字段")
-                raise typer.Exit(1)
-            
-            # 使用 yaml 中的 path 作为数据集根目录
-            dataset_root = Path(yaml_content['path'])
+            # 自动推断数据集根目录
+            if 'path' in yaml_content:
+                # 如果有 path 字段，使用它
+                dataset_root = Path(yaml_content['path'])
+                print_info(f"使用 dataset.yaml 中指定的 path: {dataset_root}")
+            else:
+                # 如果没有 path 字段，自动使用 yaml 文件所在目录
+                dataset_root = data_path.parent
+                print_info(f"自动使用 dataset.yaml 所在目录作为数据集根目录: {dataset_root}")
             
             # 检查是否使用 images/ 子目录结构
             images_dir = dataset_root / 'images'
