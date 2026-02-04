@@ -558,26 +558,36 @@ def detect_batch(
         else:
             print_info("检测视频文件...")
         
+        # 判断是否为分类任务
+        is_classify = (model_task == 'classify')
+        
         # 对于pose任务，禁止Ultralytics自动保存txt（会保存错误格式）
         # 我们会在后面手动保存正确格式的标签
         actual_save_txt = False if is_pose else save_txt
         
         # 执行检测
         print_info("开始检测...")
-        results = yolo_model.predict(
-            source=str(source_path),
-            conf=conf,
-            iou=iou,
-            save=True,
-            save_txt=actual_save_txt,
-            save_conf=True,
-            project=str(yolo_temp_dir),
-            name='run',
-            device=device,
-            stream=True,
-            batch=batch,
-            exist_ok=True,
-        )
+        
+        # 构建预测参数
+        predict_kwargs = {
+            'source': str(source_path),
+            'save': True,
+            'save_txt': actual_save_txt,
+            'project': str(yolo_temp_dir),
+            'name': 'run',
+            'device': device,
+            'stream': True,
+            'batch': batch,
+            'exist_ok': True,
+        }
+        
+        # 分类任务不需要 conf、iou、save_conf 参数
+        if not is_classify:
+            predict_kwargs['conf'] = conf
+            predict_kwargs['iou'] = iou
+            predict_kwargs['save_conf'] = True
+        
+        results = yolo_model.predict(**predict_kwargs)
         
         # 处理结果
         all_detections = {}
@@ -587,16 +597,32 @@ def detect_batch(
         pose_labels = {}  # {image_name: [label_lines]}
         
         with create_progress_bar() as progress:
-            task = progress.add_task("检测进度", total=None)
+            task_id = progress.add_task("检测进度", total=None)
             
             for i, result in enumerate(results):
                 img_name = Path(result.path).name if hasattr(result, 'path') else f"image_{i}"
                 
                 detections = []
-                boxes = result.boxes
+                
+                # 分类任务特殊处理
+                if is_classify:
+                    if hasattr(result, 'probs') and result.probs is not None:
+                        probs = result.probs
+                        top_indices = probs.top5  # Top5 indices
+                        top_conf = probs.top5conf  # Top5 confidences
+                        
+                        for idx, conf_val in zip(top_indices, top_conf):
+                            detection = {
+                                'class': int(idx),
+                                'class_name': yolo_model.names[int(idx)],
+                                'confidence': float(conf_val),
+                            }
+                            detections.append(detection)
+                        total_objects += 1  # 分类任务每张图算1个结果
                 
                 # Pose任务特殊处理
-                if is_pose and hasattr(result, 'keypoints') and result.keypoints is not None:
+                elif is_pose and hasattr(result, 'keypoints') and result.keypoints is not None:
+                    boxes = result.boxes
                     keypoints = result.keypoints.xy.cpu().numpy()  # [N, num_kpts, 2]
                     keypoints_conf = result.keypoints.conf.cpu().numpy() if hasattr(result.keypoints, 'conf') else None  # [N, num_kpts]
                     
@@ -666,20 +692,22 @@ def detect_batch(
                     total_objects += len(boxes)
                 
                 else:
-                    # 普通检测任务
-                    for box in boxes:
-                        detection = {
-                            'class': int(box.cls[0]),
-                            'class_name': yolo_model.names[int(box.cls[0])],
-                            'confidence': float(box.conf[0]),
-                            'bbox': box.xyxy[0].tolist(),
-                        }
-                        detections.append(detection)
-                    total_objects += len(boxes)
+                    # 普通检测/分割任务
+                    boxes = result.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            detection = {
+                                'class': int(box.cls[0]),
+                                'class_name': yolo_model.names[int(box.cls[0])],
+                                'confidence': float(box.conf[0]),
+                                'bbox': box.xyxy[0].tolist(),
+                            }
+                            detections.append(detection)
+                        total_objects += len(boxes)
                 
                 all_detections[img_name] = detections
                 
-                progress.update(task, advance=1, description=f"已处理 {i+1} 张")
+                progress.update(task_id, advance=1, description=f"已处理 {i+1} 张")
         
         # 整理YOLO输出结果到规范目录结构
         yolo_run_dir = yolo_temp_dir / 'run'
