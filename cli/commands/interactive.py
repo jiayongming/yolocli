@@ -2091,47 +2091,59 @@ def run_train_operations():
                 console.print()
                 config = build_training_config(data_path)
                 
-                # 模型名称
+            # 根据模型来源确定模型名称
+            if config['model_source'] == 'existing':
+                # 使用已有模型进行微调
+                model_name = config['custom_model_path']
+                model_source_desc = "已有模型(微调模式)"
+                print_success(f"✓ 已选择进行微调的模型: {Path(model_name).name}")
+            else:
+                # 使用默认YOLO模型
                 model_name = YOLOVersionManager.get_model_name(config['version'], config['model_size'])
+                model_source_desc = f"默认YOLO模型 ({config['version'].upper()})"
+                print_success(f"✓ 已选择默认模型: {model_name}")
+            
+            # 打印训练配置
+            console.print()
+            print_section_header("训练配置确认")
+            print_info(f"  模型: {model_name}")
+            print_info(f"  模型来源: {model_source_desc}")
+            print_info(f"  任务类型: {config['task']}")
+            print_info(f"  数据集: {data_path}")
+            print_info(f"  训练轮数: {config['epochs']}")
+            print_info(f"  批次大小: {config['batch']}")
+            print_info(f"  图像尺寸: {config['imgsz']}")
+            print_info(f"  设备: {config['device']}")
+            print_info(f"  数据增强: {config['augmentation']}")
+            
+            if confirm_action("确认开始训练?"):
+                from ..commands.train import start_training
                 
-                print_info(f"训练配置:")
-                print_info(f"  模型: {model_name}")
-                print_info(f"  任务类型: {config['task']}")
-                print_info(f"  数据集: {data_path}")
-                print_info(f"  训练轮数: {config['epochs']}")
-                print_info(f"  批次大小: {config['batch']}")
-                print_info(f"  图像尺寸: {config['imgsz']}")
-                print_info(f"  设备: {config['device']}")
-                print_info(f"  数据增强: {config['augmentation']}")
+                # 准备训练参数
+                train_params = {
+                    'model': model_name,
+                    'data': data_path,
+                    'task': config['task'],
+                    'epochs': config['epochs'],
+                    'batch': config['batch'],
+                    'imgsz': config['imgsz'],
+                    'device': config['device'],
+                    'project': None,
+                    'name': None,
+                    'augmentation': config['augmentation'],
+                    'optimizer': config.get('optimizer_type', 'auto'),
+                    'freeze': config.get('freeze'),
+                    'patience': config['patience'],
+                    'save_period': config['save_period'],
+                    'resume': False,
+                    'pretrained': True,
+                }
                 
-                if confirm_action("确认开始训练?"):
-                    from ..commands.train import start_training
-                    
-                    # 准备训练参数
-                    train_params = {
-                        'model': model_name,
-                        'data': data_path,
-                        'task': config['task'],
-                        'epochs': config['epochs'],
-                        'batch': config['batch'],
-                        'imgsz': config['imgsz'],
-                        'device': config['device'],
-                        'project': None,
-                        'name': None,
-                        'augmentation': config['augmentation'],
-                        'optimizer': config.get('optimizer_type', 'auto'),
-                        'freeze': config.get('freeze'),
-                        'patience': config['patience'],
-                        'save_period': config['save_period'],
-                        'resume': False,
-                        'pretrained': True,
-                    }
-                    
-                    # 如果用户提供了自定义数据集名称，通过 kwargs 传递
-                    if custom_dataset_name:
-                        train_params['dataset_name'] = custom_dataset_name
-                    
-                    start_training(**train_params)
+                # 如果用户提供了自定义数据集名称，通过 kwargs 传递
+                if custom_dataset_name:
+                    train_params['dataset_name'] = custom_dataset_name
+                
+                start_training(**train_params)
             
             elif operation == 'resume':
                 # 恢复训练

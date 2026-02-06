@@ -219,6 +219,83 @@ def select_model_size() -> str:
     return result.split(' ')[0]
 
 
+def select_model_source() -> str:
+    """
+    选择模型来源
+    
+    用于在交互式训练场景中选择是使用默认的YOLO预训练模型还是已有的训练好的模型。
+    
+    Returns:
+        str: 'default' 表示使用默认YOLO模型, 'existing' 表示使用已有模型（支持微调）
+    """
+    from ..ui.display import print_info
+    
+    choices = [
+        "default - 默认YOLO模型 (YOLOv8/YOLO11等预训练模型)",
+        "existing - 已有训练好的模型 (支持微调)",
+    ]
+    
+    print_info("💡 提示: 选择'已有模型'可以对已训练的模型进行微调(fine-tuning)")
+    result = select_option("选择模型来源:", choices, default=choices[0])
+    
+    # 提取来源类型
+    return result.split(' ')[0]
+
+
+def input_model_path() -> str:
+    """
+    输入已有模型的路径
+    
+    交互式提示用户输入已训练模型的文件路径，支持Tab键路径补全，并进行验证：
+    - 支持Tab键自动补全路径
+    - 检查文件是否存在
+    - 检查文件扩展名是否为 .pt
+    
+    Returns:
+        str: 验证通过的模型文件绝对路径
+    """
+    from pathlib import Path
+    from ..ui.display import print_error, print_warning, print_info
+    from prompt_toolkit import prompt
+    from prompt_toolkit.completion import PathCompleter
+    
+    print_info("💡 提示: 可使用 Tab 键补全路径")
+    
+    while True:
+        try:
+            # 使用 prompt_toolkit 支持路径补全
+            model_path = prompt(
+                "请输入模型路径 (.pt文件): ",
+                completer=PathCompleter(
+                    expanduser=True,  # 支持 ~ 展开
+                    file_filter=lambda filename: filename.endswith('.pt')  # 优先显示 .pt 文件
+                ),
+                default="models/weights/best.pt"
+            ).strip()
+            
+            if not model_path:
+                print_error("模型路径不能为空")
+                continue
+            
+            # 检查路径是否存在
+            path = Path(model_path).expanduser()  # 支持 ~ 展开
+            if not path.exists():
+                print_error(f"模型文件不存在: {model_path}")
+                continue
+            
+            # 检查是否是 .pt 文件
+            if path.suffix != '.pt':
+                print_warning("警告: 模型文件不是 .pt 格式")
+                if not confirm_action("是否继续使用此文件?", default=False):
+                    continue
+            
+            return str(path.absolute())
+        except (KeyboardInterrupt, EOFError):
+            # 处理 Ctrl+C 或 Ctrl+D
+            print_error("\n操作已取消")
+            raise typer.Exit(1)
+
+
 def select_device() -> str:
     """
     选择设备
@@ -330,16 +407,32 @@ def build_training_config(dataset_path: str = None) -> Dict[str, Any]:
     """
     config = {}
     
-    # YOLO版本
-    config['version'] = select_yolo_version()
+    # 模型来源选择
+    config['model_source'] = select_model_source()
     
-    # 任务类型
-    config['task'] = select_task_type()
+    # 根据模型来源选择不同的配置流程
+    if config['model_source'] == 'existing':
+        # 使用已有模型
+        config['custom_model_path'] = input_model_path()
+        config['version'] = None  # 已有模型不需要版本信息
+        config['model_size'] = None  # 已有模型不需要大小信息
+        
+        # 任务类型（仍然需要，用于配置训练参数）
+        config['task'] = select_task_type()
+    else:
+        # 使用默认YOLO模型
+        config['custom_model_path'] = None
+        
+        # YOLO版本
+        config['version'] = select_yolo_version()
+        
+        # 任务类型
+        config['task'] = select_task_type()
+        
+        # 模型大小
+        config['model_size'] = select_model_size()
     
-    # 模型大小
-    config['model_size'] = select_model_size()
-    
-    # 训练参数
+    # 训练参数（两种模型来源都需要）
     config['epochs'] = int(input_number("训练轮数:", default=200, min_value=1))
     config['batch'] = int(input_number("批次大小:", default=16, min_value=1))
     config['imgsz'] = int(input_number("图像尺寸:", default=640, min_value=32))
