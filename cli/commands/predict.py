@@ -857,7 +857,8 @@ def detect_video(
         
         for result in results:
             frame_count += 1
-            total_objects += len(result.boxes)
+            if result.boxes is not None:
+                total_objects += len(result.boxes)
         
         # 显示统计
         console.print()
