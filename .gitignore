@@ -106,3 +106,5 @@ htmlcov/
 .*.swo
 *~
 
+scripts/
+.DS_Store

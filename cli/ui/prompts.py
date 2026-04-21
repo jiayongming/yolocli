@@ -884,6 +884,41 @@ def build_training_config(dataset_path: str = None) -> Dict[str, Any]:
         config['freeze'] = None
         config['loss_weights'] = None
     
+    # 手动超参数输入（任何时候都可配置，格式: KEY=VALUE）
+    from ..ui.display import console, print_info, print_warning
+    console.print()
+    print_info("🔧 手动超参数（可选）：")
+    print_info("   格式: KEY=VALUE，多个参数用逗号分隔")
+    print_info("   示例: dropout=0.4,lr0=0.01,weight_decay=0.0005")
+    print_info("   直接回车跳过")
+    raw = input_text("手动超参数:", default="")
+    extra_params = {}
+    if raw and raw.strip():
+        for item in raw.split(','):
+            item = item.strip()
+            if '=' not in item:
+                print_warning(f"忽略无效超参数格式: '{item}'，应为 KEY=VALUE")
+                continue
+            key, _, val = item.partition('=')
+            key, val = key.strip(), val.strip()
+            if val.lower() == 'true':
+                extra_params[key] = True
+            elif val.lower() == 'false':
+                extra_params[key] = False
+            else:
+                try:
+                    extra_params[key] = int(val)
+                except ValueError:
+                    try:
+                        extra_params[key] = float(val)
+                    except ValueError:
+                        extra_params[key] = val
+        if extra_params:
+            print_info("已设置手动超参数:")
+            for k, v in extra_params.items():
+                print_info(f"  {k}: {v}")
+    config['extra_params'] = extra_params if extra_params else None
+    
     return config
 
 
