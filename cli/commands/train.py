@@ -4,7 +4,7 @@
 
 import typer
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 from ultralytics import YOLO
 import yaml
@@ -212,6 +212,8 @@ def start_training(
     # Pose任务特定参数
     kpt_shape: Optional[str] = typer.Option(None, "--kpt-shape", help="[Pose] 关键点形状，格式: '17,3' (关键点数,3)"),
     flip_idx: Optional[str] = typer.Option(None, "--flip-idx", help="[Pose] 水平翻转时的关键点索引映射，格式: '0,2,1,4,3,...'"),
+    # 手动传入超参数，格式: KEY=VALUE，支持多次使用，如 --param dropout=0.4 --param lr0=0.01
+    param: Optional[List[str]] = typer.Option(None, "--param", "-P", help="手动超参数，格式 KEY=VALUE，如 dropout=0.4（可多次使用）"),
     # 从交互模式或quick_train传递的高级配置（非CLI参数，使用 **kwargs 接收）
     **kwargs
 ):
@@ -513,6 +515,38 @@ def start_training(
             for key, value in loss_weights.items():
                 print_info(f"  {key}: {value}")
             console.print()
+        
+        # 解析并应用 --param KEY=VALUE 超参数（优先级最高，覆盖前面所有配置）
+        if param:
+            extra_params = {}
+            for item in param:
+                if '=' not in item:
+                    print_warning(f"忽略无效的超参数格式: '{item}'，应为 KEY=VALUE")
+                    continue
+                key, _, raw = item.partition('=')
+                key = key.strip()
+                raw = raw.strip()
+                # 自动推断类型：bool > int > float > str
+                if raw.lower() == 'true':
+                    value = True
+                elif raw.lower() == 'false':
+                    value = False
+                else:
+                    try:
+                        value = int(raw)
+                    except ValueError:
+                        try:
+                            value = float(raw)
+                        except ValueError:
+                            value = raw
+                extra_params[key] = value
+            if extra_params:
+                training_kwargs.update(extra_params)
+                console.print()
+                print_info("手动超参数 (--param):")
+                for key, value in extra_params.items():
+                    print_info(f"  {key}: {value}")
+                console.print()
         
         results = yolo_model.train(**training_kwargs)
         

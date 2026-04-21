@@ -2115,6 +2115,8 @@ def run_train_operations():
             print_info(f"  图像尺寸: {config['imgsz']}")
             print_info(f"  设备: {config['device']}")
             print_info(f"  数据增强: {config['augmentation']}")
+            if config.get('extra_params'):
+                print_info(f"  手动超参数: {', '.join(f'{k}={v}' for k, v in config['extra_params'].items())}")
             
             if confirm_action("确认开始训练?"):
                 from ..commands.train import start_training
@@ -2142,6 +2144,14 @@ def run_train_operations():
                 # 如果用户提供了自定义数据集名称，通过 kwargs 传递
                 if custom_dataset_name:
                     train_params['dataset_name'] = custom_dataset_name
+                
+                # 手动超参数（KEY=VALUE 列表格式，与 --param 兼容）
+                if config.get('extra_params'):
+                    train_params['param'] = [
+                        f"{k}={v}" for k, v in config['extra_params'].items()
+                    ]
+                else:
+                    train_params['param'] = None
                 
                 start_training(**train_params)
             
