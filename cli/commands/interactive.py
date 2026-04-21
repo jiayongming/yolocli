@@ -4193,6 +4193,7 @@ def run_validate_operations():
                     iou = 0.6
                 
                 batch = int(input_number("批次大小:", default=16, min_value=1))
+                imgsz = int(input_number("图像尺寸:", default=640, min_value=32))
                 
                 # 可选项
                 save_json = confirm_action("保存JSON格式结果?", default=True)
@@ -4211,6 +4212,7 @@ def run_validate_operations():
                     print_info(f"  IoU阈值: {iou}")
                 
                 print_info(f"  批次大小: {batch}")
+                print_info(f"  图像尺寸: {imgsz}")
                 
                 if confirm_action("确认开始验证?"):
                     from ..commands.validate import validate_model
@@ -4220,7 +4222,7 @@ def run_validate_operations():
                         split=split,
                         task=task,
                         batch=batch,
-                        imgsz=640,
+                        imgsz=imgsz,
                         conf=conf,
                         iou=iou,
                         device='auto',
