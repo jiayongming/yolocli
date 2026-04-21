@@ -1230,6 +1230,7 @@ def compare_models(
     conf: float = typer.Option(0.001, "--conf", help="置信度阈值"),
     iou: float = typer.Option(0.6, "--iou", help="IoU阈值"),
     device: str = typer.Option("auto", "--device", help="设备"),
+    _imgsz_list=None,  # 内部参数：交互模式传入多个imgsz列表
 ):
     """
     比较多个模型的性能
@@ -1322,7 +1323,12 @@ def compare_models(
     
     # 验证每个模型
     for i, model_path in enumerate(model_paths, 1):
-        print_info(f"[{i}/{len(model_paths)}] 验证模型: {model_path.name}")
+        # 获取当前模型对应的 imgsz
+        if _imgsz_list and i - 1 < len(_imgsz_list):
+            current_imgsz = _imgsz_list[i - 1]
+        else:
+            current_imgsz = imgsz
+        print_info(f"[{i}/{len(model_paths)}] 验证模型: {model_path.name} (imgsz={current_imgsz})")
         
         try:
             # 使用绝对路径以支持DDP模式
@@ -1334,7 +1340,7 @@ def compare_models(
                 'data': data if task_type == TaskType.CLASSIFY else str(data_path),
                 'split': split,
                 'batch': batch,
-                'imgsz': imgsz,
+                'imgsz': current_imgsz,
                 'device': device,
                 'verbose': False,
                 'plots': False,

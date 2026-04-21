@@ -4350,6 +4350,29 @@ def run_validate_operations():
                 # 验证参数
                 batch = int(input_number("批次大小:", default=16, min_value=1))
                 
+                # imgsz: 支持单个值（共用）或多个值（逗号分隔，每个模型单独配置）
+                model_count = len([m for m in models_str.split(',') if m.strip()])
+                print_info(f"图像尺寸: 输入单个值共用所有模型，或用逗号分隔 {model_count} 个值")
+                print_info(f"示例: 640  或  640,320,1280")
+                imgsz_raw = input_text("图像尺寸:", default="640")
+                imgsz_parts = [s.strip() for s in imgsz_raw.split(',') if s.strip()]
+                try:
+                    imgsz_list = [int(v) for v in imgsz_parts]
+                except ValueError:
+                    print_warning("图像尺寸格式无效，使用默认值 640")
+                    imgsz_list = [640]
+                if len(imgsz_list) == 1:
+                    imgsz_single = imgsz_list[0]
+                    imgsz_display = str(imgsz_single)
+                else:
+                    if len(imgsz_list) != model_count:
+                        print_warning(f"imgsz 数量 ({len(imgsz_list)}) 与模型数量 ({model_count}) 不一致，多余的使用最后一个值补齐")
+                        while len(imgsz_list) < model_count:
+                            imgsz_list.append(imgsz_list[-1])
+                        imgsz_list = imgsz_list[:model_count]
+                    imgsz_single = imgsz_list[0]  # typer 参数占位用
+                    imgsz_display = ', '.join(str(v) for v in imgsz_list)
+                
                 # 分类任务不需要 conf 和 iou
                 if task != "classify":
                     conf = input_number("置信度阈值:", default=0.25, min_value=0.0, max_value=1.0)
@@ -4359,12 +4382,13 @@ def run_validate_operations():
                     conf = 0.001
                     iou = 0.6
                 
-                console.print()
                 print_info(f"将比较以下模型:")
                 for i, model in enumerate(models_str.split(','), 1):
-                    print_info(f"  {i}. {model.strip()}")
+                    per_imgsz = imgsz_list[i-1] if len(imgsz_list) > 1 else imgsz_single
+                    print_info(f"  {i}. {model.strip()}  (imgsz={per_imgsz})")
                 print_info(f"任务类型: {task if task else '自动推断'}")
                 print_info(f"批次大小: {batch}")
+                print_info(f"图像尺寸: {imgsz_display}")
                 
                 # 只有检测和分割任务才显示阈值参数
                 if task != "classify":
@@ -4379,10 +4403,11 @@ def run_validate_operations():
                         task=task,
                         split='val',
                         batch=batch,
-                        imgsz=640,
+                        imgsz=imgsz_single,
                         conf=conf,
                         iou=iou,
                         device='auto',
+                        _imgsz_list=imgsz_list if len(imgsz_list) > 1 else None,
                     )
             
             console.print()
