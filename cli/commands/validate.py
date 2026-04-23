@@ -845,15 +845,28 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                         header_style="bold magenta"
                     )
                     class_table.add_column("类别", style="cyan", width=20)
-                    class_table.add_column("Accuracy", style="green", justify="right", width=12)
-                    class_table.add_column("Precision", style="yellow", justify="right", width=12)
-                    class_table.add_column("Recall", style="yellow", justify="right", width=12)
-                    class_table.add_column("F1 Score", style="blue", justify="right", width=12)
-                    class_table.add_column("Support", style="dim", justify="right", width=10)
+                    class_table.add_column("Top-1 准确率", style="green", justify="right", width=14)
+                    class_table.add_column("Top-5 准确率", style="green", justify="right", width=14)
+                    class_table.add_column("精确率", style="yellow", justify="right", width=10)
+                    class_table.add_column("召回率", style="yellow", justify="right", width=10)
+                    class_table.add_column("F1分数", style="blue", justify="right", width=10)
+                    class_table.add_column("样本数", style="dim", justify="right", width=8)
                     
                     matrix = cm.matrix
                     n_classes = matrix.shape[0] if len(matrix.shape) > 1 else 1
-                    class_names = [results.names[i] if hasattr(results, 'names') else f"Class {i}" for i in range(n_classes)]
+                    names = results.names if hasattr(results, 'names') else {}
+                    if isinstance(names, dict):
+                        class_names = [names.get(i, f"Class {i}") for i in range(n_classes)]
+                    elif isinstance(names, (list, tuple)):
+                        class_names = [names[i] if i < len(names) else f"Class {i}" for i in range(n_classes)]
+                    else:
+                        class_names = [f"Class {i}" for i in range(n_classes)]
+                    
+                    all_top1s = []
+                    all_precisions = []
+                    all_recalls = []
+                    all_f1s = []
+                    total_support = 0
                     
                     for i, class_name in enumerate(class_names):
                         if i >= matrix.shape[0] or i >= matrix.shape[1]:
@@ -862,24 +875,45 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                         tp = safe_float(matrix[i, i])
                         fp = safe_float(matrix[:, i].sum() - matrix[i, i])
                         fn = safe_float(matrix[i, :].sum() - matrix[i, i])
-                        tn = safe_float(matrix.sum() - tp - fp - fn)
                         
-                        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+                        # Top-1 准确率 = 该类别被正确预测的比例（等同于召回率）
+                        top1 = tp / (tp + fn) if (tp + fn) > 0 else 0
                         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-                        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                        recall = top1
                         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
                         support = int(tp + fn)
                         
+                        all_top1s.append(top1)
+                        all_precisions.append(precision)
+                        all_recalls.append(recall)
+                        all_f1s.append(f1)
+                        total_support += support
+                        
                         class_table.add_row(
                             class_name,
-                            f"{accuracy:.4f}",
+                            f"{top1:.4f}",
+                            "-",
                             f"{precision:.4f}",
                             f"{recall:.4f}",
                             f"{f1:.4f}",
                             str(support)
                         )
                     
+                    # 添加宏平均汇总行
+                    if all_precisions:
+                        class_table.add_section()
+                        class_table.add_row(
+                            "[bold]宏平均 / 合计[/bold]",
+                            f"[bold]{safe_float(results.top1):.4f}[/bold]",
+                            f"[bold]{safe_float(results.top5):.4f}[/bold]",
+                            f"[bold]{np.mean(all_precisions):.4f}[/bold]",
+                            f"[bold]{np.mean(all_recalls):.4f}[/bold]",
+                            f"[bold]{np.mean(all_f1s):.4f}[/bold]",
+                            f"[bold]{total_support}[/bold]"
+                        )
+                    
                     console.print(class_table)
+                    console.print("[dim]注: 各类别 Top-5 准确率不支持逐类统计，宏平均行显示整体 Top-1/Top-5 准确率。[/dim]")
 
 
 def _generate_results_summary(results, task_type: TaskType, model_path: Path, 
