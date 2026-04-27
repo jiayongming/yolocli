@@ -834,7 +834,7 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
             console.print(stats_table)
             
             # 如果有每个类别的详细信息，显示出来
-            if hasattr(results, 'names') and hasattr(results, 'confusion_matrix'):
+            if hasattr(results, 'confusion_matrix'):
                 cm = results.confusion_matrix
                 if hasattr(cm, 'matrix') and cm.matrix is not None:
                     console.print()
@@ -854,41 +854,47 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                     
                     matrix = cm.matrix
                     n_classes = matrix.shape[0] if len(matrix.shape) > 1 else 1
-                    names = results.names if hasattr(results, 'names') else {}
+
+                    # 优先从混淆矩阵获取类别名，再从 results 获取
+                    names = getattr(cm, 'names', None) or getattr(results, 'names', None)
                     if isinstance(names, dict):
                         class_names = [names.get(i, f"Class {i}") for i in range(n_classes)]
                     elif isinstance(names, (list, tuple)):
                         class_names = [names[i] if i < len(names) else f"Class {i}" for i in range(n_classes)]
                     else:
                         class_names = [f"Class {i}" for i in range(n_classes)]
-                    
+
                     all_top1s = []
                     all_precisions = []
                     all_recalls = []
                     all_f1s = []
                     total_support = 0
-                    
+
                     for i, class_name in enumerate(class_names):
                         if i >= matrix.shape[0] or i >= matrix.shape[1]:
                             continue
-                            
+
                         tp = safe_float(matrix[i, i])
                         fp = safe_float(matrix[:, i].sum() - matrix[i, i])
                         fn = safe_float(matrix[i, :].sum() - matrix[i, i])
-                        
+
                         # Top-1 准确率 = 该类别被正确预测的比例（等同于召回率）
                         top1 = tp / (tp + fn) if (tp + fn) > 0 else 0
                         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
                         recall = top1
                         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
                         support = int(tp + fn)
-                        
+
+                        # 跳过验证集中没有样本的类别
+                        if support == 0:
+                            continue
+
                         all_top1s.append(top1)
                         all_precisions.append(precision)
                         all_recalls.append(recall)
                         all_f1s.append(f1)
                         total_support += support
-                        
+
                         class_table.add_row(
                             class_name,
                             f"{top1:.4f}",
@@ -898,7 +904,7 @@ def _display_validation_results(results, task_type: TaskType, model_name: str):
                             f"{f1:.4f}",
                             str(support)
                         )
-                    
+
                     # 添加宏平均汇总行
                     if all_precisions:
                         class_table.add_section()
@@ -1203,23 +1209,33 @@ def _generate_results_summary(results, task_type: TaskType, model_path: Path,
                     f1_scores = []
                     
                     per_class = {}
-                    class_names = [results.names[i] if hasattr(results, 'names') else f"class_{i}" for i in range(n_classes)]
-                    
+                    names = getattr(cm, 'names', None) or getattr(results, 'names', None)
+                    if isinstance(names, dict):
+                        class_names = [names.get(i, f"class_{i}") for i in range(n_classes)]
+                    elif isinstance(names, (list, tuple)):
+                        class_names = [names[i] if i < len(names) else f"class_{i}" for i in range(n_classes)]
+                    else:
+                        class_names = [f"class_{i}" for i in range(n_classes)]
+
                     for i, class_name in enumerate(class_names):
                         if i >= matrix.shape[0] or i >= matrix.shape[1]:
                             continue
-                            
+
                         tp = safe_float(matrix[i, i])
                         fp = safe_float(matrix[:, i].sum() - matrix[i, i])
                         fn = safe_float(matrix[i, :].sum() - matrix[i, i])
                         tn = safe_float(matrix.sum() - tp - fp - fn)
-                        
+
                         accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
                         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
                         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
                         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
                         support = int(tp + fn)
-                        
+
+                        # 跳过验证集中没有样本的类别
+                        if support == 0:
+                            continue
+
                         precisions.append(precision)
                         recalls.append(recall)
                         f1_scores.append(f1)
@@ -1580,26 +1596,30 @@ def compare_models(
                     cm = result['results'].confusion_matrix
                     if hasattr(cm, 'matrix') and cm.matrix is not None and cm.matrix.size > 0:
                         matrix = cm.matrix
-                        # 计算宏平均（分类任务没有背景类，使用全部类别）
                         num_classes = matrix.shape[0]
                         precisions = []
                         recalls = []
                         f1_scores = []
-                        
+
                         for i in range(num_classes):
                             tp = safe_float(matrix[i, i])
                             fp = safe_float(matrix[:, i].sum() - matrix[i, i])
                             fn = safe_float(matrix[i, :].sum() - matrix[i, i])
-                            
+                            support = int(tp + fn)
+
+                            # 跳过验证集中没有样本的类别
+                            if support == 0:
+                                continue
+
                             p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
                             r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                             f1 = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
-                            
+
                             precisions.append(p)
                             recalls.append(r)
                             f1_scores.append(f1)
-                        
-                        # 宏平均：先计算每个类别的指标，再取平均
+
+                        # 宏平均：只基于有样本的类别计算
                         precision = np.mean(precisions) if precisions else 0.0
                         recall = np.mean(recalls) if recalls else 0.0
                         f1_score = np.mean(f1_scores) if f1_scores else 0.0
