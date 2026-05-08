@@ -167,10 +167,10 @@ python scripts/train/train_yolo.py \
 python scripts/train/train_yolo.py \
   --model models/weights/yolov8m.pt \
   --data data/processed/dataset.yaml \
-  --epochs 100 \
+  --epochs 200 \
   --imgsz 640 \
   --batch 16 \
-  --device 0 \
+  --device auto \
   --project results/training \
   --name rust_detect_train \
   --augmentation balanced
@@ -240,3 +240,5 @@ unset LS_TOKEN
 ```
 
 并在 Label Studio 侧定期轮换 Token。
+
+Box(P) 是准确率、R是召回率
