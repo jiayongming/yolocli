@@ -1,0 +1,22 @@
+# 图像分类配置预设
+
+# 模型配置
+model:
+  default_task: classify
+
+# 训练配置
+training:
+  epochs: 100
+  batch: 32
+  imgsz: 224
+  patience: 30
+
+# 数据增强配置
+augmentation:
+  default_preset: balanced
+
+# 分类特定配置
+classify:
+  dropout: 0.0
+  top_k: 5
+

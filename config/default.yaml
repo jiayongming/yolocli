@@ -1,0 +1,85 @@
+# YOLO CLI 默认配置文件
+
+# 模型配置
+model:
+  default_version: yolo11  # yolo11 或 yolov8
+  default_task: detect  # detect, segment, classify, pose
+  weights_dir: models/weights
+  pretrained:
+    - yolo11n.pt
+    - yolo11s.pt
+    - yolo11m.pt
+    - yolo11l.pt
+    - yolo11x.pt
+
+# 训练配置
+training:
+  epochs: 200
+  batch: 16
+  imgsz: 640
+  patience: 50
+  save_period: 10
+  device: auto  # auto/mps/cuda/cpu
+  optimizer: auto  # auto/SGD/Adam/AdamW/NAdam/RAdam/RMSProp
+  freeze: null  # 冻结前N层 (null=不冻结, 10=冻结前10层)
+
+# 数据增强配置
+augmentation:
+  default_preset: balanced  # balanced/conservative/aggressive/default
+
+# 路径配置
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  results: results
+  models: models
+
+# 检测配置
+detection:
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  save_txt: true
+  save_json: true
+
+# 数据集划分比例
+dataset:
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+  random_seed: 42
+
+# 任务类型配置
+tasks:
+  detect:
+    default_model_size: s
+    default_conf: 0.25
+    default_iou: 0.45
+  segment:
+    default_model_size: s
+    default_conf: 0.25
+    default_iou: 0.45
+    overlap_mask: true
+    mask_ratio: 4
+    retina_masks: false
+  classify:
+    default_model_size: s
+    dropout: 0.0
+    top_k: 5
+  pose:
+    default_model_size: s
+    default_conf: 0.25
+    default_iou: 0.45
+    default_kpt_shape: [17, 3]
+    flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+
+# Label Studio配置
+labelstudio:
+  url: http://localhost:8080
+  token: ""  # 可选，留空时在交互模式输入
+  auto_refresh: true  # 自动刷新refresh token
+  token_type: auto  # auto/legacy/bearer
+
+# FiftyOne配置
+fiftyone:
+  default_port: 5151
+  auto_launch_browser: true

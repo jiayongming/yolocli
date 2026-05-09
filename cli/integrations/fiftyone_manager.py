@@ -1,0 +1,1497 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""FiftyOne数据集管理器"""
+
+import yaml
+import shutil
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
+import importlib.util
+
+
+class FiftyOneManager:
+    """FiftyOne数据集管理器
+    
+    提供YOLO数据集的可视化和管理功能
+    """
+    
+    def __init__(self):
+        """初始化管理器"""
+        self.fiftyone_available = self._check_fiftyone_installed()
+        if self.fiftyone_available:
+            import fiftyone as fo
+            self.fo = fo
+        else:
+            self.fo = None
+    
+    def _check_fiftyone_installed(self) -> bool:
+        """检查FiftyOne是否已安装
+        
+        Returns:
+            bool: 是否已安装
+        """
+        spec = importlib.util.find_spec("fiftyone")
+        return spec is not None
+    
+    def ensure_fiftyone(self) -> Tuple[bool, str]:
+        """确保FiftyOne可用
+        
+        Returns:
+            Tuple[bool, str]: (是否可用, 错误信息)
+        """
+        if not self.fiftyone_available:
+            return (False, "FiftyOne未安装。请运行: pip install fiftyone")
+        return (True, "")
+    
+    def load_yolo_dataset(
+        self,
+        data_yaml_path: str,
+        dataset_name: Optional[str] = None,
+        splits: Optional[List[str]] = None,
+        persistent: bool = True,
+        copy_to_datasets: bool = True,
+        datasets_base_dir: Optional[str] = None,
+        task_type: Optional[str] = None
+    ) -> Tuple[bool, Optional[str], str]:
+        """从YOLO格式加载数据集到FiftyOne
+        
+        Args:
+            data_yaml_path: dataset.yaml文件路径
+            dataset_name: 数据集名称，如果为None则从yaml文件生成
+            splits: 要加载的划分，默认['train', 'val', 'test']
+            persistent: 是否持久化数据集
+            copy_to_datasets: 是否先将数据集复制到datasets目录，默认True
+            datasets_base_dir: datasets基础目录，默认为当前目录下的datasets
+            task_type: 任务类型 ('detect', 'segment', 'pose', 'classify')，不指定则自动检测
+            
+        Returns:
+            Tuple[bool, Optional[str], str]: (是否成功, 数据集名称, 错误信息)
+        """
+        # 检查FiftyOne是否可用
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, None, error)
+        
+        try:
+            # 读取dataset.yaml
+            yaml_path = Path(data_yaml_path)
+            if not yaml_path.exists():
+                return (False, None, f"数据集配置文件不存在: {data_yaml_path}")
+            
+            # 提取配置信息
+            # 优先使用 yaml 文件所在目录作为根目录
+            dataset_root = yaml_path.parent.resolve()
+            
+            # 生成数据集名称（在复制前确定）
+            if dataset_name is None:
+                base_name = f"yolo_{dataset_root.name}"
+                dataset_name = base_name
+                
+                # 检查名称是否已存在，如果存在则添加时间戳
+                existing_datasets = self.fo.list_datasets()
+                if dataset_name in existing_datasets:
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    dataset_name = f"{base_name}_{timestamp}"
+            
+            # 如果需要复制数据集
+            if copy_to_datasets:
+                # 确定datasets目录
+                if datasets_base_dir is None:
+                    datasets_base_dir = Path.cwd() / 'datasets'
+                else:
+                    datasets_base_dir = Path(datasets_base_dir)
+                
+                # 创建datasets目录
+                datasets_base_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 目标目录：datasets/{dataset_name}/
+                target_dataset_dir = datasets_base_dir / dataset_name
+                
+                # 如果目标目录已存在，询问是否覆盖（这里直接覆盖，可以后续改进）
+                if target_dataset_dir.exists():
+                    # 删除旧的目录
+                    shutil.rmtree(target_dataset_dir)
+                
+                # 复制整个数据集目录
+                shutil.copytree(dataset_root, target_dataset_dir)
+                
+                # 更新 yaml_path 和 dataset_root 指向复制后的位置
+                yaml_path = target_dataset_dir / yaml_path.name
+                dataset_root = target_dataset_dir
+                
+                # 修改复制后的 dataset.yaml 文件，更新路径
+                # 读取复制后的 yaml 文件
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    dataset_config = yaml.safe_load(f)
+                
+                # 保存原始的 path 值（用于路径转换）
+                original_path = dataset_config.get('path', '.')
+                
+                # 更新 path 字段为相对路径（'.' 表示当前目录）
+                # 这样数据集可以被移动而不影响使用
+                dataset_config['path'] = '.'
+                
+                # 如果 train/val/test 路径是绝对路径，转换为相对路径
+                for split_key in ['train', 'val', 'test']:
+                    if split_key in dataset_config:
+                        split_path_str = dataset_config[split_key]
+                        split_path = Path(split_path_str)
+                        
+                        if split_path.is_absolute():
+                            # 尝试转换为相对于新 dataset_root 的相对路径
+                            try:
+                                rel_path = split_path.relative_to(dataset_root)
+                                dataset_config[split_key] = str(rel_path).replace('\\', '/')
+                            except ValueError:
+                                # 如果无法转换（路径不在 dataset_root 下）
+                                # 尝试在新目录下查找对应的目录
+                                dir_name = split_path.name
+                                potential_path = dataset_root / dir_name
+                                if potential_path.exists():
+                                    dataset_config[split_key] = dir_name
+                                else:
+                                    # 保持使用目录名作为相对路径
+                                    dataset_config[split_key] = split_path.name
+                
+                # 保存修改后的 yaml 文件
+                with open(yaml_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(dataset_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            else:
+                # 如果不复制，直接读取原始 yaml
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    dataset_config = yaml.safe_load(f)
+            
+            # 如果配置中有 path 字段，检查是否需要使用它
+            if 'path' in dataset_config:
+                config_path = Path(dataset_config['path'])
+                
+                # 如果是绝对路径，使用它
+                if config_path.is_absolute():
+                    if config_path.exists():
+                        dataset_root = config_path
+                # 如果是相对路径，但不是 '.' 或当前目录
+                elif str(config_path) not in ['.', './']:
+                    # 尝试从当前工作目录解析
+                    test_path = Path.cwd() / config_path
+                    if test_path.exists():
+                        dataset_root = test_path.resolve()
+                    else:
+                        # 如果不存在，保持使用 yaml 所在目录
+                        pass
+            
+            # 获取类别信息
+            if 'names' in dataset_config:
+                if isinstance(dataset_config['names'], dict):
+                    classes = list(dataset_config['names'].values())
+                elif isinstance(dataset_config['names'], list):
+                    classes = dataset_config['names']
+                else:
+                    classes = []
+            else:
+                return (False, None, "数据集配置中缺少类别信息(names)")
+            
+            # 初始化计数器和调试信息（用于错误诊断）
+            sample_count = 0
+            debug_info = []
+            debug_info.append(f"Dataset root: {dataset_root}")
+            debug_info.append(f"YAML path: {yaml_path}")
+            
+            # 检测任务类型
+            detected_task_type = 'detect'
+            num_keypoints = 0
+            keypoint_labels = None
+            task_info = {}
+            
+            if task_type:
+                # 用户指定了任务类型
+                detected_task_type = task_type.lower()
+                debug_info.append(f"Using specified task type: {detected_task_type}")
+            else:
+                # 自动检测：从标签文件推断任务类型
+                debug_info.append("Auto-detecting task type from labels...")
+                
+                # 尝试查找第一个有效的标签文件
+                label_file_found = None
+                for split in ['train', 'val', 'valid', 'test']:
+                    # 尝试不同的目录结构
+                    possible_dirs = [
+                        dataset_root / 'labels' / split,
+                        dataset_root / split / 'labels',
+                    ]
+                    
+                    for labels_dir in possible_dirs:
+                        if labels_dir.exists():
+                            for label_file in labels_dir.glob('*.txt'):
+                                if label_file.name != 'classes.txt' and label_file.stat().st_size > 0:
+                                    label_file_found = label_file
+                                    break
+                            if label_file_found:
+                                break
+                    if label_file_found:
+                        break
+                
+                # 从标签文件检测任务类型
+                if label_file_found:
+                    detected_task_type, task_info = self._detect_task_type(label_file_found)
+                    debug_info.append(f"Detected task type from labels: {detected_task_type}")
+                    
+                    # 如果检测到 pose，获取关键点数量
+                    if detected_task_type == 'pose':
+                        num_keypoints = task_info.get('num_keypoints', 0)
+                else:
+                    # 如果找不到标签文件，尝试从 YAML 配置推断
+                    if 'kpt_shape' in dataset_config:
+                        detected_task_type = 'pose'
+                        kpt_shape = dataset_config.get('kpt_shape')
+                        num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                        debug_info.append(f"Detected pose from yaml kpt_shape: {num_keypoints} keypoints")
+                    else:
+                        # 默认为 detect
+                        detected_task_type = 'detect'
+                        debug_info.append("No labels found, defaulting to detect")
+            
+            is_pose = detected_task_type == 'pose'
+            is_segment = detected_task_type == 'segment'
+            is_classify = detected_task_type == 'classify'
+            
+            # 处理 Pose 任务的关键点配置
+            if is_pose:
+                # 优先使用从标签文件检测到的关键点数量
+                if num_keypoints == 0:
+                    # 如果还没有关键点数量，尝试从 yaml 获取
+                    if 'kpt_shape' in dataset_config:
+                        kpt_shape = dataset_config.get('kpt_shape')
+                        num_keypoints = kpt_shape[0] if isinstance(kpt_shape, list) else 17
+                        debug_info.append(f"Got keypoint count from yaml: {num_keypoints}")
+                    else:
+                        # 最后尝试从第一个标签文件获取
+                        num_keypoints = task_info.get('num_keypoints', 17)
+                        debug_info.append(f"Using detected keypoint count: {num_keypoints}")
+                
+                # 获取关键点标签
+                # 支持两种字段名
+                keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
+                if not keypoint_labels:
+                    # 使用默认标签
+                    if num_keypoints == 4:
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
+                    elif num_keypoints == 17:
+                        keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                         'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                    else:
+                        keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+            
+            # 确定要加载的划分
+            if splits is None:
+                splits = ['train', 'val', 'test']
+            
+            # 检查数据集是否已存在
+            if dataset_name in self.fo.list_datasets():
+                # 删除已存在的数据集
+                self.fo.delete_dataset(dataset_name)
+            
+            # 创建FiftyOne数据集
+            dataset = self.fo.Dataset(dataset_name, persistent=persistent)
+            
+            for split in splits:
+                split_key = split
+                if split_key not in dataset_config:
+                    continue
+                
+                # 获取图片目录路径
+                split_path = dataset_config[split_key]
+                debug_info.append(f"Split '{split}' path from config: {split_path}")
+                
+                # 解析路径（处理相对路径和 .. 符号）
+                split_path_obj = Path(split_path)
+                images_dir = None
+                
+                # 如果是绝对路径，直接使用
+                if split_path_obj.is_absolute():
+                    images_dir = split_path_obj
+                else:
+                    # 如果是相对路径，相对于 yaml 文件所在目录解析
+                    candidate_path = (dataset_root / split_path).resolve()
+                    
+                    if candidate_path.exists():
+                        images_dir = candidate_path
+                    else:
+                        # 回退方案1: 如果路径包含 '..'，尝试移除 '..' 部分
+                        # 例如: '../train/images' -> 'train/images'
+                        if '..' in split_path:
+                            parts = Path(split_path).parts
+                            cleaned_parts = [p for p in parts if p != '..']
+                            if cleaned_parts:
+                                cleaned_path = Path(*cleaned_parts)
+                                candidate_path = (dataset_root / cleaned_path).resolve()
+                                
+                                if candidate_path.exists():
+                                    images_dir = candidate_path
+                        
+                        # 回退方案2: 尝试常见的目录结构
+                        if images_dir is None:
+                            candidate_path = dataset_root / 'images' / split
+                            if candidate_path.exists():
+                                images_dir = candidate_path
+                        
+                        # 回退方案3: 尝试 split_name/images/
+                        if images_dir is None:
+                            candidate_path = dataset_root / split / 'images'
+                            if candidate_path.exists():
+                                images_dir = candidate_path
+                
+                # 如果所有尝试都失败，跳过这个 split
+                if images_dir is None or not images_dir.exists():
+                    debug_info.append(f"Could not find images directory for split '{split}'")
+                    continue
+                
+                # 获取标签目录（智能查找）
+                labels_dir = None
+                
+                # 方法1: 如果 images_dir 最后一个目录是 'images'，替换为 'labels'
+                if images_dir.name == 'images':
+                    # .../train/images -> .../train/labels
+                    labels_dir = images_dir.parent / 'labels'
+                    if not labels_dir.exists():
+                        labels_dir = None
+                
+                # 方法2: 如果路径中包含 /images/ 或 \images\，替换为 /labels/ 或 \labels\
+                if labels_dir is None:
+                    labels_path_str = str(images_dir)
+                    if '/images/' in labels_path_str:
+                        candidate = Path(labels_path_str.replace('/images/', '/labels/'))
+                    elif '\\images\\' in labels_path_str:
+                        candidate = Path(labels_path_str.replace('\\images\\', '\\labels\\'))
+                    elif labels_path_str.endswith('/images'):
+                        candidate = Path(labels_path_str.replace('/images', '/labels'))
+                    elif labels_path_str.endswith('\\images'):
+                        candidate = Path(labels_path_str.replace('\\images', '\\labels'))
+                    else:
+                        candidate = None
+                    
+                    if candidate and candidate.exists():
+                        labels_dir = candidate
+                
+                # 方法3: 查找与 images 同级的 labels 目录
+                if labels_dir is None:
+                    parent = images_dir.parent
+                    # 尝试在各级父目录中查找 labels
+                    for _ in range(3):  # 最多向上查找3级
+                        candidate = parent / 'labels'
+                        if candidate.exists():
+                            labels_dir = candidate
+                            break
+                        parent = parent.parent
+                        if str(parent) == parent.anchor:  # 到达根目录
+                            break
+                
+                # 如果还是找不到，使用默认路径（即使不存在）
+                if labels_dir is None:
+                    labels_dir = images_dir.parent / 'labels'
+                
+                # 遍历图片文件
+                image_files = []
+                for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.JPG', '.JPEG', '.PNG', '.BMP']:
+                    found = list(images_dir.glob(f'*{ext}'))
+                    image_files.extend(found)
+                
+                for image_path in image_files:
+                    sample_count += 1
+                    # 读取对应的标签文件
+                    label_path = labels_dir / f"{image_path.stem}.txt"
+                    
+                    # 创建样本
+                    sample = self.fo.Sample(filepath=str(image_path))
+                    sample['split'] = split
+                    
+                    # 读取标注
+                    detections = []
+                    keypoints = []
+                    polylines = []  # for segment
+                    classifications = []  # for classify
+                    
+                    if label_path.exists():
+                        with open(label_path, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                parts = line.split()
+                                
+                                # Classify 格式: class_id
+                                if is_classify and len(parts) == 1:
+                                    class_id = int(parts[0])
+                                    label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                    classification = self.fo.Classification(label=label)
+                                    classifications.append(classification)
+                                    continue
+                                
+                                # Segment 格式: class_id x1 y1 x2 y2 x3 y3 ...
+                                if is_segment and len(parts) >= 7:
+                                    class_id = int(parts[0])
+                                    label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                    
+                                    # 提取多边形点
+                                    coords = [float(x) for x in parts[1:]]
+                                    points = []
+                                    for i in range(0, len(coords), 2):
+                                        if i + 1 < len(coords):
+                                            points.append((coords[i], coords[i + 1]))
+                                    
+                                    if len(points) >= 3:  # 至少需要3个点形成多边形
+                                        polyline = self.fo.Polyline(
+                                            label=label,
+                                            points=[points],
+                                            closed=True,
+                                            filled=True
+                                        )
+                                        polylines.append(polyline)
+                                    continue
+                                
+                                # Detect/Pose 格式: class_id x y w h [keypoints...]
+                                if len(parts) >= 5:
+                                    # YOLO格式: class_id x_center y_center width height [keypoints...]
+                                    class_id = int(parts[0])
+                                    x_center = float(parts[1])
+                                    y_center = float(parts[2])
+                                    width = float(parts[3])
+                                    height = float(parts[4])
+                                    
+                                    # 转换为FiftyOne格式 [x, y, width, height]，左上角坐标
+                                    bbox = [
+                                        x_center - width / 2,
+                                        y_center - height / 2,
+                                        width,
+                                        height
+                                    ]
+                                    
+                                    label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                    
+                                    # 检查是否有关键点数据
+                                    if is_pose and len(parts) > 5:
+                                        # Pose 格式：解析关键点
+                                        # parts[5:] 包含关键点数据：x1 y1 v1 x2 y2 v2 ...
+                                        kpt_data = parts[5:]
+                                        
+                                        # 计算实际的关键点数量（使用实际数据长度，而非yaml中的配置）
+                                        actual_kpt_count = len(kpt_data) // 3
+                                        
+                                        if actual_kpt_count > 0 and len(kpt_data) % 3 == 0:
+                                            # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                            for i in range(0, actual_kpt_count * 3, 3):
+                                                kpt_x = float(kpt_data[i])
+                                                kpt_y = float(kpt_data[i + 1])
+                                                kpt_v = float(kpt_data[i + 2])  # visibility: 0=未标注, 1=遮挡, 2=可见
+                                                kpt_idx = i // 3
+                                                
+                                                # 只添加可见的关键点（visibility > 0）
+                                                if kpt_v > 0:
+                                                    # 获取关键点标签
+                                                    if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                        kpt_label = keypoint_labels[kpt_idx]
+                                                    else:
+                                                        kpt_label = f'kp_{kpt_idx}'
+                                                    
+                                                    # 为每个关键点创建独立的 Keypoint 对象
+                                                    keypoint = self.fo.Keypoint(
+                                                        label=kpt_label,  # 使用关键点的标签而不是对象类别
+                                                        points=[[kpt_x, kpt_y]]  # 只包含一个点
+                                                    )
+                                                    keypoints.append(keypoint)
+                                        
+                                        # 仍然创建 Detection 对象（边界框）
+                                        detection = self.fo.Detection(
+                                            label=label,
+                                            bounding_box=bbox
+                                        )
+                                        detections.append(detection)
+                                    else:
+                                        # 普通检测格式
+                                        detection = self.fo.Detection(
+                                            label=label,
+                                            bounding_box=bbox
+                                        )
+                                        detections.append(detection)
+                    
+                    # 根据任务类型添加标注
+                    if is_classify:
+                        # Classify: 使用Classification字段
+                        if classifications:
+                            if len(classifications) == 1:
+                                sample['ground_truth'] = classifications[0]
+                            else:
+                                sample['ground_truth'] = self.fo.Classifications(classifications=classifications)
+                        else:
+                            # 负样本
+                            sample['ground_truth'] = None
+                    
+                    elif is_segment:
+                        # Segment: 使用Polylines字段
+                        if polylines:
+                            sample['ground_truth'] = self.fo.Polylines(polylines=polylines)
+                        else:
+                            # 负样本
+                            sample['ground_truth'] = self.fo.Polylines(polylines=[])
+                    
+                    else:
+                        # Detect/Pose: 使用Detections字段
+                        if detections:
+                            sample['ground_truth'] = self.fo.Detections(detections=detections)
+                        else:
+                            # 负样本
+                            sample['ground_truth'] = self.fo.Detections(detections=[])
+                        
+                        # 添加关键点结果
+                        if is_pose and keypoints:
+                            sample['ground_truth_keypoints'] = self.fo.Keypoints(keypoints=keypoints)
+                    
+                    dataset.add_sample(sample)
+            
+            # 保存数据集
+            if persistent:
+                dataset.persistent = True
+            
+            # 检查是否成功加载样本
+            if sample_count == 0:
+                debug_msg = "\n".join(debug_info) if debug_info else "无调试信息"
+                return (False, None, f"未能加载任何样本。\n\n调试信息:\n{debug_msg}\n\n请检查：\n1. dataset.yaml 中的路径配置\n2. 图片目录是否存在且有图片文件\n3. 路径是相对路径还是绝对路径")
+            
+            return (True, dataset_name, "")
+            
+        except Exception as e:
+            return (False, None, f"加载数据集失败: {str(e)}")
+    
+    def launch_app(
+        self,
+        dataset_name: Optional[str] = None,
+        port: int = 5151,
+        auto_open: bool = True
+    ) -> Tuple[bool, str]:
+        """启动FiftyOne可视化应用
+        
+        Args:
+            dataset_name: 数据集名称，如果为None则不加载数据集
+            port: 服务端口
+            auto_open: 是否自动打开浏览器
+            
+        Returns:
+            Tuple[bool, str]: (是否成功, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, error)
+        
+        try:
+            if dataset_name:
+                # 加载指定数据集
+                if dataset_name not in self.fo.list_datasets():
+                    return (False, f"数据集 '{dataset_name}' 不存在")
+                
+                dataset = self.fo.load_dataset(dataset_name)
+                session = self.fo.launch_app(
+                    dataset,
+                    port=port,
+                    auto=auto_open
+                )
+            else:
+                # 不加载数据集，只启动app
+                session = self.fo.launch_app(
+                    port=port,
+                    auto=auto_open
+                )
+            
+            return (True, "")
+            
+        except Exception as e:
+            return (False, f"启动FiftyOne应用失败: {str(e)}")
+    
+    def list_datasets(self) -> Tuple[bool, List[str], str]:
+        """列出所有FiftyOne数据集
+        
+        Returns:
+            Tuple[bool, List[str], str]: (是否成功, 数据集列表, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, [], error)
+        
+        try:
+            datasets = self.fo.list_datasets()
+            return (True, datasets, "")
+        except Exception as e:
+            return (False, [], f"获取数据集列表失败: {str(e)}")
+    
+    def get_dataset_info(self, dataset_name: str) -> Tuple[bool, Optional[Dict], str]:
+        """获取数据集详细信息
+        
+        Args:
+            dataset_name: 数据集名称
+            
+        Returns:
+            Tuple[bool, Optional[Dict], str]: (是否成功, 数据集信息, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, None, error)
+        
+        try:
+            if dataset_name not in self.fo.list_datasets():
+                return (False, None, f"数据集 '{dataset_name}' 不存在")
+            
+            dataset = self.fo.load_dataset(dataset_name)
+            
+            # 收集统计信息
+            info = {
+                'name': dataset.name,
+                'total_samples': len(dataset),
+                'persistent': dataset.persistent,
+                'media_type': dataset.media_type,
+                'tags': dataset.tags,
+            }
+            
+            # 按split统计
+            if 'split' in dataset.get_field_schema():
+                splits_info = {}
+                for split in dataset.distinct('split'):
+                    split_view = dataset.match(self.fo.ViewField('split') == split)
+                    splits_info[split] = len(split_view)
+                info['splits'] = splits_info
+            
+            # 类别统计
+            if 'ground_truth' in dataset.get_field_schema():
+                labels = dataset.distinct('ground_truth.detections.label')
+                info['classes'] = labels
+                info['num_classes'] = len(labels)
+                
+                # 统计每个类别的样本数
+                class_counts = {}
+                for label in labels:
+                    count = len(dataset.filter_labels(
+                        'ground_truth',
+                        self.fo.ViewField('label') == label
+                    ))
+                    class_counts[label] = count
+                info['class_counts'] = class_counts
+            
+            return (True, info, "")
+            
+        except Exception as e:
+            return (False, None, f"获取数据集信息失败: {str(e)}")
+    
+    def delete_dataset(self, dataset_name: str) -> Tuple[bool, str]:
+        """删除数据集
+        
+        Args:
+            dataset_name: 数据集名称
+            
+        Returns:
+            Tuple[bool, str]: (是否成功, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, error)
+        
+        try:
+            if dataset_name not in self.fo.list_datasets():
+                return (False, f"数据集 '{dataset_name}' 不存在")
+            
+            self.fo.delete_dataset(dataset_name)
+            return (True, "")
+            
+        except Exception as e:
+            return (False, f"删除数据集失败: {str(e)}")
+    
+    def delete_all_datasets(self) -> Tuple[bool, int, str]:
+        """删除所有数据集
+        
+        Returns:
+            Tuple[bool, int, str]: (是否成功, 删除数量, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, 0, error)
+        
+        try:
+            datasets = self.fo.list_datasets()
+            deleted_count = 0
+            errors = []
+            
+            for dataset_name in datasets:
+                try:
+                    self.fo.delete_dataset(dataset_name)
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append(f"{dataset_name}: {str(e)}")
+            
+            if errors:
+                error_msg = "; ".join(errors)
+                return (False, deleted_count, f"部分删除失败: {error_msg}")
+            
+            return (True, deleted_count, "")
+            
+        except Exception as e:
+            return (False, 0, f"删除所有数据集失败: {str(e)}")
+    
+    def close_app(self) -> Tuple[bool, str]:
+        """关闭FiftyOne应用
+        
+        Returns:
+            Tuple[bool, str]: (是否成功, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, error)
+        
+        try:
+            self.fo.close_app()
+            return (True, "")
+        except Exception as e:
+            return (False, f"关闭应用失败: {str(e)}")
+    
+    def _detect_pose_format(self, label_file_path: Path) -> Tuple[bool, int]:
+        """检测标签文件是否为 Pose 格式
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            Tuple[bool, int]: (是否为Pose格式, 关键点数量)
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return (False, 0)
+                
+                parts = first_line.split()
+                if len(parts) > 5:
+                    # 检查是否符合 Pose 格式
+                    # class_id x y w h [kp1_x kp1_y kp1_v ...] 或 class_id x y w h conf [kp1_x kp1_y kp1_v ...]
+                    # 关键点数据应该是 3 的倍数
+                    extra_values = len(parts) - 5
+                    
+                    # 情况1: class x y w h kp... (没有置信度)
+                    if extra_values % 3 == 0:
+                        num_keypoints = extra_values // 3
+                        return (True, num_keypoints)
+                    
+                    # 情况2: class x y w h conf kp... (有置信度)
+                    if (extra_values - 1) % 3 == 0:
+                        num_keypoints = (extra_values - 1) // 3
+                        return (True, num_keypoints)
+                
+                return (False, 0)
+        except:
+            return (False, 0)
+    
+    def _detect_segment_format(self, label_file_path: Path) -> bool:
+        """检测标签文件是否为 Segment 格式
+        
+        Segment 格式：class_id x1 y1 x2 y2 x3 y3 ... (多边形点，通常>6个点)
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            bool: 是否为Segment格式
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return False
+                
+                parts = first_line.split()
+                # Segment格式：class_id + 多个坐标点 (至少3个点，即6个坐标值)
+                # 通常多边形会有更多点，例如 class_id x1 y1 x2 y2 x3 y3 x4 y4 ...
+                if len(parts) >= 7:  # class_id + 至少3个点(6个值)
+                    # 检查除了第一个值（class_id）外，其他值的个数是否为偶数（x,y配对）
+                    coords_count = len(parts) - 1
+                    if coords_count % 2 == 0 and coords_count >= 6:
+                        # 进一步验证：所有值应该都能解析为数字
+                        try:
+                            for val in parts:
+                                float(val)
+                            return True
+                        except ValueError:
+                            return False
+                
+                return False
+        except:
+            return False
+    
+    def _detect_classify_format(self, label_file_path: Path) -> bool:
+        """检测标签文件是否为 Classify 格式
+        
+        Classify 格式：class_id (只有一个值)
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            bool: 是否为Classify格式
+        """
+        try:
+            with open(label_file_path, 'r') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return False
+                
+                parts = first_line.split()
+                # Classify格式：只有一个class_id
+                if len(parts) == 1:
+                    try:
+                        int(parts[0])  # 应该是整数
+                        return True
+                    except ValueError:
+                        return False
+                
+                return False
+        except:
+            return False
+    
+    def _detect_task_type(self, label_file_path: Path) -> Tuple[str, dict]:
+        """自动检测标签文件的任务类型
+        
+        Args:
+            label_file_path: 标签文件路径
+            
+        Returns:
+            Tuple[str, dict]: (任务类型, 额外信息)
+                任务类型: 'pose', 'segment', 'classify', 'detect'
+                额外信息: {'num_keypoints': int} for pose, {} for others
+        """
+        # 1. 检测 Classify（最简单，只有1个值）
+        if self._detect_classify_format(label_file_path):
+            return ('classify', {})
+        
+        # 2. 检测 Segment（多边形点）
+        if self._detect_segment_format(label_file_path):
+            return ('segment', {})
+        
+        # 3. 检测 Pose（有关键点）
+        is_pose, num_keypoints = self._detect_pose_format(label_file_path)
+        if is_pose:
+            return ('pose', {'num_keypoints': num_keypoints})
+        
+        # 4. 默认为 Detect（标准bbox格式）
+        return ('detect', {})
+    
+    def add_predictions_to_dataset(
+        self,
+        dataset_name: str,
+        predictions_dir: str,
+        classes: Optional[List[str]] = None,
+        field_name: str = "predictions",
+        conf_threshold: float = 0.0,
+        task_type: Optional[str] = None
+    ) -> Tuple[bool, Dict[str, int], str]:
+        """将 YOLO 预测结果添加到 FiftyOne 数据集
+        
+        Args:
+            dataset_name: 数据集名称
+            predictions_dir: 预测结果目录（包含txt标签文件）
+            classes: 类别列表（可选，不提供则自动读取）
+            field_name: 预测结果字段名，默认"predictions"
+            conf_threshold: 置信度阈值，过滤低置信度预测
+            task_type: 任务类型 ('detect', 'segment', 'pose', 'classify')，不指定则自动检测
+            
+        Returns:
+            Tuple[bool, Dict[str, int], str]: (是否成功, 统计信息, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, {}, error)
+        
+        try:
+            # 加载数据集
+            if dataset_name not in self.fo.list_datasets():
+                return (False, {}, f"数据集 '{dataset_name}' 不存在")
+            
+            dataset = self.fo.load_dataset(dataset_name)
+            
+            predictions_path = Path(predictions_dir)
+            if not predictions_path.exists():
+                return (False, {}, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 如果没有提供类别列表，尝试自动读取
+            if classes is None:
+                # 方式1: 从预测目录读取 classes.txt
+                classes_file = predictions_path / 'classes.txt'
+                if classes_file.exists():
+                    with open(classes_file, 'r', encoding='utf-8') as f:
+                        classes = [line.strip() for line in f if line.strip()]
+                
+                # 方式2: 从数据集的 ground_truth 中提取类别
+                if not classes and 'ground_truth' in dataset.get_field_schema():
+                    classes = dataset.distinct('ground_truth.detections.label')
+                    classes = sorted(classes)
+                
+                # 如果还是找不到，返回错误
+                if not classes:
+                    return (False, {}, "无法自动获取类别信息。请确保预测目录中有 classes.txt 文件，或手动指定 classes 参数")
+            
+            # 查找labels目录（YOLO预测结果通常保存在labels子目录）
+            labels_dir = predictions_path / 'labels'
+            if not labels_dir.exists():
+                # 如果没有labels子目录，尝试直接使用predictions_dir
+                labels_dir = predictions_path
+            
+            # 检测任务类型
+            detected_task_type = 'detect'
+            task_info = {}
+            
+            if task_type:
+                # 用户指定了任务类型
+                detected_task_type = task_type.lower()
+                from ..ui.display import print_info
+                print_info(f"使用指定任务类型: {detected_task_type}")
+                
+                # 如果用户指定了pose任务，仍需要检测关键点数量
+                if detected_task_type == 'pose':
+                    for label_file in labels_dir.glob('*.txt'):
+                        if label_file.name == 'classes.txt':
+                            continue  # 跳过 classes.txt
+                        is_pose_detected, num_kpts = self._detect_pose_format(label_file)
+                        if is_pose_detected:
+                            task_info['num_keypoints'] = num_kpts
+                            break  # 找到有效文件后退出
+            else:
+                # 自动检测任务类型（检查第一个标签文件）
+                for label_file in labels_dir.glob('*.txt'):
+                    if label_file.name == 'classes.txt':
+                        continue  # 跳过 classes.txt
+                    detected_task_type, task_info = self._detect_task_type(label_file)
+                    break  # 只检查第一个文件
+                
+                from ..ui.display import print_info
+                print_info(f"检测到任务类型: {detected_task_type}")
+            
+            is_pose = detected_task_type == 'pose'
+            is_segment = detected_task_type == 'segment'
+            is_classify = detected_task_type == 'classify'
+            num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
+            
+            # 获取关键点标签
+            keypoint_labels = None
+            if is_pose:
+                # 优先级1: 尝试从预测目录的 dataset.yaml 读取
+                dataset_yaml_file = predictions_path / 'dataset.yaml'
+                if dataset_yaml_file.exists():
+                    try:
+                        import yaml
+                        with open(dataset_yaml_file, 'r', encoding='utf-8') as f:
+                            dataset_config = yaml.safe_load(f)
+                        # 读取时支持两种字段名（兼容旧数据）
+                        keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
+                        if keypoint_labels:
+                            from ..ui.display import print_info
+                            print_info(f"从 dataset.yaml 读取关键点标签: {keypoint_labels}")
+                    except Exception as e:
+                        from ..ui.display import print_warning
+                        print_warning(f"读取 dataset.yaml 失败: {e}")
+                
+                # 优先级2: 尝试从已有的 ground_truth_keypoints 中获取标签
+                if not keypoint_labels and 'ground_truth_keypoints' in dataset.get_field_schema():
+                    samples_with_kpts = dataset.match(self.fo.ViewField('ground_truth_keypoints').exists())
+                    if len(samples_with_kpts) > 0:
+                        first_sample = samples_with_kpts.first()
+                        if first_sample.ground_truth_keypoints and first_sample.ground_truth_keypoints.keypoints:
+                            first_kpt = first_sample.ground_truth_keypoints.keypoints[0]
+                            if hasattr(first_kpt, 'point_labels') and first_kpt.point_labels:
+                                keypoint_labels = first_kpt.point_labels
+                
+                # 优先级3: 使用默认标签
+                if not keypoint_labels:
+                    if num_keypoints == 4:
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
+                    elif num_keypoints == 17:
+                        keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                         'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                    else:
+                        keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+            
+            stats = {
+                'total_samples': len(dataset),
+                'updated_samples': 0,
+                'total_predictions': 0,
+                'skipped_low_conf': 0
+            }
+            
+            # 为每个样本添加预测结果
+            for sample in dataset:
+                # 获取图片文件名
+                image_filename = Path(sample.filepath).stem
+                label_file = labels_dir / f"{image_filename}.txt"
+                
+                if not label_file.exists():
+                    continue
+                
+                # 读取预测结果
+                detections = []
+                keypoints = []
+                polylines = []  # for segment
+                classifications = []  # for classify
+                
+                with open(label_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split()
+                        
+                        # Classify 格式: class_id
+                        if is_classify and len(parts) == 1:
+                            class_id = int(parts[0])
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            classification = self.fo.Classification(label=label)
+                            classifications.append(classification)
+                            stats['total_predictions'] += 1
+                            continue
+                        
+                        # Segment 格式: class_id x1 y1 x2 y2 x3 y3 ...
+                        if is_segment and len(parts) >= 7:
+                            class_id = int(parts[0])
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            
+                            # 提取多边形点
+                            coords = [float(x) for x in parts[1:]]
+                            points = []
+                            for i in range(0, len(coords), 2):
+                                if i + 1 < len(coords):
+                                    points.append((coords[i], coords[i + 1]))
+                            
+                            if len(points) >= 3:  # 至少需要3个点形成多边形
+                                # FiftyOne使用Polyline表示分割
+                                polyline = self.fo.Polyline(
+                                    label=label,
+                                    points=[points],  # 闭合的多边形
+                                    closed=True,
+                                    filled=True
+                                )
+                                polylines.append(polyline)
+                                stats['total_predictions'] += 1
+                            continue
+                        
+                        # Detect/Pose 格式: class_id x y w h [conf] [keypoints...]
+                        if len(parts) >= 5:
+                            # YOLO格式: class_id x_center y_center width height [confidence] [keypoints...]
+                            class_id = int(parts[0])
+                            x_center = float(parts[1])
+                            y_center = float(parts[2])
+                            width = float(parts[3])
+                            height = float(parts[4])
+                            
+                            # 判断是否有置信度值
+                            if is_pose:
+                                # Pose 格式可能有置信度，检查数据长度
+                                extra_values = len(parts) - 5
+                                if (extra_values - 1) % 3 == 0:
+                                    # 有置信度
+                                    confidence = float(parts[5])
+                                    kpt_start_idx = 6
+                                else:
+                                    # 没有置信度
+                                    confidence = 1.0
+                                    kpt_start_idx = 5
+                            else:
+                                # 普通检测格式
+                                confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                                kpt_start_idx = 6
+                            
+                            # 过滤低置信度预测
+                            if confidence < conf_threshold:
+                                stats['skipped_low_conf'] += 1
+                                continue
+                            
+                            # 转换为FiftyOne格式 [x, y, width, height]，左上角坐标
+                            bbox = [
+                                x_center - width / 2,
+                                y_center - height / 2,
+                                width,
+                                height
+                            ]
+                            
+                            label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                            
+                            # 处理关键点数据
+                            if is_pose and len(parts) > kpt_start_idx:
+                                kpt_data = parts[kpt_start_idx:]
+                                
+                                # 计算实际的关键点数量
+                                actual_kpt_count = len(kpt_data) // 3
+                                
+                                if actual_kpt_count > 0 and len(kpt_data) % 3 == 0:
+                                    # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                    for i in range(0, actual_kpt_count * 3, 3):
+                                        kpt_x = float(kpt_data[i])
+                                        kpt_y = float(kpt_data[i + 1])
+                                        kpt_v = float(kpt_data[i + 2])
+                                        kpt_idx = i // 3
+                                        
+                                        # 只添加可见的关键点
+                                        if kpt_v > 0:
+                                            # 获取关键点标签
+                                            if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                kpt_label = keypoint_labels[kpt_idx]
+                                            else:
+                                                kpt_label = f'kp_{kpt_idx}'
+                                            
+                                            # 为每个关键点创建独立的 Keypoint 对象
+                                            keypoint = self.fo.Keypoint(
+                                                label=kpt_label,  # 使用关键点的标签
+                                                points=[[kpt_x, kpt_y]]  # 只包含一个点
+                                            )
+                                            keypoints.append(keypoint)
+                            
+                            detection = self.fo.Detection(
+                                label=label,
+                                bounding_box=bbox,
+                                confidence=confidence
+                            )
+                            detections.append(detection)
+                            stats['total_predictions'] += 1
+                
+                # 添加预测结果到样本
+                updated = False
+                
+                if is_classify and classifications:
+                    # Classify: 使用Classification字段
+                    if len(classifications) == 1:
+                        sample[field_name] = classifications[0]
+                    else:
+                        # 多个分类，保存为Classifications
+                        sample[field_name] = self.fo.Classifications(classifications=classifications)
+                    updated = True
+                
+                if is_segment and polylines:
+                    # Segment: 使用Polylines字段
+                    sample[field_name] = self.fo.Polylines(polylines=polylines)
+                    updated = True
+                
+                if detections:
+                    # Detect/Pose: 使用Detections字段
+                    sample[field_name] = self.fo.Detections(detections=detections)
+                    if is_pose and keypoints:
+                        sample[f"{field_name}_keypoints"] = self.fo.Keypoints(keypoints=keypoints)
+                    updated = True
+                
+                if updated:
+                    sample.save()
+                    stats['updated_samples'] += 1
+            
+            return (True, stats, "")
+            
+        except Exception as e:
+            return (False, {}, f"添加预测结果失败: {str(e)}")
+    
+    def load_predictions_dataset(
+        self,
+        images_dir: str,
+        predictions_dir: str,
+        classes: Optional[List[str]] = None,
+        dataset_name: Optional[str] = None,
+        conf_threshold: float = 0.0,
+        persistent: bool = True,
+        keypoint_labels: Optional[List[str]] = None,
+        task_type: Optional[str] = None
+    ) -> Tuple[bool, Optional[str], str]:
+        """从图片和预测结果创建FiftyOne数据集（纯预测，无ground truth）
+        
+        Args:
+            images_dir: 图片目录
+            predictions_dir: 预测结果目录（txt标签文件）
+            classes: 类别列表（可选，不提供则自动读取）
+            dataset_name: 数据集名称
+            conf_threshold: 置信度阈值
+            persistent: 是否持久化
+            keypoint_labels: 关键点标签列表（可选，用于pose任务）
+            task_type: 任务类型 ('detect', 'segment', 'pose', 'classify')，不指定则自动检测
+            
+        Returns:
+            Tuple[bool, Optional[str], str]: (是否成功, 数据集名称, 错误信息)
+        """
+        available, error = self.ensure_fiftyone()
+        if not available:
+            return (False, None, error)
+        
+        try:
+            images_path = Path(images_dir)
+            predictions_path = Path(predictions_dir)
+            
+            if not images_path.exists():
+                return (False, None, f"图片目录不存在: {images_dir}")
+            
+            if not predictions_path.exists():
+                return (False, None, f"预测结果目录不存在: {predictions_dir}")
+            
+            # 如果没有提供类别列表，尝试自动读取
+            if classes is None:
+                # 从预测目录读取 classes.txt
+                classes_file = predictions_path / 'classes.txt'
+                if classes_file.exists():
+                    with open(classes_file, 'r', encoding='utf-8') as f:
+                        classes = [line.strip() for line in f if line.strip()]
+                
+                # 如果还是找不到，返回错误
+                if not classes:
+                    return (False, None, "无法自动获取类别信息。请确保预测目录中有 classes.txt 文件，或手动指定 classes 参数")
+            
+            # 生成数据集名称
+            if dataset_name is None:
+                dataset_name = f"predictions_{images_path.name}"
+            
+            # 检查数据集是否已存在
+            if dataset_name in self.fo.list_datasets():
+                self.fo.delete_dataset(dataset_name)
+            
+            # 创建数据集
+            dataset = self.fo.Dataset(dataset_name, persistent=persistent)
+            
+            # 查找labels目录
+            labels_dir = predictions_path / 'labels'
+            if not labels_dir.exists():
+                labels_dir = predictions_path
+            
+            # 检测任务类型
+            detected_task_type = 'detect'
+            task_info = {}
+            
+            if task_type:
+                # 用户指定了任务类型
+                detected_task_type = task_type.lower()
+                from ..ui.display import print_info
+                print_info(f"使用指定任务类型: {detected_task_type}")
+                
+                # 如果用户指定了pose任务，仍需要检测关键点数量
+                if detected_task_type == 'pose':
+                    for label_file in labels_dir.glob('*.txt'):
+                        if label_file.name == 'classes.txt':
+                            continue  # 跳过 classes.txt
+                        is_pose_detected, num_kpts = self._detect_pose_format(label_file)
+                        if is_pose_detected:
+                            task_info['num_keypoints'] = num_kpts
+                            break  # 找到有效文件后退出
+            else:
+                # 自动检测任务类型（检查第一个标签文件）
+                for label_file in labels_dir.glob('*.txt'):
+                    if label_file.name == 'classes.txt':
+                        continue  # 跳过 classes.txt
+                    detected_task_type, task_info = self._detect_task_type(label_file)
+                    break  # 只检查第一个文件
+                
+                from ..ui.display import print_info
+                print_info(f"检测到任务类型: {detected_task_type}")
+            
+            is_pose = detected_task_type == 'pose'
+            is_segment = detected_task_type == 'segment'
+            is_classify = detected_task_type == 'classify'
+            num_keypoints = task_info.get('num_keypoints', 0) if is_pose else 0
+            
+            # 如果是pose任务且没有提供关键点标签，尝试从预测目录的 dataset.yaml 读取
+            if is_pose and not keypoint_labels:
+                # 尝试从预测目录的 dataset.yaml 读取 kpt_names
+                dataset_yaml_file = predictions_path / 'dataset.yaml'
+                if dataset_yaml_file.exists():
+                    try:
+                        import yaml
+                        with open(dataset_yaml_file, 'r', encoding='utf-8') as f:
+                            dataset_config = yaml.safe_load(f)
+                        # 读取时支持两种字段名（兼容旧数据）
+                        keypoint_labels = dataset_config.get('kpt_names') or dataset_config.get('keypoint_names')
+                        if keypoint_labels:
+                            from ..ui.display import print_info
+                            print_info(f"从 dataset.yaml 读取关键点标签: {keypoint_labels}")
+                    except Exception as e:
+                        from ..ui.display import print_warning
+                        print_warning(f"读取 dataset.yaml 失败: {e}")
+                
+                # 如果还是没有，使用默认标签
+                if not keypoint_labels:
+                    if num_keypoints == 4:
+                        keypoint_labels = ['start', 'end', 'center', 'pointer']
+                    elif num_keypoints == 17:
+                        keypoint_labels = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+                                         'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+                                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                                         'left_knee', 'right_knee', 'left_ankle', 'right_ankle']
+                    else:
+                        keypoint_labels = [f'kp_{i}' for i in range(num_keypoints)]
+            
+            # 打印任务类型信息
+            if is_pose:
+                from ..ui.display import print_info
+                print_info(f"检测到 Pose 任务，关键点数量: {num_keypoints}")
+                print_info(f"关键点标签: {keypoint_labels}")
+            
+            # 遍历图片文件
+            image_files = []
+            for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.JPG', '.JPEG', '.PNG', '.BMP']:
+                image_files.extend(list(images_path.glob(f'*{ext}')))
+                image_files.extend(list(images_path.glob(f'**/*{ext}')))
+            
+            sample_count = 0
+            for image_path in image_files:
+                # 读取对应的预测结果
+                label_file = labels_dir / f"{image_path.stem}.txt"
+                
+                # 创建样本
+                sample = self.fo.Sample(filepath=str(image_path))
+                
+                # 读取预测
+                detections = []
+                keypoints = []
+                polylines = []  # for segment
+                classifications = []  # for classify
+                
+                if label_file.exists():
+                    with open(label_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            parts = line.split()
+                            
+                            # Classify 格式: class_id
+                            if is_classify and len(parts) == 1:
+                                class_id = int(parts[0])
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                classification = self.fo.Classification(label=label)
+                                classifications.append(classification)
+                                continue
+                            
+                            # Segment 格式: class_id x1 y1 x2 y2 x3 y3 ...
+                            if is_segment and len(parts) >= 7:
+                                class_id = int(parts[0])
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                
+                                # 提取多边形点
+                                coords = [float(x) for x in parts[1:]]
+                                points = []
+                                for i in range(0, len(coords), 2):
+                                    if i + 1 < len(coords):
+                                        points.append((coords[i], coords[i + 1]))
+                                
+                                if len(points) >= 3:  # 至少需要3个点形成多边形
+                                    # FiftyOne使用Polyline表示分割
+                                    polyline = self.fo.Polyline(
+                                        label=label,
+                                        points=[points],  # 闭合的多边形
+                                        closed=True,
+                                        filled=True
+                                    )
+                                    polylines.append(polyline)
+                                continue
+                            
+                            # Detect/Pose 格式: class_id x y w h [conf] [keypoints...]
+                            if len(parts) >= 5:
+                                # YOLO格式: class_id x_center y_center width height [confidence] [keypoints...]
+                                class_id = int(parts[0])
+                                x_center = float(parts[1])
+                                y_center = float(parts[2])
+                                width = float(parts[3])
+                                height = float(parts[4])
+                                
+                                # 判断是否有置信度值和关键点数据
+                                if is_pose:
+                                    # Pose 格式可能有置信度，检查数据长度
+                                    extra_values = len(parts) - 5
+                                    if (extra_values - 1) % 3 == 0 and extra_values > 3:
+                                        # 有置信度
+                                        confidence = float(parts[5])
+                                        kpt_start_idx = 6
+                                    else:
+                                        # 没有置信度
+                                        confidence = 1.0
+                                        kpt_start_idx = 5
+                                else:
+                                    # 普通检测格式
+                                    confidence = float(parts[5]) if len(parts) > 5 else 1.0
+                                    kpt_start_idx = 6
+                                
+                                # 过滤低置信度预测
+                                if confidence < conf_threshold:
+                                    continue
+                                
+                                # 转换为FiftyOne格式 [x, y, width, height]，左上角坐标
+                                bbox = [
+                                    x_center - width / 2,
+                                    y_center - height / 2,
+                                    width,
+                                    height
+                                ]
+                                
+                                label = classes[class_id] if class_id < len(classes) else f"class_{class_id}"
+                                
+                                # 处理关键点数据
+                                if is_pose and len(parts) > kpt_start_idx:
+                                    kpt_data = parts[kpt_start_idx:]
+                                    expected_kpt_values = num_keypoints * 3
+                                    
+                                    if len(kpt_data) >= expected_kpt_values:
+                                        # 解析关键点 - 为每个关键点创建独立的 Keypoint 对象
+                                        for i in range(0, expected_kpt_values, 3):
+                                            kpt_x = float(kpt_data[i])
+                                            kpt_y = float(kpt_data[i + 1])
+                                            kpt_v = float(kpt_data[i + 2])
+                                            kpt_idx = i // 3
+                                            
+                                            # 只添加可见的关键点
+                                            if kpt_v > 0:
+                                                # 获取关键点标签
+                                                if keypoint_labels and kpt_idx < len(keypoint_labels):
+                                                    kpt_label = keypoint_labels[kpt_idx]
+                                                else:
+                                                    kpt_label = f'kp_{kpt_idx}'
+                                                
+                                                # 为每个关键点创建独立的 Keypoint 对象
+                                                keypoint = self.fo.Keypoint(
+                                                    label=kpt_label,  # 使用关键点的标签
+                                                    points=[[kpt_x, kpt_y]]  # 只包含一个点
+                                                )
+                                                keypoints.append(keypoint)
+                                
+                                detection = self.fo.Detection(
+                                    label=label,
+                                    bounding_box=bbox,
+                                    confidence=confidence
+                                )
+                                detections.append(detection)
+                
+                # 添加预测结果
+                if is_classify and classifications:
+                    # Classify: 使用Classification字段
+                    if len(classifications) == 1:
+                        sample['predictions'] = classifications[0]
+                    else:
+                        sample['predictions'] = self.fo.Classifications(classifications=classifications)
+                
+                if is_segment and polylines:
+                    # Segment: 使用Polylines字段
+                    sample['predictions'] = self.fo.Polylines(polylines=polylines)
+                
+                if detections:
+                    # Detect/Pose: 使用Detections字段
+                    sample['predictions'] = self.fo.Detections(detections=detections)
+                    if is_pose and keypoints:
+                        sample['predictions_keypoints'] = self.fo.Keypoints(keypoints=keypoints)
+                
+                dataset.add_sample(sample)
+                sample_count += 1
+            
+            if sample_count == 0:
+                return (False, None, "未找到任何图片文件")
+            
+            return (True, dataset_name, "")
+            
+        except Exception as e:
+            return (False, None, f"创建预测数据集失败: {str(e)}")
+
