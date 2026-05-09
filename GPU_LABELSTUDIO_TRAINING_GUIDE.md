@@ -16,7 +16,6 @@
 
 ```bash
 ssh root@101.47.18.73 -p 22
-HMdX8udBVw
 ```
 
 ---
