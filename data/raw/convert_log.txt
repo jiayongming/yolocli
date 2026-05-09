@@ -1,18 +1,18 @@
 Label Studio 数据转换日志
 ==================================================
-输入文件: labelstudioexport/subsets/project-19-recall-v2-450-50.corrosion-only.json
+输入文件: labelstudioexport/project-39-at-2026-05-09-08-38-bda8b63e.json
 Label Studio URL: http://10.105.3.39
 任务类型: detect
 类别数量: 1
-类别列表: corrosion
+类别列表: Leak
 
 下载统计:
-  已下载: 500
+  已下载: 504
   已跳过: 0
   失败: 0
-  总计: 500
+  总计: 504
 
 标签生成:
-  正样本（有标注）: 450
-  负样本（无标注）: 50
+  正样本（有标注）: 494
+  负样本（无标注）: 10
   包含负样本: 是
