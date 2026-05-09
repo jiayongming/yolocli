@@ -65,6 +65,7 @@ datasets/
 
 # Label Studio 导出的大文件
 labelstudioexport/*.json
+labelstudioexport/*.txt
 !labelstudioexport/.gitkeep
 
 # 日志文件
