@@ -39,16 +39,16 @@ ssh root@101.47.18.73 -p 22
 # clone代码
 cd /data
 RUN_DIR="yolocli-temp-$(date +%Y%m%d%H%M%S)"
-mkdir -p "$RUN_DIR"
-cp yolocli.tar.gz "$RUN_DIR"/
-cd "$RUN_DIR"
-tar -zxvf yolocli.tar.gz
+mkdir -p "$RUN_DIR" && cd "$RUN_DIR"
+git clone -b main https://github.com/jiayongming/yolocli.git
 cd "/data/$RUN_DIR/yolocli"
 # 切换虚拟环境
 conda activate robot
 python -V
 python -m pip -V
 nvidia-smi
+# 一键训练
+python yolo_cli.py interactive-mode
 ```
 
 ## 3. 准备 Label Studio 项目导出文件

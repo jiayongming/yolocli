@@ -244,7 +244,11 @@ def quick_train(
                         ratios=ratios,
                         counts=counts,
                         seed=42,
-                        task='classify'
+                        task='classify',
+                        create_empty_labels=False,
+                        deduplicate=False,
+                        dedup_mode='exact',
+                        similarity_threshold=8,
                     )
                 else:
                     # 需要从 images + labels 组织为分类结构
@@ -275,7 +279,11 @@ def quick_train(
                     ratios=ratios,
                     counts=counts,
                     seed=42,
-                    task=task
+                    task=task,
+                    create_empty_labels=False,
+                    deduplicate=False,
+                    dedup_mode='exact',
+                    similarity_threshold=8,
                 )
         
         print_success("✓ 数据集准备完成")
