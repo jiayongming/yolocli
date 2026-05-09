@@ -165,8 +165,8 @@ def select_yolo_version() -> str:
         str: 选中的版本
     """
     choices = [
-        "yolo11 (推荐，最新版本)",
         "yolov8 (稳定版本)",
+        "yolo11 (推荐，最新版本)",
     ]
     
     result = select_option("选择YOLO版本:", choices, default=choices[0])
@@ -213,7 +213,7 @@ def select_model_size() -> str:
         "x - Extra Large (最高精度，最慢)",
     ]
     
-    result = select_option("选择模型大小:", choices, default=choices[2])
+    result = select_option("选择模型大小:", choices, default=choices[0])
     
     # 提取大小字母
     return result.split(' ')[0]

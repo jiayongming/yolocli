@@ -517,9 +517,17 @@ def start_training(
             console.print()
         
         # 解析并应用 --param KEY=VALUE 超参数（优先级最高，覆盖前面所有配置）
-        if param:
+        # 兼容从其它命令直接调用 start_training() 的场景：
+        # 未显式传参时，param 可能是 Typer 的 OptionInfo 对象。
+        normalized_param = None
+        if _is_valid_param(param, (list, tuple)):
+            normalized_param = list(param)
+        elif _is_valid_param(param, str):
+            normalized_param = [param]
+
+        if normalized_param:
             extra_params = {}
-            for item in param:
+            for item in normalized_param:
                 if '=' not in item:
                     print_warning(f"忽略无效的超参数格式: '{item}'，应为 KEY=VALUE")
                     continue
