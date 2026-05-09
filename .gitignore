@@ -55,7 +55,6 @@ models/weights/*.tflite
 !models/weights/.gitkeep
 
 # 数据集（通常很大，不应该提交到仓库）
-data/raw/images/
 data/processed/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
@@ -71,7 +70,6 @@ labelstudioexport/*
 *.log
 logs/
 *.txt.log
-data/raw/convert_log.txt
 
 # 临时文件
 *.tmp
