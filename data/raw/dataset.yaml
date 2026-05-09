@@ -1,0 +1,7 @@
+# YOLO Dataset Configuration (Labels Only)
+# 此文件由 Label Studio 导出自动生成
+# 数据集拆分后会自动补全 path, train, val, test 路径信息
+
+nc: 1
+names:
+  0: corrosion
