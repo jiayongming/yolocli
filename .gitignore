@@ -63,9 +63,8 @@ data/processed/
 # FiftyOne 管理的数据集目录
 datasets/
 
-# Label Studio 导出的大文件
-labelstudioexport/*.json
-labelstudioexport/*.txt
+# Label Studio 导出目录（除占位文件外全部忽略）
+labelstudioexport/*
 !labelstudioexport/.gitkeep
 
 # 日志文件
