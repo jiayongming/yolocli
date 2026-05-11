@@ -63,10 +63,10 @@ python yolo_cli.py interactive-mode
 ```bash
 cd "/data/$RUN_DIR/yolocli"
 python yolo_cli.py data convert-labelstudio \
-  --input labelstudioexport/project-43-at-2026-05-11-02-40-3776f899.json \
+  --input labelstudioexport/project-45-at-2026-05-11-08-23-c796e647.json \
   --url "http://10.105.3.39" \
   --token "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6ODA4NTQwNzMwOSwiaWF0IjoxNzc4MjA3MzA5LCJqdGkiOiIxNmYzMGExOGNlYjk0NWI0OWQyNDk5NzE0Y2E4OGI5YSIsInVzZXJfaWQiOjd9.7Ej5WWgfZHOuAHZfFyK6EZz99N132sNSfxO4h4S3Y_o" \
-  --project-id 43 \
+  --project-id 45 \
   --task detect \
   --include-negative \
   --output data/raw \
