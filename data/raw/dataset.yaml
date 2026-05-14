@@ -2,11 +2,6 @@
 # 此文件由 Label Studio 导出自动生成
 # 数据集拆分后会自动补全 path, train, val, test 路径信息
 
-nc: 6
+nc: 1
 names:
-  0: gloves
-  1: helmet
-  2: protective_glasses
-  3: vest
-  4: goggles
-  5: boots
+  0: floor_defect

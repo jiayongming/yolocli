@@ -1,6 +1,1 @@
-gloves
-helmet
-protective_glasses
-vest
-goggles
-boots
+floor_defect
